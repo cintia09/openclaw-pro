@@ -1296,13 +1296,20 @@ function Show-Completion {
         Write-Host "  ─────────────────────────────────────────────────" -ForegroundColor DarkGray
         Write-Host ""
         Write-Host "  💡 可能的原因:" -ForegroundColor Cyan
-        Write-Host "     • Docker 镜像构建失败（网络/镜像源问题）" -ForegroundColor Gray
-        Write-Host "     • 所需端口被其他容器占用" -ForegroundColor Gray
+        Write-Host "     • 端口被其他程序占用（重新运行脚本选择其他端口）" -ForegroundColor Gray
+        Write-Host "     • Docker 镜像获取失败（网络问题）" -ForegroundColor Gray
         Write-Host ""
         Write-Host "  🔧 排查步骤:" -ForegroundColor Cyan
         Write-Host "     docker ps -a                   # 检查所有容器" -ForegroundColor Gray
-        Write-Host "     docker logs openclaw-pro       # 查看构建日志" -ForegroundColor Gray
+        Write-Host "     docker logs openclaw-pro       # 查看日志" -ForegroundColor Gray
+        Write-Host "     netstat -ano | findstr :18789  # 检查端口占用" -ForegroundColor Gray
         Write-Host ""
+
+        # 检查镜像是否已存在
+        $imageCheck = & docker image inspect openclaw-pro 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  ✅ 镜像已加载，重新运行脚本即可（会跳过下载）" -ForegroundColor Green
+        } else {
         Write-Host "  📋 手动获取镜像:" -ForegroundColor Cyan
         Write-Host ""
         Write-Host "     方式1: 浏览器下载（推荐）" -ForegroundColor Yellow
@@ -1319,6 +1326,7 @@ function Show-Completion {
         Write-Host "     下载完成后执行:" -ForegroundColor Yellow
         Write-Host "     docker load -i openclaw-pro-image.tar.gz" -ForegroundColor White
         Write-Host "     然后重新运行安装脚本即可（会自动检测已加载的镜像）" -ForegroundColor Gray
+        }
     }
 
     Write-Host ""
@@ -1878,6 +1886,14 @@ function Main {
             $launched = $true
         } else {
 
+        # 先清理旧容器（释放端口，让端口检测准确）
+        $existingContainer = & docker ps -a --filter "name=openclaw-pro" --format "{{.Names}}" 2>&1
+        if ($existingContainer -match "openclaw-pro") {
+            Write-Info "停止并删除旧容器..."
+            & docker rm -f openclaw-pro 2>&1 | Out-Null
+            Start-Sleep -Seconds 2  # 等待端口完全释放
+        }
+
         # Interactive port/domain configuration
         $deployConfig = Get-DeployConfig
         $script:actualGatewayPort = $deployConfig.GatewayPort
@@ -2036,11 +2052,11 @@ function Main {
             }
             Write-OK "镜像准备完成"
 
-            # Check if container exists
+            # 再次检查是否有残留容器（防御性检查）
             $existing = & docker ps -a --filter "name=openclaw-pro" --format "{{.Names}}" 2>&1
             if ($existing -match "openclaw-pro") {
-                Write-Info "删除旧容器..."
                 & docker rm -f openclaw-pro 2>&1 | Out-Null
+                Start-Sleep -Seconds 1
             }
 
             # Create home-data directory and write docker-config.json
@@ -2106,11 +2122,32 @@ function Main {
                     Write-Log "Firewall auto-open failed: $_"
                 }
             } else {
+                # 检查是否是端口冲突
+                $dockerErr = & docker logs openclaw-pro 2>&1 | Out-String
+                $runOutput = $runArgs -join ' '
+                if ($runOutput -match "port is already allocated" -or $dockerErr -match "port is already allocated") {
+                    Write-Err "端口被占用，请关闭占用端口的程序后重试"
+                    Write-Host "  💡 查看端口占用: netstat -ano | findstr `:$($deployConfig.GatewayPort)`" -ForegroundColor Cyan
+                } else {
+                    Write-Err "docker run 失败"
+                }
                 throw "docker run failed"
             }
             Pop-Location
         } catch {
-            Write-Err "Docker 操作失败: $_"
+            $errMsg = "$_"
+            if ($errMsg -match "port is already allocated") {
+                # 从 docker 错误消息中提取端口号
+                $conflictPort = if ($errMsg -match 'Bind for.*:(\d+)') { $Matches[1] } else { "?" }
+                Write-Err "端口 ${conflictPort} 已被占用"
+                Write-Host "" 
+                Write-Host "  💡 解决方法:" -ForegroundColor Cyan
+                Write-Host "     1. 查看占用: netstat -ano | findstr `:${conflictPort}`" -ForegroundColor White
+                Write-Host "     2. 或者重新运行安装脚本，选择其他端口" -ForegroundColor White
+                Write-Host "" 
+            } else {
+                Write-Err "Docker 操作失败: $_"
+            }
             Pop-Location -ErrorAction SilentlyContinue
             $launched = $false
         }
