@@ -1533,7 +1533,7 @@ function Main {
                         "https://ghfast.top/$imageUrl",             # ghfast 代理
                         "https://mirror.ghproxy.com/$imageUrl"      # ghproxy 代理
                     )
-                    $maxRetries = 10          # 总重试次数（跨所有 URL）
+                    $maxRetries = 5           # 总重试次数（跨所有 URL）
                     $retryCount = 0
                     $urlIndex = 0
                     $totalExpected = $imageAsset.size
@@ -1662,6 +1662,9 @@ function Main {
                         } else {
                             Write-Warn "docker load 失败，将尝试本地构建"
                         }
+                        Remove-Item $imageTar -Force -ErrorAction SilentlyContinue
+                    } else {
+                        Write-Warn "下载预构建镜像失败（已重试 ${maxRetries} 次），将本地构建"
                         Remove-Item $imageTar -Force -ErrorAction SilentlyContinue
                     }
                 } else {
