@@ -29,7 +29,12 @@ $TASK_NAME       = "OpenClawSetup"
 $UBUNTU_DISTRO   = "Ubuntu-24.04"
 $OPENCLAW_PORT   = "18789"
 $WSL_TARGET_DIR  = "/root/openclaw-docker"
-$SCRIPT_DIR      = Split-Path -Parent $MyInvocation.MyCommand.Path
+$SCRIPT_URL      = "https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1"
+$SCRIPT_DIR      = if ($MyInvocation.MyCommand.Path) {
+    Split-Path -Parent $MyInvocation.MyCommand.Path
+} else {
+    $env:TEMP
+}
 $LOG_FILE        = Join-Path $SCRIPT_DIR "install-log.txt"
 $STATE_FILE      = Join-Path $SCRIPT_DIR ".install-state.json"
 
@@ -131,14 +136,72 @@ function Remove-InstallState {
 }
 
 # ─── Admin check ──────────────────────────────────────────────────────────────
-function Assert-Administrator {
+function Test-IsAdministrator {
     $current = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
-    if (-not $current.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        Write-Err "此脚本需要管理员权限运行"
-        Write-Suggestion "请右键 install-windows.bat → 以管理员身份运行"
+    return $current.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Invoke-SelfElevation {
+    <#
+    .SYNOPSIS
+        Detects non-admin and attempts to relaunch as administrator.
+        Works for both local file execution and irm | iex scenarios.
+    #>
+    if (Test-IsAdministrator) {
+        Write-OK "已以管理员权限运行"
+        return
+    }
+
+    Write-Host ""
+    Write-Host "  ⚠️  检测到当前未以管理员权限运行" -ForegroundColor Yellow
+    Write-Host "  安装 WSL2 和 Docker 需要管理员权限，正在尝试自动提升..." -ForegroundColor Yellow
+    Write-Host ""
+
+    # Download script to temp file for elevation
+    $tmpScript = Join-Path $env:TEMP "openclaw-install-$([guid]::NewGuid().ToString('N').Substring(0,8)).ps1"
+    try {
+        if ($MyInvocation.ScriptName -and (Test-Path $MyInvocation.ScriptName)) {
+            # Running from a local file — copy it
+            Copy-Item $MyInvocation.ScriptName $tmpScript -Force
+        } else {
+            # Running via irm | iex — download from GitHub
+            Write-Host "  📥 正在下载安装脚本..." -ForegroundColor Gray
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri $SCRIPT_URL -OutFile $tmpScript -UseBasicParsing
+        }
+    } catch {
+        Write-Host ""
+        Write-Host "  ❌ 无法准备提升脚本: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "  💡 请以管理员身份手动运行 PowerShell，然后执行:" -ForegroundColor Cyan
+        Write-Host "     irm $SCRIPT_URL | iex" -ForegroundColor White
+        Write-Host ""
+        Read-Host "按回车退出"
         exit 1
     }
-    Write-OK "已以管理员权限运行"
+
+    try {
+        Start-Process powershell.exe -Verb RunAs -ArgumentList @(
+            "-ExecutionPolicy", "Bypass",
+            "-File", $tmpScript
+        )
+        Write-Host "  ✅ 已启动管理员窗口，请在新窗口中继续操作" -ForegroundColor Green
+        Write-Host "  （此窗口可以关闭）" -ForegroundColor Gray
+        Write-Host ""
+    } catch {
+        Write-Host ""
+        Write-Host "  ❌ 提升权限失败（可能被用户拒绝了 UAC 提示）" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "  💡 请以管理员身份手动运行 PowerShell:" -ForegroundColor Cyan
+        Write-Host "     1. 右键点击 '开始' 菜单 → 'Windows PowerShell (管理员)'" -ForegroundColor White
+        Write-Host "     2. 运行: irm $SCRIPT_URL | iex" -ForegroundColor White
+        Write-Host ""
+        Remove-Item $tmpScript -Force -ErrorAction SilentlyContinue
+        Read-Host "按回车退出"
+        exit 1
+    }
+
+    exit 0
 }
 
 # ─── Windows version check ────────────────────────────────────────────────────
@@ -635,7 +698,7 @@ function Main {
     # ── Phase 1: Environment Detection ────────────────────────────────────────
     Write-Step 1 5 "检测环境..."
 
-    Assert-Administrator
+    Invoke-SelfElevation
 
     $buildNumber = Test-WindowsVersion
 
