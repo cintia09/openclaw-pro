@@ -1287,12 +1287,17 @@ function Show-Completion {
         Write-Host "  ─────────────────────────────────────────────────" -ForegroundColor DarkGray
         Write-Host ""
 
-        # Windows 防火墙提醒（外网访问需要 - 已自动尝试开放）
+        # Windows 防火墙提醒（仅实际对外暴露的端口）
         $portList = @()
-        $portList += $GatewayPort
-        $portList += $PanelPort
-        if ($HttpPort -and $HttpPort -gt 0) { $portList += $HttpPort }
-        if ($HttpsPort -and $HttpsPort -gt 0) { $portList += $HttpsPort }
+        if ($Domain) {
+            # HTTPS 模式: Gateway/Web 绑定 127.0.0.1，只需开放 HTTP/HTTPS
+            if ($HttpPort -and $HttpPort -gt 0) { $portList += $HttpPort }
+            if ($HttpsPort -and $HttpsPort -gt 0) { $portList += $HttpsPort }
+        } else {
+            # HTTP 模式: Gateway/Web 直接对外
+            $portList += $GatewayPort
+            $portList += $PanelPort
+        }
         $ports = ($portList | Sort-Object -Unique) -join ','
         Write-Host "  🔒 防火墙端口已自动开放 (${ports})，如需重新设置:" -ForegroundColor Yellow
         Write-Host "     netsh advfirewall firewall add rule name=`"OpenClaw`" dir=in action=allow protocol=tcp localport=${ports}" -ForegroundColor White
@@ -2168,16 +2173,21 @@ function Main {
                 Write-OK "容器已启动"
                 $launched = $true
 
-                # 自动打开 Windows 防火墙端口（所有映射端口）
+                # 自动打开 Windows 防火墙端口（仅实际对外暴露的端口）
+                # HTTPS 模式: 只开 HTTP/HTTPS 端口（Gateway/Web 绑定 127.0.0.1 不需要）
+                # HTTP 模式: 只开 Gateway/Web 端口
                 try {
                     $fwPortList = @()
-                    $fwPortList += $deployConfig.GatewayPort
-                    $fwPortList += $deployConfig.WebPort
-                    if ($deployConfig.HttpPort -and $deployConfig.HttpPort -gt 0) {
-                        $fwPortList += $deployConfig.HttpPort
-                    }
-                    if ($deployConfig.HttpsPort -and $deployConfig.HttpsPort -gt 0) {
-                        $fwPortList += $deployConfig.HttpsPort
+                    if ($deployConfig.HttpsEnabled) {
+                        if ($deployConfig.HttpPort -and $deployConfig.HttpPort -gt 0) {
+                            $fwPortList += $deployConfig.HttpPort
+                        }
+                        if ($deployConfig.HttpsPort -and $deployConfig.HttpsPort -gt 0) {
+                            $fwPortList += $deployConfig.HttpsPort
+                        }
+                    } else {
+                        $fwPortList += $deployConfig.GatewayPort
+                        $fwPortList += $deployConfig.WebPort
                     }
                     $fwPorts = ($fwPortList | Sort-Object -Unique) -join ','
 
