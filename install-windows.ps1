@@ -860,6 +860,10 @@ function Find-AvailablePort {
     }
 
     Write-Warn "端口 $PreferredPort 已被占用，正在寻找可用端口..."
+    $procInfo = Get-PortProcess $PreferredPort
+    if ($procInfo) {
+        Write-Host "     占用进程: $procInfo" -ForegroundColor DarkGray
+    }
 
     # Search in range
     for ($p = $RangeStart; $p -le $RangeEnd; $p++) {
@@ -1136,6 +1140,13 @@ function Get-DeployConfig {
     $customGw = Read-Host
     if ($customGw -match '^\d+$' -and [int]$customGw -ge 1 -and [int]$customGw -le 65535) {
         $gwPort = [int]$customGw
+        # 用户手动输入的端口也需要检查占用
+        if (-not (Test-PortAvailable $gwPort)) {
+            $procInfo = Get-PortProcess $gwPort
+            $procLabel = if ($procInfo) { " ($procInfo)" } else { "" }
+            Write-Warn "端口 $gwPort 已被占用${procLabel}"
+            $gwPort = Find-AvailablePort -PreferredPort $gwPort
+        }
     }
     $config.GatewayPort = $gwPort
 
@@ -1880,19 +1891,44 @@ function Main {
         Remove-InstallState
 
         # Check if container is already running
-        $running = & docker ps --filter "name=openclaw-pro" --filter "status=running" --format "{{.Names}}" 2>&1
-        if ($running -match "openclaw-pro") {
-            Write-OK "OpenClaw Pro 容器已在运行中"
-            $launched = $true
-        } else {
+        $running = & docker ps --filter "name=openclaw-pro" --filter "status=running" --format "{{.ID}} {{.Status}}" 2>&1
+        $stopped = & docker ps -a --filter "name=openclaw-pro" --filter "status=exited" --format "{{.ID}} {{.Status}}" 2>&1
+        $hasRunning = ($running -and $running -match '\S')
+        $hasStopped = ($stopped -and $stopped -match '\S')
 
-        # 先清理旧容器（释放端口，让端口检测准确）
-        $existingContainer = & docker ps -a --filter "name=openclaw-pro" --format "{{.Names}}" 2>&1
-        if ($existingContainer -match "openclaw-pro") {
-            Write-Info "停止并删除旧容器..."
+        if ($hasRunning) {
+            # 容器正在运行
+            Write-Host ""
+            Write-Host "  ⚠️  发现 OpenClaw Pro 容器正在运行" -ForegroundColor Yellow
+            Write-Host ""
+            # 显示当前容器信息
+            $containerInfo = & docker ps --filter "name=openclaw-pro" --format "     容器ID: {{.ID}}  状态: {{.Status}}  端口: {{.Ports}}" 2>&1
+            Write-Host $containerInfo -ForegroundColor DarkGray
+            Write-Host ""
+            Write-Host "  请选择操作:" -ForegroundColor White
+            Write-Host "     [1] 保持运行（不做任何修改）" -ForegroundColor Gray
+            Write-Host "     [2] 停止并重新配置（删除旧容器，重新选择端口）" -ForegroundColor Gray
+            Write-Host ""
+            Write-Host "  输入选择 [1]: " -NoNewline -ForegroundColor White
+            $choice = (Read-Host).Trim()
+
+            if ($choice -eq '2') {
+                Write-Info "停止并删除旧容器..."
+                & docker rm -f openclaw-pro 2>&1 | Out-Null
+                Start-Sleep -Seconds 2  # 等待端口完全释放
+                Write-OK "旧容器已删除"
+            } else {
+                Write-OK "OpenClaw Pro 容器保持运行"
+                $launched = $true
+            }
+        } elseif ($hasStopped) {
+            # 容器已停止
+            Write-Info "发现已停止的旧容器，正在清理..."
             & docker rm -f openclaw-pro 2>&1 | Out-Null
-            Start-Sleep -Seconds 2  # 等待端口完全释放
+            Start-Sleep -Seconds 1
         }
+
+        if (-not $launched) {
 
         # Interactive port/domain configuration
         $deployConfig = Get-DeployConfig
@@ -2151,7 +2187,7 @@ function Main {
             Pop-Location -ErrorAction SilentlyContinue
             $launched = $false
         }
-        }  # end container-not-running else
+        }  # end if (-not $launched)
     } else {
         # WSL mode: copy files to WSL and run there
         # Check if already deployed
