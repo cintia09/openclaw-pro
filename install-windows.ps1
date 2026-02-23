@@ -282,11 +282,26 @@ function Test-Wsl2Installed {
         return $false
     }
 
-    # Check wsl --status exit code
+    # wsl --status exit code is unreliable across Windows versions
+    # Instead, use wsl --list which works more consistently
     try {
+        $output = & wsl --list --verbose 2>&1 | Out-String
+        # If wsl --list produces meaningful output (not just error), WSL is installed
+        if ($output -match "NAME|名称|STATE|状态|Running|Stopped") {
+            return $true
+        }
+        # Fallback: try wsl --status but accept exit codes 0 or 1
+        # (some builds return 1 even when WSL is properly installed)
         $null = & wsl --status 2>&1
-        # If wsl works and returns 0, WSL is installed
-        return ($LASTEXITCODE -eq 0)
+        if ($LASTEXITCODE -le 1) {
+            # Check if the WSL kernel is present
+            $kernelPath = "$env:SystemRoot\System32\lxss\tools\kernel"
+            if (Test-Path $kernelPath) { return $true }
+            # Also check via wsl.exe existing + Windows feature
+            $wslFeature = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux -ErrorAction SilentlyContinue
+            if ($wslFeature -and $wslFeature.State -eq "Enabled") { return $true }
+        }
+        return $false
     } catch {
         return $false
     }
@@ -315,6 +330,43 @@ function Get-UbuntuDistroName {
         }
     } catch { }
     return $UBUNTU_DISTRO
+}
+
+
+# ─── Docker Desktop detection ─────────────────────────────────────────────────
+function Test-DockerDesktopInstalled {
+    # Check if Docker Desktop is installed and running
+    $dockerExe = Get-Command docker -ErrorAction SilentlyContinue
+    if (-not $dockerExe) {
+        # Check common install paths
+        $paths = @(
+            "$env:ProgramFiles\Docker\Docker\resources\bin\docker.exe",
+            "$env:LOCALAPPDATA\Docker\resources\bin\docker.exe"
+        )
+        foreach ($p in $paths) {
+            if (Test-Path $p) {
+                return $true
+            }
+        }
+        return $false
+    }
+
+    try {
+        $ver = & docker --version 2>&1
+        if ($ver -match "Docker version") {
+            Write-Log "Docker Desktop found: $ver"
+            return $true
+        }
+    } catch { }
+    return $false
+}
+
+function Test-DockerDesktopRunning {
+    try {
+        $info = & docker info 2>&1
+        if ($LASTEXITCODE -eq 0) { return $true }
+    } catch { }
+    return $false
 }
 
 # ─── Scheduled task for post-reboot resume ────────────────────────────────────
@@ -799,12 +851,11 @@ function Show-Completion {
     Write-Host ""
     Write-Host "  ─────────────────────────────────────────────────" -ForegroundColor DarkGray
     Write-Host ""
-    Write-Host "  📋 管理命令（在 WSL 终端中运行）：" -ForegroundColor White
-    Write-Host "     wsl -d $UBUNTU_DISTRO" -ForegroundColor Gray
-    Write-Host "     cd /root/openclaw-pro" -ForegroundColor Gray
-    Write-Host "     ./openclaw-docker.sh status    # 查看状态" -ForegroundColor Gray
-    Write-Host "     ./openclaw-docker.sh logs      # 查看日志" -ForegroundColor Gray
-    Write-Host "     ./openclaw-docker.sh stop      # 停止服务" -ForegroundColor Gray
+    Write-Host "  📋 管理命令：" -ForegroundColor White
+    Write-Host "     docker ps                      # 查看容器状态" -ForegroundColor Gray
+    Write-Host "     docker logs openclaw-pro       # 查看日志" -ForegroundColor Gray
+    Write-Host "     docker stop openclaw-pro       # 停止服务" -ForegroundColor Gray
+    Write-Host "     docker start openclaw-pro      # 启动服务" -ForegroundColor Gray
     Write-Host ""
     Write-Host "  📄 完整日志: $LOG_FILE" -ForegroundColor DarkGray
     Write-Host ""
@@ -886,6 +937,22 @@ function Main {
 
     $buildNumber = Test-WindowsVersion
 
+    # Detect Docker Desktop (takes priority over WSL-based Docker)
+    $hasDockerDesktop = Test-DockerDesktopInstalled
+    $dockerDesktopMode = $false
+
+    if ($hasDockerDesktop) {
+        Write-OK "检测到 Docker Desktop 已安装"
+        if (Test-DockerDesktopRunning) {
+            Write-OK "Docker Desktop 正在运行"
+            $dockerDesktopMode = $true
+        } else {
+            Write-Warn "Docker Desktop 已安装但未运行"
+            Write-Info "将尝试使用 Docker Desktop，请确保已启动"
+            $dockerDesktopMode = $true
+        }
+    }
+
     $wslInstalled  = Test-Wsl2Installed
     $ubuntuPresent = $false
 
@@ -895,16 +962,32 @@ function Main {
         if ($ubuntuPresent) {
             Write-OK "Ubuntu 发行版已存在"
         } else {
-            Write-Info "未找到 Ubuntu 发行版，将安装 $UBUNTU_DISTRO"
+            if (-not $dockerDesktopMode) {
+                Write-Info "未找到 Ubuntu 发行版，将安装 $UBUNTU_DISTRO"
+            } else {
+                Write-Info "未找到 Ubuntu 发行版（Docker Desktop 模式下可选）"
+            }
         }
     } else {
-        Write-Info "WSL2 未安装，将进行安装"
+        if (-not $dockerDesktopMode) {
+            Write-Info "WSL2 未安装，将进行安装"
+        } else {
+            Write-Info "WSL2 未安装（Docker Desktop 模式下可选）"
+        }
     }
 
-    Write-Log "State: wslInstalled=$wslInstalled, ubuntuPresent=$ubuntuPresent"
+    Write-Log "State: wslInstalled=$wslInstalled, ubuntuPresent=$ubuntuPresent, dockerDesktopMode=$dockerDesktopMode"
 
     # ── Phase 2: Install WSL2 if needed ───────────────────────────────────────
-    if (-not $wslInstalled -or -not $ubuntuPresent) {
+    if ($dockerDesktopMode) {
+        # Docker Desktop mode — WSL is optional, Docker is already available
+        Write-Step 2 5 "Docker Desktop 模式"
+        Write-OK "使用 Docker Desktop，跳过 WSL2 + Ubuntu 安装"
+
+        if (-not $wslInstalled -or -not $ubuntuPresent) {
+            Write-Info "提示: Docker Desktop 已包含 WSL2 后端，无需单独安装"
+        }
+    } elseif (-not $wslInstalled -or -not $ubuntuPresent) {
         Write-Step 2 5 "安装 WSL2 + Ubuntu..."
         Write-Info "预计时间: 3-5 分钟（需要下载 Ubuntu 镜像，取决于网速）"
 
@@ -934,92 +1017,169 @@ function Main {
         Write-OK "WSL2 + Ubuntu 均已安装，无需重复安装"
     }
 
-    # Get actual distro name
-    $distroName = Get-UbuntuDistroName
-    Write-Info "使用发行版: $distroName"
-
-    # ── Phase 3: Configure Ubuntu + Install Docker ─────────────────────────────
-    # Check if Docker is already installed in WSL
-    $dockerInstalled = $false
-    try {
-        $dockerCheck = & wsl -d $distroName --exec bash -c "command -v docker && docker --version" 2>&1
-        if ($dockerCheck -match "Docker version") {
-            $dockerInstalled = $true
-            Write-OK "Docker 已安装在 WSL 中: $($dockerCheck | Select-String 'Docker version')"
-        }
-    } catch { }
-
-    if (-not $dockerInstalled) {
-        Write-Step 3 5 "配置 Ubuntu + 安装 Docker Engine..."
-        Write-Info "预计时间: 5-10 分钟（取决于网速和服务器响应）"
-        Write-Host ""
-        Write-Host "  ℹ️  此步骤需要较长时间，请勿关闭窗口" -ForegroundColor Yellow
-        Write-Host ""
-
-        # Wait for WSL to be ready
-        $ready = Wait-WslReady -DistroName $distroName
-
-        if (-not $ready) {
-            Show-Error `
-                "等待 Ubuntu 就绪" `
-                "$distroName 启动超时" `
-                "请尝试手动运行: wsl -d $distroName，然后重新运行此脚本"
-            Read-Host "按回车退出"
-            exit 1
-        }
-
-        $dockerOK = Install-DockerInWsl -DistroName $distroName
-
-        if (-not $dockerOK) {
-            Show-Error `
-                "Docker Engine 安装" `
-                "在 WSL 中安装 Docker 失败" `
-                "请手动运行: wsl -d $distroName，然后参考 https://docs.docker.com/engine/install/ubuntu/ 安装 Docker"
-            Read-Host "按回车退出"
-            exit 1
-        }
+    # ── Phase 3: Configure Docker ──────────────────────────────────────────────
+    if ($dockerDesktopMode) {
+        Write-Step 3 5 "Docker 已就绪"
+        Write-OK "Docker Desktop 可用，跳过 Docker Engine 安装"
+        $distroName = $null
     } else {
-        Write-Step 3 5 "Docker 已安装，跳过"
-        Write-OK "Docker Engine 已就绪"
+        # Get actual distro name
+        $distroName = Get-UbuntuDistroName
+        Write-Info "使用发行版: $distroName"
+
+        # Check if Docker is already installed in WSL
+        $dockerInstalled = $false
+        try {
+            $dockerCheck = & wsl -d $distroName --exec bash -c "command -v docker && docker --version" 2>&1
+            if ($dockerCheck -match "Docker version") {
+                $dockerInstalled = $true
+                Write-OK "Docker 已安装在 WSL 中: $($dockerCheck | Select-String 'Docker version')"
+            }
+        } catch { }
+
+        if (-not $dockerInstalled) {
+            Write-Step 3 5 "配置 Ubuntu + 安装 Docker Engine..."
+            Write-Info "预计时间: 5-10 分钟（取决于网速和服务器响应）"
+            Write-Host ""
+            Write-Host "  ℹ️  此步骤需要较长时间，请勿关闭窗口" -ForegroundColor Yellow
+            Write-Host ""
+
+            # Wait for WSL to be ready
+            $ready = Wait-WslReady -DistroName $distroName
+
+            if (-not $ready) {
+                Show-Error `
+                    "等待 Ubuntu 就绪" `
+                    "$distroName 启动超时" `
+                    "请尝试手动运行: wsl -d $distroName，然后重新运行此脚本"
+                Read-Host "按回车退出"
+                exit 1
+            }
+
+            $dockerOK = Install-DockerInWsl -DistroName $distroName
+
+            if (-not $dockerOK) {
+                Show-Error `
+                    "Docker Engine 安装" `
+                    "在 WSL 中安装 Docker 失败" `
+                    "请手动运行: wsl -d $distroName，然后参考 https://docs.docker.com/engine/install/ubuntu/ 安装 Docker"
+                Read-Host "按回车退出"
+                exit 1
+            }
+        } else {
+            Write-Step 3 5 "Docker 已安装，跳过"
+            Write-OK "Docker Engine 已就绪"
+        }
     }
 
     # ── Phase 4: Deploy OpenClaw ───────────────────────────────────────────────
     Write-Step 4 5 "部署 OpenClaw Pro..."
 
-    # Check if already deployed
-    $alreadyDeployed = $false
-    try {
-        $checkDeploy = & wsl -d $distroName --exec bash -c "test -f /root/openclaw-docker/openclaw-docker.sh && echo FOUND" 2>&1
-        if ($checkDeploy -match "FOUND") {
-            $alreadyDeployed = $true
+    if ($dockerDesktopMode) {
+        # Docker Desktop mode: clone repo locally and run with docker compose / docker run
+        Write-Info "Docker Desktop 模式：在本地部署..."
+
+        $localDeployDir = Join-Path (Get-Location) "openclaw-pro"
+        if (-not (Test-Path "$localDeployDir\.git")) {
+            Write-Info "正在克隆仓库到 $localDeployDir ..."
+            try {
+                & git clone https://github.com/cintia09/openclaw-pro.git "$localDeployDir" 2>&1
+                if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
+                Write-OK "仓库克隆完成"
+            } catch {
+                Write-Err "克隆仓库失败: $_"
+                Write-Suggestion "请手动运行: git clone https://github.com/cintia09/openclaw-pro.git openclaw-pro"
+                Read-Host "按回车退出"
+                exit 1
+            }
+        } else {
+            Write-OK "仓库已存在，跳过克隆"
         }
-    } catch { }
 
-    if (-not $alreadyDeployed) {
-        Write-Info "正在将部署包复制到 WSL..."
-        $copyOK = Copy-DeployPackageToWsl -DistroName $distroName
+        # Build and run with Docker
+        Write-Step 5 5 "启动 OpenClaw..."
+        Remove-ResumeTask
+        Remove-InstallState
 
-        if (-not $copyOK) {
-            Show-Error `
-                "文件复制" `
-                "无法将部署包复制到 WSL" `
-                "请手动复制 docker 目录到 WSL 后运行: cd /root/openclaw-pro && ./openclaw-docker.sh run"
-            Read-Host "按回车退出"
-            exit 1
+        Write-Info "正在构建并启动容器..."
+        try {
+            Push-Location $localDeployDir
+            & docker build -t openclaw-pro . 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "docker build failed" }
+            Write-OK "镜像构建完成"
+
+            # Check if container exists
+            $existing = & docker ps -a --filter "name=openclaw-pro" --format "{{.Names}}" 2>&1
+            if ($existing -match "openclaw-pro") {
+                Write-Info "删除旧容器..."
+                & docker rm -f openclaw-pro 2>&1 | Out-Null
+            }
+
+            # Create home-data directory
+            $homeData = Join-Path $localDeployDir "home-data"
+            if (-not (Test-Path $homeData)) {
+                New-Item -ItemType Directory -Path $homeData -Force | Out-Null
+            }
+
+            & docker run -d `
+                --name openclaw-pro `
+                --hostname openclaw `
+                -v "${homeData}:/root" `
+                -p 18789:18789 `
+                -p 3000:3000 `
+                --restart unless-stopped `
+                openclaw-pro 2>&1
+
+            if ($LASTEXITCODE -eq 0) {
+                Write-OK "容器已启动"
+                $launched = $true
+            } else {
+                throw "docker run failed"
+            }
+            Pop-Location
+        } catch {
+            Write-Err "Docker 操作失败: $_"
+            Write-Suggestion "请手动运行: cd openclaw-pro && docker build -t openclaw-pro . && docker run -d --name openclaw-pro -p 18789:18789 -p 3000:3000 openclaw-pro"
+            Pop-Location -ErrorAction SilentlyContinue
+            $launched = $false
         }
     } else {
-        Write-OK "部署包已存在，跳过复制"
+        # WSL mode: copy files to WSL and run there
+        # Check if already deployed
+        $alreadyDeployed = $false
+        try {
+            $checkDeploy = & wsl -d $distroName --exec bash -c "test -f /root/openclaw-pro/openclaw-docker.sh && echo FOUND" 2>&1
+            if ($checkDeploy -match "FOUND") {
+                $alreadyDeployed = $true
+            }
+        } catch { }
+
+        if (-not $alreadyDeployed) {
+            Write-Info "正在将部署包复制到 WSL..."
+            $copyOK = Copy-DeployPackageToWsl -DistroName $distroName
+
+            if (-not $copyOK) {
+                Show-Error `
+                    "文件复制" `
+                    "无法将部署包复制到 WSL" `
+                    "请手动复制 docker 目录到 WSL 后运行: cd /root/openclaw-pro && ./openclaw-docker.sh run"
+                Read-Host "按回车退出"
+                exit 1
+            }
+        } else {
+            Write-OK "部署包已存在，跳过复制"
+        }
+
+        # ── Phase 5: Cleanup + Launch ──────────────────────────────────────────
+        Write-Step 5 5 "启动 OpenClaw..."
+
+        # Remove scheduled task if it exists
+        Remove-ResumeTask
+        Remove-InstallState
+
+        # Launch deploy in WSL terminal
+        $launched = Start-OpenClawDeploy -DistroName $distroName
     }
-
-    # ── Phase 5: Cleanup + Launch ──────────────────────────────────────────────
-    Write-Step 5 5 "启动 OpenClaw..."
-
-    # Remove scheduled task if it exists
-    Remove-ResumeTask
-    Remove-InstallState
-
-    # Launch deploy in WSL terminal
-    $launched = Start-OpenClawDeploy -DistroName $distroName
 
     Write-Log "Deploy launched: $launched"
 
