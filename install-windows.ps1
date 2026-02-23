@@ -1070,11 +1070,18 @@ function Show-Completion {
         Write-Host "     docker ps -a                   # 检查所有容器" -ForegroundColor Gray
         Write-Host "     docker logs openclaw-pro       # 查看构建日志" -ForegroundColor Gray
         Write-Host ""
-        Write-Host "  📋 手动下载镜像后重新运行安装脚本:" -ForegroundColor Cyan
+        Write-Host "  📋 手动获取镜像（二选一）:" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "     方式1: 浏览器下载" -ForegroundColor Yellow
+        Write-Host "     https://github.com/$GITHUB_REPO/releases/download/v1.0.0/openclaw-pro-image.tar.gz" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "     方式2: 命令行下载（支持断点续传）" -ForegroundColor Yellow
         Write-Host "     curl.exe -L -C - --retry 200 --retry-all-errors --retry-delay 3 -o openclaw-pro-image.tar.gz ``" -ForegroundColor White
         Write-Host "       `"https://github.com/$GITHUB_REPO/releases/download/v1.0.0/openclaw-pro-image.tar.gz`"" -ForegroundColor White
+        Write-Host ""
+        Write-Host "     下载完成后执行:" -ForegroundColor Yellow
         Write-Host "     docker load -i openclaw-pro-image.tar.gz" -ForegroundColor White
-        Write-Host "     # 然后重新运行安装脚本即可" -ForegroundColor Gray
+        Write-Host "     然后重新运行安装脚本即可（会自动检测已加载的镜像）" -ForegroundColor Gray
     }
 
     Write-Host ""
