@@ -936,20 +936,99 @@ function Main {
 
     $buildNumber = Test-WindowsVersion
 
-    # Detect Docker Desktop (takes priority over WSL-based Docker)
+    # Detect Docker Desktop and WSL
     $hasDockerDesktop = Test-DockerDesktopInstalled
+    $wslInstalled     = Test-Wsl2Installed
     $dockerDesktopMode = $false
+    $ubuntuPresent = $false
 
     if ($hasDockerDesktop) {
         Write-OK "检测到 Docker Desktop 已安装"
         if (Test-DockerDesktopRunning) {
             Write-OK "Docker Desktop 正在运行"
-            $dockerDesktopMode = $true
         } else {
             Write-Warn "Docker Desktop 已安装但未运行"
-            Write-Info "将尝试使用 Docker Desktop，请确保已启动"
-            $dockerDesktopMode = $true
         }
+        $dockerDesktopMode = $true
+    }
+
+    if ($wslInstalled) {
+        Write-OK "WSL2 已安装"
+        $ubuntuPresent = Test-UbuntuInstalled
+        if ($ubuntuPresent) {
+            Write-OK "Ubuntu 发行版已存在"
+        }
+    }
+
+    # ── If neither Docker Desktop nor WSL is available, let user choose ──
+    if (-not $hasDockerDesktop -and -not $wslInstalled) {
+        Write-Host ""
+        Write-Host "  ══════════════════════════════════════════════════" -ForegroundColor Yellow
+        Write-Host "         未检测到 Docker Desktop 或 WSL2" -ForegroundColor Yellow
+        Write-Host "  ══════════════════════════════════════════════════" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "  请选择安装方式:" -ForegroundColor White
+        Write-Host ""
+        Write-Host "  [A] 方案A: Docker Desktop (推荐)" -ForegroundColor Cyan
+        Write-Host "      ├─ 图形化管理界面，操作简单" -ForegroundColor Gray
+        Write-Host "      ├─ 自带 WSL2 后端，无需单独配置" -ForegroundColor Gray
+        Write-Host "      └─ 需要手动下载安装 Docker Desktop" -ForegroundColor Gray
+        Write-Host ""
+        Write-Host "  [B] 方案B: WSL2 + Docker Engine (自动)" -ForegroundColor Cyan
+        Write-Host "      ├─ 全自动安装，无需手动操作" -ForegroundColor Gray
+        Write-Host "      ├─ 轻量级，资源占用少" -ForegroundColor Gray
+        Write-Host "      └─ 安装后可能需要重启一次" -ForegroundColor Gray
+        Write-Host ""
+
+        $choice = ""
+        while ($choice -ne "A" -and $choice -ne "B") {
+            $choice = (Read-Host "  请输入 A 或 B").Trim().ToUpper()
+            if ($choice -ne "A" -and $choice -ne "B") {
+                Write-Host "  请输入 A 或 B" -ForegroundColor Red
+            }
+        }
+
+        if ($choice -eq "A") {
+            $dockerDesktopMode = $true
+            Write-Host ""
+            Write-Host "  ────────────────────────────────────────────────" -ForegroundColor DarkGray
+            Write-Host ""
+            Write-Host "  📥 请先安装 Docker Desktop:" -ForegroundColor White
+            Write-Host ""
+            Write-Host "     1. 打开浏览器访问:" -ForegroundColor Yellow
+            Write-Host "        https://www.docker.com/products/docker-desktop/" -ForegroundColor Cyan
+            Write-Host ""
+            Write-Host "     2. 点击 'Download for Windows' 下载安装包" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "     3. 运行安装包，按提示完成安装" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "     4. 启动 Docker Desktop 并等待其完全启动" -ForegroundColor Yellow
+            Write-Host "        (系统托盘出现 Docker 鲸鱼图标，状态为 Running)" -ForegroundColor Gray
+            Write-Host ""
+            Write-Host "     5. 安装完毕后，重新运行本安装命令:" -ForegroundColor Yellow
+            Write-Host "        irm $SCRIPT_URL | iex" -ForegroundColor Cyan
+            Write-Host ""
+            Write-Host "  ────────────────────────────────────────────────" -ForegroundColor DarkGray
+            Write-Host ""
+
+            # Try to open the browser automatically
+            try {
+                Start-Process "https://www.docker.com/products/docker-desktop/"
+                Write-OK "已自动打开浏览器下载页面"
+            } catch {
+                Write-Info "请手动打开上述链接"
+            }
+
+            Write-Host ""
+            Read-Host "  安装 Docker Desktop 后，按回车退出，然后重新运行安装命令"
+            exit 0
+        } else {
+            # Option B: auto-install WSL2
+            Write-Info "将自动安装 WSL2 + Docker Engine"
+        }
+    } elseif ($hasDockerDesktop -and $wslInstalled) {
+        # Both available, prefer Docker Desktop
+        $dockerDesktopMode = $true
     }
 
     # Display selected mode
@@ -961,26 +1040,18 @@ function Main {
         Write-Host "  🔧 安装模式: 方案B — WSL2 + Docker Engine" -ForegroundColor Green
     }
 
-    $wslInstalled  = Test-Wsl2Installed
-    $ubuntuPresent = $false
-
-    if ($wslInstalled) {
-        Write-OK "WSL2 已安装"
-        $ubuntuPresent = Test-UbuntuInstalled
-        if ($ubuntuPresent) {
-            Write-OK "Ubuntu 发行版已存在"
-        } else {
-            if (-not $dockerDesktopMode) {
-                Write-Info "未找到 Ubuntu 发行版，将安装 $UBUNTU_DISTRO"
-            } else {
-                Write-Info "未找到 Ubuntu 发行版（Docker Desktop 模式下可选）"
-            }
+    # Report WSL/Ubuntu status for the selected mode
+    if (-not $dockerDesktopMode) {
+        if (-not $wslInstalled) {
+            Write-Info "WSL2 未安装，将进行安装"
+        } elseif (-not $ubuntuPresent) {
+            Write-Info "未找到 Ubuntu 发行版，将安装 $UBUNTU_DISTRO"
         }
     } else {
-        if (-not $dockerDesktopMode) {
-            Write-Info "WSL2 未安装，将进行安装"
-        } else {
+        if (-not $wslInstalled) {
             Write-Info "WSL2 未安装（Docker Desktop 模式下可选）"
+        } elseif (-not $ubuntuPresent) {
+            Write-Info "未找到 Ubuntu 发行版（Docker Desktop 模式下可选）"
         }
     }
 
