@@ -825,28 +825,85 @@ echo ""
     }
 }
 
+# ─── Port availability check ──────────────────────────────────────────────────
+function Test-PortAvailable {
+    param([int]$Port)
+    try {
+        $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, $Port)
+        $listener.Start()
+        $listener.Stop()
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Find-AvailablePort {
+    param([int]$PreferredPort, [int]$RangeStart = 18000, [int]$RangeEnd = 19000)
+
+    # Try preferred port first
+    if (Test-PortAvailable $PreferredPort) {
+        return $PreferredPort
+    }
+
+    Write-Warn "端口 $PreferredPort 已被占用，正在寻找可用端口..."
+
+    # Search in range
+    for ($p = $RangeStart; $p -le $RangeEnd; $p++) {
+        if ($p -eq $PreferredPort) { continue }
+        if (Test-PortAvailable $p) {
+            Write-OK "找到可用端口: $p"
+            return $p
+        }
+    }
+
+    # Fallback: let OS pick
+    $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+    $listener.Start()
+    $port = $listener.LocalEndpoint.Port
+    $listener.Stop()
+    Write-OK "使用系统分配端口: $port"
+    return $port
+}
+
 # ─── Phase 5: Cleanup + Summary ───────────────────────────────────────────────
 function Show-Completion {
-    param([bool]$DeployLaunched)
+    param(
+        [bool]$DeployLaunched,
+        [bool]$IsDockerDesktop = $false,
+        [int]$GatewayPort = 18789,
+        [int]$PanelPort = 3000
+    )
 
     Write-Host ""
-    Write-Host "  ══════════════════════════════════════════════════" -ForegroundColor Green
-    Write-Host "                🎉  安装完成！" -ForegroundColor Green
-    Write-Host "  ══════════════════════════════════════════════════" -ForegroundColor Green
+    if ($DeployLaunched) {
+        Write-Host "  ══════════════════════════════════════════════════" -ForegroundColor Green
+        Write-Host "                🎉  安装完成！" -ForegroundColor Green
+        Write-Host "  ══════════════════════════════════════════════════" -ForegroundColor Green
+    } else {
+        Write-Host "  ══════════════════════════════════════════════════" -ForegroundColor Yellow
+        Write-Host "             ⚠️  安装未完成" -ForegroundColor Yellow
+        Write-Host "  ══════════════════════════════════════════════════" -ForegroundColor Yellow
+    }
     Write-Host ""
-    Write-Host "  ✅  WSL2" -ForegroundColor Green
-    Write-Host "  ✅  Ubuntu ($UBUNTU_DISTRO)" -ForegroundColor Green
-    Write-Host "  ✅  Docker Engine" -ForegroundColor Green
+
+    if ($IsDockerDesktop) {
+        Write-Host "  ✅  Docker Desktop" -ForegroundColor Green
+    } else {
+        Write-Host "  ✅  WSL2" -ForegroundColor Green
+        Write-Host "  ✅  Ubuntu ($UBUNTU_DISTRO)" -ForegroundColor Green
+        Write-Host "  ✅  Docker Engine" -ForegroundColor Green
+    }
 
     if ($DeployLaunched) {
-        Write-Host "  🚀  OpenClaw Pro 部署已在新窗口启动" -ForegroundColor Cyan
+        Write-Host "  🚀  OpenClaw Pro 容器已启动" -ForegroundColor Cyan
     } else {
-        Write-Host "  ⚠️   请手动完成 OpenClaw Pro 部署" -ForegroundColor Yellow
+        Write-Host "  ⚠️   请手动完成 OpenClaw Pro 部署（见下方说明）" -ForegroundColor Yellow
     }
 
     Write-Host ""
     Write-Host "  访问地址: " -NoNewline -ForegroundColor White
-    Write-Host "http://localhost:$OPENCLAW_PORT" -ForegroundColor Cyan
+    Write-Host "http://localhost:$GatewayPort" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  ─────────────────────────────────────────────────" -ForegroundColor DarkGray
     Write-Host ""
@@ -1255,7 +1312,11 @@ function Main {
                         $totalSize = $response.ContentLength
                     }
 
-                    Write-Info "正在下载部署包... (总计 $([math]::Round($totalSize / 1MB, 1))MB)"
+                    if ($totalSize -gt 0) {
+                        Write-Info "正在下载部署包... (总计 $([math]::Round($totalSize / 1MB, 1))MB)"
+                    } else {
+                        Write-Info "正在下载部署包..."
+                    }
 
                     $stream = $response.GetResponseStream()
                     $fileMode = if ($resumed) { [IO.FileMode]::Append } else { [IO.FileMode]::Create }
@@ -1408,12 +1469,64 @@ function Main {
             $launched = $true
         } else {
 
-        Write-Info "正在构建并启动容器..."
+        # Find available host ports
+        $script:actualGatewayPort = Find-AvailablePort -PreferredPort ([int]$OPENCLAW_PORT)
+        $script:actualPanelPort   = Find-AvailablePort -PreferredPort ([int]$WEB_PANEL_PORT)
+        Write-Info "网关端口: $($script:actualGatewayPort) → 容器 $OPENCLAW_PORT"
+        if ($script:actualPanelPort -ne [int]$WEB_PANEL_PORT) {
+            Write-Info "管理面板端口: $($script:actualPanelPort) → 容器 $WEB_PANEL_PORT"
+        }
+
+        Write-Info "正在构建镜像..."
         try {
             Push-Location $localDeployDir
-            # docker build has layer cache — re-run is fast if image didn't change
-            & docker build -t openclaw-pro . 2>&1
-            if ($LASTEXITCODE -ne 0) { throw "docker build failed" }
+            # docker build with retry — first try direct, then try with mirror
+            $buildOK = $false
+            $mirrors = @(
+                $null,                                              # direct (no mirror)
+                "https://docker.m.daocloud.io",                     # DaoCloud
+                "https://dockerhub.icu",                            # dockerhub.icu
+                "https://docker.1panel.live"                        # 1Panel
+            )
+
+            foreach ($mirror in $mirrors) {
+                if ($mirror) {
+                    Write-Warn "Docker Hub 连接失败，尝试镜像: $mirror"
+                    # Create/update daemon.json with mirror
+                    $daemonJson = '{"registry-mirrors": ["' + $mirror + '"]}'
+                    $daemonPath = "$env:USERPROFILE\.docker\daemon.json"
+                    try {
+                        # Read existing config
+                        if (Test-Path $daemonPath) {
+                            $existing = Get-Content $daemonPath -Raw | ConvertFrom-Json
+                            $existing | Add-Member -NotePropertyName "registry-mirrors" -NotePropertyValue @($mirror) -Force
+                            $existing | ConvertTo-Json -Depth 10 | Set-Content $daemonPath -Force
+                        } else {
+                            $daemonJson | Set-Content $daemonPath -Force
+                        }
+                        Write-Info "已配置镜像加速，正在重启 Docker..."
+                        & docker system info 2>&1 | Out-Null
+                        Start-Sleep -Seconds 3
+                    } catch {
+                        Write-Log "Failed to configure mirror $mirror: $_"
+                    }
+                }
+
+                & docker build -t openclaw-pro . 2>&1 | ForEach-Object {
+                    if ($_ -match "^#\d+ \[" -or $_ -match "^Step " -or $_ -match "Successfully") {
+                        Write-Host "  $_" -ForegroundColor DarkGray
+                    }
+                    Write-Log "docker build: $_"
+                }
+                if ($LASTEXITCODE -eq 0) {
+                    $buildOK = $true
+                    break
+                }
+            }
+
+            if (-not $buildOK) {
+                throw "docker build failed — 无法拉取基础镜像。请检查网络连接，或配置 Docker 镜像加速。"
+            }
             Write-OK "镜像构建完成"
 
             # Check if container exists
@@ -1433,13 +1546,16 @@ function Main {
                 --name openclaw-pro `
                 --hostname openclaw `
                 -v "${homeData}:/root" `
-                -p 18789:18789 `
-                -p 3000:3000 `
+                -p "$($script:actualGatewayPort):18789" `
+                -p "$($script:actualPanelPort):3000" `
                 --restart unless-stopped `
                 openclaw-pro 2>&1
 
             if ($LASTEXITCODE -eq 0) {
                 Write-OK "容器已启动"
+                if ($script:actualGatewayPort -ne [int]$OPENCLAW_PORT) {
+                    Write-Warn "注意: 端口 $OPENCLAW_PORT 已被占用，实际映射到 $($script:actualGatewayPort)"
+                }
                 $launched = $true
             } else {
                 throw "docker run failed"
@@ -1447,7 +1563,14 @@ function Main {
             Pop-Location
         } catch {
             Write-Err "Docker 操作失败: $_"
-            Write-Suggestion "请手动运行: cd openclaw-pro && docker build -t openclaw-pro . && docker run -d --name openclaw-pro -p 18789:18789 -p 3000:3000 openclaw-pro"
+            Write-Host ""
+            Write-Host "  💡 可能的原因和解决方法:" -ForegroundColor Cyan
+            Write-Host "     1. 网络问题 — 无法访问 Docker Hub" -ForegroundColor White
+            Write-Host "        解决: 配置 Docker 镜像加速（设置 → Docker Engine → registry-mirrors）" -ForegroundColor Gray
+            Write-Host "     2. Docker Desktop 未完全启动" -ForegroundColor White
+            Write-Host "        解决: 等待系统托盘 Docker 图标显示 Running，再重新运行" -ForegroundColor Gray
+            Write-Host ""
+            Write-Suggestion "手动构建: cd openclaw-pro && docker build -t openclaw-pro . && docker run -d --name openclaw-pro -p $($script:actualGatewayPort):18789 openclaw-pro"
             Pop-Location -ErrorAction SilentlyContinue
             $launched = $false
         }
@@ -1492,7 +1615,9 @@ function Main {
 
     Write-Log "Deploy launched: $launched"
 
-    Show-Completion -DeployLaunched $launched
+    $gwPort = if ($script:actualGatewayPort) { $script:actualGatewayPort } else { [int]$OPENCLAW_PORT }
+    $wpPort = if ($script:actualPanelPort) { $script:actualPanelPort } else { [int]$WEB_PANEL_PORT }
+    Show-Completion -DeployLaunched $launched -IsDockerDesktop $dockerDesktopMode -GatewayPort $gwPort -PanelPort $wpPort
 
     Read-Host "按回车关闭此窗口"
 }
