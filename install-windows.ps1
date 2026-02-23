@@ -828,14 +828,22 @@ echo ""
 # ─── Port availability check ──────────────────────────────────────────────────
 function Test-PortAvailable {
     param([int]$Port)
+    # Check 1: TcpListener on all interfaces (0.0.0.0)
     try {
-        $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, $Port)
+        $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Any, $Port)
         $listener.Start()
         $listener.Stop()
-        return $true
     } catch {
         return $false
     }
+    # Check 2: Also check Docker container port mappings
+    try {
+        $dockerPorts = & docker ps --format "{{.Ports}}" 2>$null
+        if ($dockerPorts -and ($dockerPorts | Out-String) -match ":${Port}->") {
+            return $false
+        }
+    } catch {}
+    return $true
 }
 
 function Find-AvailablePort {
@@ -897,21 +905,33 @@ function Show-Completion {
 
     if ($DeployLaunched) {
         Write-Host "  🚀  OpenClaw Pro 容器已启动" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "  访问地址: " -NoNewline -ForegroundColor White
+        Write-Host "http://localhost:$GatewayPort" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "  ─────────────────────────────────────────────────" -ForegroundColor DarkGray
+        Write-Host ""
+        Write-Host "  📋 管理命令：" -ForegroundColor White
+        Write-Host "     docker ps                      # 查看容器状态" -ForegroundColor Gray
+        Write-Host "     docker logs openclaw-pro       # 查看日志" -ForegroundColor Gray
+        Write-Host "     docker stop openclaw-pro       # 停止服务" -ForegroundColor Gray
+        Write-Host "     docker start openclaw-pro      # 启动服务" -ForegroundColor Gray
     } else {
-        Write-Host "  ⚠️   请手动完成 OpenClaw Pro 部署（见下方说明）" -ForegroundColor Yellow
-    }
-
-    Write-Host ""
-    Write-Host "  访问地址: " -NoNewline -ForegroundColor White
-    Write-Host "http://localhost:$GatewayPort" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "  ─────────────────────────────────────────────────" -ForegroundColor DarkGray
-    Write-Host ""
-    Write-Host "  📋 管理命令：" -ForegroundColor White
-    Write-Host "     docker ps                      # 查看容器状态" -ForegroundColor Gray
-    Write-Host "     docker logs openclaw-pro       # 查看日志" -ForegroundColor Gray
-    Write-Host "     docker stop openclaw-pro       # 停止服务" -ForegroundColor Gray
-    Write-Host "     docker start openclaw-pro      # 启动服务" -ForegroundColor Gray
+        Write-Host ""
+        Write-Host "  ─────────────────────────────────────────────────" -ForegroundColor DarkGray
+        Write-Host ""
+        Write-Host "  💡 可能的原因:" -ForegroundColor Cyan
+        Write-Host "     • Docker 镜像构建失败（网络/镜像源问题）" -ForegroundColor Gray
+        Write-Host "     • 所需端口被其他容器占用" -ForegroundColor Gray
+        Write-Host ""
+        Write-Host "  🔧 排查步骤:" -ForegroundColor Cyan
+        Write-Host "     docker ps -a                   # 检查所有容器" -ForegroundColor Gray
+        Write-Host "     docker logs openclaw-pro       # 查看构建日志" -ForegroundColor Gray
+        Write-Host ""
+        Write-Host "  📋 手动部署:" -ForegroundColor Cyan
+        Write-Host "     cd openclaw-pro" -ForegroundColor White
+        Write-Host "     docker build -t openclaw-pro ." -ForegroundColor White
+        Write-Host "     docker run -d --name openclaw-pro -p ${GatewayPort}:18789 -p ${PanelPort}:3000 -v ./home-data:/root openclaw-pro" -ForegroundColor White
     Write-Host ""
     Write-Host "  📄 完整日志: $LOG_FILE" -ForegroundColor DarkGray
     Write-Host ""
