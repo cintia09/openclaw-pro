@@ -932,6 +932,8 @@ function Show-Completion {
         Write-Host "     cd openclaw-pro" -ForegroundColor White
         Write-Host "     docker build -t openclaw-pro ." -ForegroundColor White
         Write-Host "     docker run -d --name openclaw-pro -p ${GatewayPort}:18789 -p ${PanelPort}:3000 -v ./home-data:/root openclaw-pro" -ForegroundColor White
+    }
+
     Write-Host ""
     Write-Host "  📄 完整日志: $LOG_FILE" -ForegroundColor DarkGray
     Write-Host ""
