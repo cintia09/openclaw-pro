@@ -1860,23 +1860,7 @@ function Main {
 
                 if (-not $buildOK) {
                     $originalDockerfile | Set-Content $dockerfilePath -Force -NoNewline
-                    Write-Host ""
-                    Write-Host "  ══════════════════════════════════════════════════" -ForegroundColor Red
-                    Write-Host "           镜像获取失败（下载和本地构建均失败）" -ForegroundColor Red
-                    Write-Host "  ══════════════════════════════════════════════════" -ForegroundColor Red
-                    Write-Host ""
-                    Write-Host "  请手动下载预构建镜像:" -ForegroundColor Yellow
-                    Write-Host "  https://github.com/$GITHUB_REPO/releases/download/v1.0.0/openclaw-pro-image.tar.gz" -ForegroundColor Cyan
-                    Write-Host ""
-                    Write-Host "  下载命令 (PowerShell, 支持断点续传):" -ForegroundColor Yellow
-                    Write-Host "  curl.exe -L -C - --retry 200 --retry-all-errors --retry-delay 3 -o openclaw-pro-image.tar.gz ``" -ForegroundColor White
-                    Write-Host "    `"https://github.com/$GITHUB_REPO/releases/download/v1.0.0/openclaw-pro-image.tar.gz`"" -ForegroundColor White
-                    Write-Host ""
-                    Write-Host "  下载完成后执行:" -ForegroundColor Yellow
-                    Write-Host "  docker load -i openclaw-pro-image.tar.gz" -ForegroundColor White
-                    Write-Host "  然后重新运行安装脚本即可（会自动检测已加载的镜像）" -ForegroundColor Gray
-                    Write-Host ""
-                    throw "镜像获取失败 — 下载和本地构建均不可用。请按上方提示手动下载。"
+                    throw "镜像获取失败 — 下载和本地构建均不可用"
                 }
                 $imageReady = $true
             }
@@ -1936,18 +1920,6 @@ function Main {
             Pop-Location
         } catch {
             Write-Err "Docker 操作失败: $_"
-            Write-Host ""
-            Write-Host "  💡 可能的原因和解决方法:" -ForegroundColor Cyan
-            Write-Host "     1. 网络问题 — 无法访问 Docker Hub" -ForegroundColor White
-            Write-Host "        解决: 配置 Docker 镜像加速（设置 → Docker Engine → registry-mirrors）" -ForegroundColor Gray
-            Write-Host "     2. Docker Desktop 未完全启动" -ForegroundColor White
-            Write-Host "        解决: 等待系统托盘 Docker 图标显示 Running，再重新运行" -ForegroundColor Gray
-            Write-Host ""
-            Write-Host "  💡 手动下载镜像后重新运行安装脚本:" -ForegroundColor Cyan
-            Write-Host "     curl.exe -L -C - --retry 200 --retry-all-errors --retry-delay 3 -o openclaw-pro-image.tar.gz ``" -ForegroundColor White
-            Write-Host "       `"https://github.com/$GITHUB_REPO/releases/download/v1.0.0/openclaw-pro-image.tar.gz`"" -ForegroundColor White
-            Write-Host "     docker load -i openclaw-pro-image.tar.gz" -ForegroundColor White
-            Write-Host "     # 然后重新运行安装脚本" -ForegroundColor Gray
             Pop-Location -ErrorAction SilentlyContinue
             $launched = $false
         }
