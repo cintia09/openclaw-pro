@@ -1508,7 +1508,7 @@ function Main {
                         & docker system info 2>&1 | Out-Null
                         Start-Sleep -Seconds 3
                     } catch {
-                        Write-Log "Failed to configure mirror $mirror: $_"
+                        Write-Log "Failed to configure mirror ${mirror}: $_"
                     }
                 }
 
