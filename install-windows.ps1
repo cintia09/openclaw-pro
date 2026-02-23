@@ -1141,56 +1141,93 @@ function Main {
                         $zipUrl = "https://github.com/cintia09/openclaw-pro/archive/refs/heads/main.zip"
                     }
 
-                    Write-Info "正在下载部署包..."
+                    # ── Resume-capable download with Range header ──
+                    $existingSize = 0
+                    if (Test-Path $zipFile) {
+                        $existingSize = (Get-Item $zipFile).Length
+                        if ($existingSize -gt 0) {
+                            Write-Info "发现未完成的下载 ($([math]::Round($existingSize / 1MB, 1))MB)，尝试断点续传..."
+                        }
+                    }
 
-                    # Show download progress
                     $sw = [System.Diagnostics.Stopwatch]::StartNew()
                     $spinner = @("⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏")
                     $sidx = 0
-                    $lastPct = -1
+                    $bufferSize = 65536  # 64KB
 
-                    # Use WebClient for progress
-                    $wc = New-Object System.Net.WebClient
-                    $downloadComplete = $false
-                    $downloadError = $null
+                    # Create HTTP request with Range header for resume
+                    $request = [System.Net.HttpWebRequest]::Create($zipUrl)
+                    $request.Timeout = 30000
+                    $request.ReadWriteTimeout = 30000
+                    $request.AllowAutoRedirect = $true
+                    $request.UserAgent = "OpenClaw-Installer/1.0"
 
-                    Register-ObjectEvent -InputObject $wc -EventName DownloadProgressChanged -Action {
-                        $script:lastPct = $Event.SourceArgs.ProgressPercentage
-                        $script:lastReceived = [math]::Round($Event.SourceArgs.BytesReceived / 1MB, 1)
-                        $script:lastTotal = [math]::Round($Event.SourceArgs.TotalBytesToReceive / 1MB, 1)
-                    } | Out-Null
-
-                    Register-ObjectEvent -InputObject $wc -EventName DownloadFileCompleted -Action {
-                        $script:downloadComplete = $true
-                        if ($Event.SourceArgs.Error) {
-                            $script:downloadError = $Event.SourceArgs.Error.Message
-                        }
-                    } | Out-Null
-
-                    $wc.DownloadFileAsync([Uri]$zipUrl, $zipFile)
-
-                    while (-not $downloadComplete) {
-                        $elapsed = $sw.Elapsed.ToString("mm\:ss")
-                        $frame = $spinner[$sidx % $spinner.Count]
-                        if ($lastPct -ge 0) {
-                            # Show progress with percentage
-                            $bar = "[" + ("█" * [math]::Floor($lastPct / 5)) + ("░" * (20 - [math]::Floor($lastPct / 5))) + "]"
-                            Write-Host "`r  $frame $bar ${lastReceived}MB / ${lastTotal}MB (${lastPct}%) $elapsed  " -NoNewline -ForegroundColor Cyan
-                        } else {
-                            Write-Host "`r  $frame 下载中... ($elapsed)                    " -NoNewline -ForegroundColor Yellow
-                        }
-                        Start-Sleep -Milliseconds 200
-                        $sidx++
+                    $resumed = $false
+                    if ($existingSize -gt 0) {
+                        $request.AddRange($existingSize)
                     }
-                    $wc.Dispose()
+
+                    $response = $request.GetResponse()
+                    $totalSize = $response.ContentLength
+                    $statusCode = [int]$response.StatusCode
+
+                    if ($statusCode -eq 206 -and $existingSize -gt 0) {
+                        # Server supports resume — 206 Partial Content
+                        $totalSize = $existingSize + $response.ContentLength
+                        $resumed = $true
+                        Write-OK "服务器支持续传，从 $([math]::Round($existingSize / 1MB, 1))MB 处继续"
+                    } elseif ($statusCode -eq 200) {
+                        if ($existingSize -gt 0) {
+                            Write-Warn "服务器不支持续传，将重新下载"
+                        }
+                        $existingSize = 0  # re-download from start
+                        $totalSize = $response.ContentLength
+                    }
+
+                    Write-Info "正在下载部署包... (总计 $([math]::Round($totalSize / 1MB, 1))MB)"
+
+                    $stream = $response.GetResponseStream()
+                    $fileMode = if ($resumed) { [IO.FileMode]::Append } else { [IO.FileMode]::Create }
+                    $fileStream = New-Object IO.FileStream($zipFile, $fileMode, [IO.FileAccess]::Write)
+                    $buffer = New-Object byte[] $bufferSize
+                    $downloadedThisSession = 0
+
+                    try {
+                        while (($read = $stream.Read($buffer, 0, $bufferSize)) -gt 0) {
+                            $fileStream.Write($buffer, 0, $read)
+                            $downloadedThisSession += $read
+                            $totalDownloaded = $existingSize + $downloadedThisSession
+
+                            # Update progress display
+                            $elapsed = $sw.Elapsed.ToString("mm\:ss")
+                            $frame = $spinner[$sidx % $spinner.Count]
+                            $sidx++
+
+                            if ($totalSize -gt 0) {
+                                $pct = [math]::Min(100, [math]::Floor(($totalDownloaded / $totalSize) * 100))
+                                $dlMB = [math]::Round($totalDownloaded / 1MB, 1)
+                                $totMB = [math]::Round($totalSize / 1MB, 1)
+                                $barFill = [math]::Floor($pct / 5)
+                                $bar = "[" + ("█" * $barFill) + ("░" * (20 - $barFill)) + "]"
+                                Write-Host "`r  $frame $bar ${dlMB}MB / ${totMB}MB (${pct}%) $elapsed  " -NoNewline -ForegroundColor Cyan
+                            } else {
+                                $dlMB = [math]::Round($totalDownloaded / 1MB, 1)
+                                Write-Host "`r  $frame 下载中: ${dlMB}MB ($elapsed)         " -NoNewline -ForegroundColor Yellow
+                            }
+                        }
+                    } finally {
+                        $fileStream.Close()
+                        $stream.Close()
+                        $response.Close()
+                    }
                     Write-Host "`r$(' ' * 80)`r" -NoNewline
 
-                    if ($downloadError) {
-                        throw $downloadError
-                    }
-
                     $zipSize = [math]::Round((Get-Item $zipFile).Length / 1MB, 1)
-                    Write-OK "下载完成 (${zipSize}MB)"
+                    if ($resumed) {
+                        Write-OK "续传下载完成 (${zipSize}MB)"
+                    } else {
+                        Write-OK "下载完成 (${zipSize}MB)"
+                    }
 
                     # Extract ZIP
                     Write-Info "正在解压..."
@@ -1244,9 +1281,17 @@ function Main {
         Remove-ResumeTask
         Remove-InstallState
 
+        # Check if container is already running
+        $running = & docker ps --filter "name=openclaw-pro" --filter "status=running" --format "{{.Names}}" 2>&1
+        if ($running -match "openclaw-pro") {
+            Write-OK "OpenClaw Pro 容器已在运行中"
+            $launched = $true
+        } else {
+
         Write-Info "正在构建并启动容器..."
         try {
             Push-Location $localDeployDir
+            # docker build has layer cache — re-run is fast if image didn't change
             & docker build -t openclaw-pro . 2>&1
             if ($LASTEXITCODE -ne 0) { throw "docker build failed" }
             Write-OK "镜像构建完成"
@@ -1286,6 +1331,7 @@ function Main {
             Pop-Location -ErrorAction SilentlyContinue
             $launched = $false
         }
+        }  # end container-not-running else
     } else {
         # WSL mode: copy files to WSL and run there
         # Check if already deployed
