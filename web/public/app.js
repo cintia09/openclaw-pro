@@ -609,8 +609,14 @@ $('btn-password').addEventListener('click', async ()=>{
   }
 });
 
-// Settings — timezone placeholder (compat)
-$('btn-settings-save').addEventListener('click', ()=> toast('已保存', '时区设置为界面占位（后续可接入后端 general 配置）'));
+// Settings — timezone save
+$('btn-settings-save').addEventListener('click', async ()=> {
+  const tz = $('settings-timezone') ? $('settings-timezone').value : '';
+  try {
+    const r = await api('/config', 'POST', { timezone: tz });
+    toast(r.success ? '已保存' : '保存失败', r.error || '');
+  } catch(e) { toast('保存失败', e.message); }
+});
 
 // ------------------------
 // STT config

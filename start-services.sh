@@ -17,7 +17,7 @@ echo "[start-services] Starting OpenClaw Gateway..."
 openclaw gateway start >> "$LOG_DIR/gateway-start.log" 2>&1
 # 等待 gateway 实际就绪
 for i in 1 2 3 4 5; do
-    if pgrep -f "openclaw.*gateway" > /dev/null 2>&1; then
+    if pgrep -f "[o]penclaw.*gateway" > /dev/null 2>&1; then
         echo "[start-services] Gateway started (attempt $i)"
         break
     fi
@@ -74,7 +74,7 @@ while true; do
     sleep 30
 
     # 检查 Gateway
-    if ! pgrep -f "openclaw.*gateway" > /dev/null 2>&1; then
+    if ! pgrep -f "[o]penclaw.*gateway" > /dev/null 2>&1; then
         echo "[health] WARNING: Gateway process not found, restarting..."
         openclaw gateway start 2>&1 &
     fi
@@ -99,5 +99,12 @@ while true; do
         echo "[health] WARNING: noVNC died, restarting..."
         websockify --web "$NOVNC_DIR" 6080 127.0.0.1:5900 >> "$LOG_DIR/novnc.log" 2>&1 &
         NOVNC_PID=$!
+    fi
+
+    # 检查 Chromium
+    if [ -n "${CHROME_PID:-}" ] && ! kill -0 $CHROME_PID 2>/dev/null; then
+        echo "[health] WARNING: Chromium died, restarting..."
+        DISPLAY=:99 "$CHROME_BIN" --no-sandbox --disable-gpu --disable-dev-shm-usage --window-size=1280,720 --user-data-dir=/root/.chromium-data "about:blank" >> "$LOG_DIR/chromium.log" 2>&1 &
+        CHROME_PID=$!
     fi
 done

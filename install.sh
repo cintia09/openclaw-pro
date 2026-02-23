@@ -41,6 +41,17 @@ chmod +x openclaw-docker.sh
 echo ""
 echo "✅ OpenClaw Pro downloaded to: $INSTALL_DIR"
 echo ""
+
+# When piped via curl|bash, stdin is not a tty — interactive setup won't work
+if [ ! -t 0 ]; then
+  echo "⚠️  检测到通过管道安装（curl | bash），无法启动交互式配置。"
+  echo "   请手动运行："
+  echo ""
+  echo "   cd $INSTALL_DIR && ./openclaw-docker.sh run"
+  echo ""
+  exit 0
+fi
+
 echo "Starting setup..."
 echo ""
 exec ./openclaw-docker.sh run

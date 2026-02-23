@@ -406,7 +406,7 @@ app.get('/api/status', (req, res) => {
   const status = { gateway: false, web: true, caddy: false, uptime: 0, memory: {} };
 
   try {
-    execSync('pgrep -f "openclaw.*gateway"', { stdio: 'ignore' });
+    execSync('pgrep -f "[o]penclaw.*gateway"', { stdio: 'ignore' });
     status.gateway = true;
   } catch {}
 
@@ -492,7 +492,7 @@ app.get('/api/openclaw', (req, res) => {
 
   const gatewayRunning = (() => {
     try {
-      execSync('pgrep -f "openclaw.*gateway"', { stdio: 'ignore' });
+      execSync('pgrep -f "[o]penclaw.*gateway"', { stdio: 'ignore' });
       return true;
     } catch {
       return false;
@@ -635,7 +635,8 @@ app.post('/api/trading/install', (req, res) => {
 });
 
 app.post('/api/trading/update', (req, res) => {
-  exec(`git -C ${TRADING_DIR} pull`, (err, stdout, stderr) => {
+  const { execFile } = require('child_process');
+  execFile('git', ['-C', TRADING_DIR, 'pull'], (err, stdout, stderr) => {
     res.json({ success: !err, output: stdout || stderr });
   });
 });
@@ -692,7 +693,9 @@ app.post('/api/plugins/install', (req, res) => {
   st.installed[id] = { installedAt: new Date().toISOString() };
   writePluginState(st);
 
-  // Real install logic (git/pip/etc) can be added later.
+  // TODO: Actually install the skill — e.g. git clone the skill repo into
+  // the openclaw skills directory, run any setup scripts, etc.
+  // For now we only update the JSON state.
   res.json({ success: true });
 });
 
@@ -738,8 +741,10 @@ app.post('/api/stt/config', (req, res) => {
 });
 
 app.post('/api/stt/install-local', (req, res) => {
+  // TODO: Install whisper.cpp or another local STT engine.
+  // For now, return a message suggesting cloud API usage.
   try {
-    exec('bash -lc "echo STT local install placeholder"', (err, stdout, stderr) => {
+    exec('bash -lc "echo STT local install: not yet implemented. Use cloud API (Gemini/OpenAI) for now."', (err, stdout, stderr) => {
       res.json({ success: !err, output: stdout || stderr });
     });
   } catch (e) {
@@ -757,30 +762,56 @@ if (WebSocketServer) {
 
   wss.on('connection', (ws) => {
     // Send recent lines on connect
-    let lastLineCount = 0;
     try {
       const lines = tailLogLines(120);
       ws.send(JSON.stringify({ type: 'lines', lines }));
-      lastLineCount = lines.length;
     } catch {}
 
-    // Track file size for efficient diffing
+    // Track file offset for incremental reads
     let lastSize = 0;
     try { lastSize = fs.statSync(LOG_FILE).size; } catch {}
 
-    const tick = setInterval(() => {
+    let watcher = null;
+    let debounceTimer = null;
+
+    const sendNewLines = () => {
       if (ws.readyState !== 1) return;
       try {
         const stat = fs.statSync(LOG_FILE);
-        if (stat.size === lastSize) return; // no change
+        if (stat.size === lastSize) return;
+        if (stat.size < lastSize) {
+          // File was truncated/rotated — re-read from start
+          lastSize = 0;
+        }
+        const fd = fs.openSync(LOG_FILE, 'r');
+        const buf = Buffer.alloc(stat.size - lastSize);
+        fs.readSync(fd, buf, 0, buf.length, lastSize);
+        fs.closeSync(fd);
         lastSize = stat.size;
-        const lines = tailLogLines(120);
-        ws.send(JSON.stringify({ type: 'lines', lines }));
+        const newLines = buf.toString('utf8').split('\n').filter(Boolean).map(sanitizeLogLine);
+        if (newLines.length > 0) {
+          ws.send(JSON.stringify({ type: 'append', lines: newLines }));
+        }
       } catch {}
-    }, 2000);
+    };
 
-    ws.on('close', () => clearInterval(tick));
-    ws.on('error', () => clearInterval(tick));
+    try {
+      watcher = fs.watch(LOG_FILE, () => {
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(sendNewLines, 300);
+      });
+    } catch {
+      // Fallback to polling if fs.watch fails
+      watcher = setInterval(sendNewLines, 2000);
+    }
+
+    const cleanup = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      if (watcher && typeof watcher.close === 'function') watcher.close();
+      else if (watcher) clearInterval(watcher);
+    };
+    ws.on('close', cleanup);
+    ws.on('error', cleanup);
   });
 } else {
   console.warn('[web] ws package not available: /api/ws/logs disabled');

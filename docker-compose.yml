@@ -1,3 +1,7 @@
+# ============================================================
+# 备用配置文件 — 主启动脚本 openclaw-docker.sh 使用 docker create 启动
+# 本文件供 docker compose up 方式使用（可选）
+# ============================================================
 # version field removed (deprecated in modern Docker Compose)
 
 services:

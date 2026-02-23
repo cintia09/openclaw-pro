@@ -21,7 +21,7 @@ echo "$(date '+%Y-%m-%d %H:%M:%S') | IP: ${SSH_CLIENT%% *} | TTY: $(tty)" >> "$L
 
 # 检查服务状态
 check_service() {
-    if pgrep -f "$1" > /dev/null 2>&1; then
+    if pgrep -f "$1" | grep -qv $$ 2>/dev/null; then
         printf "${GREEN}● 在线${NC}"
     else
         printf "${RED}● 离线${NC}"
@@ -92,8 +92,12 @@ if [ -t 0 ]; then
             2)
                 read -p "新Gateway端口 [当前: $(jq -r '.port // 18789' "$CONFIG_FILE" 2>/dev/null)]: " NEW_PORT
                 if [ -n "$NEW_PORT" ]; then
-                    jq ".port = $NEW_PORT" "$CONFIG_FILE" > /tmp/cfg.tmp && mv /tmp/cfg.tmp "$CONFIG_FILE"
-                    echo -e "${GREEN}端口已更新为 $NEW_PORT，重启容器生效${NC}"
+                    if ! [[ "$NEW_PORT" =~ ^[0-9]+$ ]] || [ "$NEW_PORT" -lt 1024 ] || [ "$NEW_PORT" -gt 65535 ]; then
+                        echo -e "${RED}端口无效，需要 1024-65535 之间的数字${NC}"
+                    else
+                        jq ".port = $NEW_PORT" "$CONFIG_FILE" > /tmp/cfg.tmp && mv /tmp/cfg.tmp "$CONFIG_FILE"
+                        echo -e "${GREEN}端口已更新为 $NEW_PORT，重启容器生效${NC}"
+                    fi
                 fi
                 ;;
             3)
