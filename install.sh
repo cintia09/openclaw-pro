@@ -4,7 +4,7 @@
 set -euo pipefail
 
 REPO="https://github.com/cintia09/openclaw-pro.git"
-INSTALL_DIR="${OPENCLAW_INSTALL_DIR:-$HOME/openclaw-pro}"
+INSTALL_DIR="${OPENCLAW_INSTALL_DIR:-$(pwd)/openclaw-pro}"
 
 echo "🐾 OpenClaw Pro Installer"
 echo "========================="

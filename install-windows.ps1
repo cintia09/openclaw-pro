@@ -28,7 +28,7 @@ $SCRIPT_VERSION  = "1.0.0"
 $TASK_NAME       = "OpenClawSetup"
 $UBUNTU_DISTRO   = "Ubuntu-24.04"
 $OPENCLAW_PORT   = "18789"
-$WSL_TARGET_DIR  = "/root/openclaw-docker"
+$WSL_TARGET_DIR  = "/root/openclaw-pro"
 $SCRIPT_URL      = "https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1"
 $SCRIPT_DIR      = if ($MyInvocation.MyCommand.Path) {
     Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -471,8 +471,8 @@ function Copy-DeployPackageToWsl {
     }
 
     # Target directory in WSL
-    $targetWslPath = "$wslRoot\root\openclaw-docker"
-    Write-Info "目标路径: /root/openclaw-docker/"
+    $targetWslPath = "$wslRoot\root\openclaw-pro"
+    Write-Info "目标路径: /root/openclaw-pro/"
 
     try {
         # Create target directory
@@ -512,7 +512,7 @@ function Copy-DeployPackageToWslAlt {
         Write-Info "WSL源路径: $wslSourcePath"
 
         # Create target dir and copy using WSL's cp
-        & wsl -d $DistroName --exec bash -c "mkdir -p /root/openclaw-docker && cp -r '$wslSourcePath/.' /root/openclaw-docker/"
+        & wsl -d $DistroName --exec bash -c "mkdir -p /root/openclaw-pro && cp -r '$wslSourcePath/.' /root/openclaw-pro/"
         $exitCode = $LASTEXITCODE
 
         if ($exitCode -eq 0) {
@@ -538,7 +538,7 @@ function Start-OpenClawDeploy {
     $deployScript = @"
 #!/bin/bash
 set -e
-cd /root/openclaw-docker
+cd /root/openclaw-pro
 
 # Fix line endings (in case Windows copied CRLF)
 if command -v dos2unix &>/dev/null; then
@@ -583,7 +583,7 @@ echo ""
         Write-Suggestion "请手动打开 WSL 终端，执行以下命令完成部署："
         Write-Host ""
         Write-Host "    wsl -d $DistroName" -ForegroundColor White
-        Write-Host "    cd /root/openclaw-docker" -ForegroundColor White
+        Write-Host "    cd /root/openclaw-pro" -ForegroundColor White
         Write-Host "    chmod +x openclaw-docker.sh && ./openclaw-docker.sh run" -ForegroundColor White
         Write-Host ""
         return $false
@@ -617,7 +617,7 @@ function Show-Completion {
     Write-Host ""
     Write-Host "  📋 管理命令（在 WSL 终端中运行）：" -ForegroundColor White
     Write-Host "     wsl -d $UBUNTU_DISTRO" -ForegroundColor Gray
-    Write-Host "     cd /root/openclaw-docker" -ForegroundColor Gray
+    Write-Host "     cd /root/openclaw-pro" -ForegroundColor Gray
     Write-Host "     ./openclaw-docker.sh status    # 查看状态" -ForegroundColor Gray
     Write-Host "     ./openclaw-docker.sh logs      # 查看日志" -ForegroundColor Gray
     Write-Host "     ./openclaw-docker.sh stop      # 停止服务" -ForegroundColor Gray
@@ -819,7 +819,7 @@ function Main {
             Show-Error `
                 "文件复制" `
                 "无法将部署包复制到 WSL" `
-                "请手动复制 docker 目录到 WSL 后运行: cd /root/openclaw-docker && ./openclaw-docker.sh run"
+                "请手动复制 docker 目录到 WSL 后运行: cd /root/openclaw-pro && ./openclaw-docker.sh run"
             Read-Host "按回车退出"
             exit 1
         }

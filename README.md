@@ -18,13 +18,13 @@ irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows
 
 自动完成：安装 WSL2/Docker → 克隆仓库 → 构建镜像 → 启动配置向导。
 
-> **目录说明：** curl 安装后，程序部署在 `~/openclaw-pro/`，运行时数据目录在 `~/home-docker/`（与 `openclaw-pro/` 同级）。
+> **目录说明：** curl 安装后，程序部署在当前目录下的 `openclaw-pro/`，运行时数据目录在 `openclaw-pro/home-data/`。
 
 ### 手动安装（Linux / macOS）
 
 ```bash
-git clone https://github.com/cintia09/openclaw-pro.git openclaw-docker
-cd openclaw-docker
+git clone https://github.com/cintia09/openclaw-pro.git openclaw-pro
+cd openclaw-pro
 
 chmod +x openclaw-docker.sh
 ./openclaw-docker.sh run
@@ -47,8 +47,8 @@ chmod +x openclaw-docker.sh
 1. 安装 [Docker Desktop for Windows](https://www.docker.com/products/docker-desktop/)
 2. 打开 PowerShell：
 ```powershell
-git clone https://github.com/cintia09/openclaw-pro.git openclaw-docker
-cd openclaw-docker
+git clone https://github.com/cintia09/openclaw-pro.git openclaw-pro
+cd openclaw-pro
 bash openclaw-docker.sh run
 ```
 
@@ -81,7 +81,7 @@ bash openclaw-docker.sh run
 **Windows 管理命令（部署完成后，在 WSL 终端中运行）：**
 ```bash
 wsl -d Ubuntu-24.04
-cd /root/openclaw-docker
+cd /root/openclaw-pro
 ./openclaw-docker.sh status   # 查看状态
 ./openclaw-docker.sh logs     # 查看日志
 ./openclaw-docker.sh stop     # 停止服务
@@ -103,7 +103,7 @@ cd /root/openclaw-docker
 ## 目录结构
 
 ```
-openclaw-docker/          ← 部署脚本和Docker文件
+openclaw-pro/          ← 部署脚本和Docker文件
 ├── openclaw-docker.sh    # 主管理脚本
 ├── install.sh            # 一键安装入口（curl|bash）
 ├── Dockerfile            # 容器镜像定义
@@ -121,14 +121,13 @@ openclaw-docker/          ← 部署脚本和Docker文件
 │       └── app.js
 ├── install-windows.bat   # Windows安装入口
 ├── install-windows.ps1   # Windows安装脚本（WSL2+Docker）
-└── README.md
-
-home-docker/              ← 持久化数据（自动创建）
-├── .openclaw/
-│   ├── openclaw.json     # OpenClaw配置
-│   ├── docker-config.json # Docker部署配置
-│   └── logs/             # 日志
-└── ...                   # 你的工作文件
+├── README.md
+└── home-data/            ← 持久化数据（自动创建，挂载为容器/root）
+    ├── .openclaw/
+    │   ├── openclaw.json     # OpenClaw配置
+    │   ├── docker-config.json # Docker部署配置
+    │   └── logs/             # 日志
+    └── ...                   # 你的工作文件
 ```
 
 ## 安全最佳实践
@@ -141,7 +140,7 @@ home-docker/              ← 持久化数据（自动创建）
    - 不挂载 Docker socket
    - HTTPS 模式下 Gateway/Web 面板端口仅绑定 127.0.0.1（外部只走 Caddy 反代）
 5. **Web 面板账号** — 首次访问需要初始化设置管理密码（至少8位）
-6. **文件权限** — `docker-config.json/openclaw.json` 建议 600，`home-docker/` 建议 700
+6. **文件权限** — `docker-config.json/openclaw.json` 建议 600，`home-data/` 建议 700
 
 > **注意：** Caddy basicauth 和 Web 面板登录是两层独立认证。如果不需要 Caddy 层的 basicauth，可以在 `Caddyfile.template` 中注释掉 `basicauth` 块，只保留 Web 面板自身的登录认证即可。
 
@@ -210,6 +209,6 @@ cat /root/.openclaw/logs/caddy.log
 ./openclaw-docker.sh stop
 docker rm openclaw-pro
 # 删除配置（保留数据）
-rm ../home-docker/.openclaw/docker-config.json
+rm home-data/.openclaw/docker-config.json
 ./openclaw-docker.sh run
 ```

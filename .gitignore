@@ -3,6 +3,9 @@
 install-log.txt
 node_modules/
 
+# Persistent data (mounted as /root in container)
+home-data/
+
 # OS
 .DS_Store
 Thumbs.db

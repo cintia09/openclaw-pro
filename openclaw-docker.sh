@@ -18,7 +18,7 @@ NC='\033[0m'
 CONTAINER_NAME="openclaw-pro"
 IMAGE_NAME="openclaw-pro"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-HOME_DIR="$(realpath "$SCRIPT_DIR/../home-docker")"
+HOME_DIR="$SCRIPT_DIR/home-data"
 CONFIG_FILE="$HOME_DIR/.openclaw/docker-config.json"
 
 # ---- 工具函数 ----

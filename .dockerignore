@@ -9,3 +9,4 @@ openclaw-docker.sh
 docker-compose.yml
 .install-state.json
 install-log.txt
+home-data/
