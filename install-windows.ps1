@@ -190,7 +190,6 @@ function Show-Logo {
     Write-Host "   ╚═════╝ ╚═╝     ╚══════╝╚═╝  ╚═══╝ ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "                    🐾  OpenClaw Pro  —  Windows Installer" -ForegroundColor White
-    Write-Host "                              方案B: WSL2 + Docker Engine" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  ─────────────────────────────────────────────────────────────────────" -ForegroundColor DarkGray
     Write-Host ""
@@ -953,6 +952,15 @@ function Main {
         }
     }
 
+    # Display selected mode
+    if ($dockerDesktopMode) {
+        Write-Host ""
+        Write-Host "  🔧 安装模式: 方案A — Docker Desktop (本地)" -ForegroundColor Green
+    } else {
+        Write-Host ""
+        Write-Host "  🔧 安装模式: 方案B — WSL2 + Docker Engine" -ForegroundColor Green
+    }
+
     $wslInstalled  = Test-Wsl2Installed
     $ubuntuPresent = $false
 
@@ -1089,9 +1097,25 @@ function Main {
             if ($hasGit) {
                 Write-Info "使用 git clone 下载..."
                 try {
-                    & git clone https://github.com/cintia09/openclaw-pro.git "$localDeployDir" 2>&1
+                    # Clone with tags so we can checkout the latest release
+                    & git clone --depth 1 https://github.com/cintia09/openclaw-pro.git "$localDeployDir" 2>&1
                     if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
-                    Write-OK "仓库克隆完成"
+                    # Try to switch to latest release tag
+                    try {
+                        Push-Location $localDeployDir
+                        & git fetch --tags --depth 1 2>&1 | Out-Null
+                        $latestTag = & git tag --sort=-v:refname 2>$null | Select-Object -First 1
+                        if ($latestTag) {
+                            & git checkout $latestTag 2>&1 | Out-Null
+                            Write-OK "仓库克隆完成 (Release: $latestTag)"
+                        } else {
+                            Write-OK "仓库克隆完成 (main 分支)"
+                        }
+                        Pop-Location
+                    } catch {
+                        Write-OK "仓库克隆完成 (main 分支)"
+                        Pop-Location -ErrorAction SilentlyContinue
+                    }
                 } catch {
                     Write-Warn "git clone 失败，尝试 ZIP 下载..."
                     $hasGit = $false
@@ -1099,13 +1123,25 @@ function Main {
             }
 
             if (-not $hasGit) {
-                # Download ZIP archive from GitHub (no git required)
-                $zipUrl = "https://github.com/cintia09/openclaw-pro/archive/refs/heads/main.zip"
+                # Try GitHub Release first, fallback to main branch ZIP
+                $zipUrl = $null
                 $zipFile = Join-Path $env:TEMP "openclaw-pro.zip"
 
                 try {
-                    Write-Info "正在下载 ZIP 包..."
                     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                    Write-Info "正在查询最新 Release 版本..."
+                    $releaseApi = "https://api.github.com/repos/cintia09/openclaw-pro/releases/latest"
+                    try {
+                        $releaseJson = Invoke-RestMethod -Uri $releaseApi -TimeoutSec 10 -ErrorAction Stop
+                        $zipUrl = $releaseJson.zipball_url
+                        $relTag = $releaseJson.tag_name
+                        Write-OK "找到最新 Release: $relTag"
+                    } catch {
+                        Write-Info "未找到 Release 版本，使用 main 分支"
+                        $zipUrl = "https://github.com/cintia09/openclaw-pro/archive/refs/heads/main.zip"
+                    }
+
+                    Write-Info "正在下载部署包..."
 
                     # Show download progress
                     $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -1157,18 +1193,26 @@ function Main {
                     }
                     Expand-Archive -Path $zipFile -DestinationPath $env:TEMP -Force
 
-                    # GitHub ZIP extracts to openclaw-pro-main/
-                    $extractedDir = Join-Path $env:TEMP "openclaw-pro-main"
-                    if (Test-Path $extractedDir) {
+                    # GitHub ZIP directory names vary by download type:
+                    # - main branch: "openclaw-pro-main/"
+                    # - release zipball: "cintia09-openclaw-pro-{sha}/"
+                    $extractedDir = $null
+                    $candidates = @(
+                        (Join-Path $env:TEMP "openclaw-pro-main"),
+                        (Get-ChildItem $env:TEMP -Directory -Filter "openclaw-pro-*" -ErrorAction SilentlyContinue | Select-Object -First 1),
+                        (Get-ChildItem $env:TEMP -Directory -Filter "*openclaw-pro-*" -ErrorAction SilentlyContinue | Select-Object -First 1)
+                    )
+                    foreach ($c in $candidates) {
+                        $path = if ($c -is [System.IO.DirectoryInfo]) { $c.FullName } else { $c }
+                        if ($path -and (Test-Path $path)) {
+                            $extractedDir = $path
+                            break
+                        }
+                    }
+                    if ($extractedDir) {
                         Move-Item $extractedDir $localDeployDir -Force
                     } else {
-                        # Try finding the extracted folder
-                        $found = Get-ChildItem $env:TEMP -Directory -Filter "openclaw-pro-*" | Select-Object -First 1
-                        if ($found) {
-                            Move-Item $found.FullName $localDeployDir -Force
-                        } else {
-                            throw "解压后未找到部署目录"
-                        }
+                        throw "解压后未找到部署目录"
                     }
 
                     Write-OK "解压完成"
@@ -1177,7 +1221,7 @@ function Main {
                     Write-Err "下载失败: $_"
                     Write-Host ""
                     Write-Host "  💡 请手动下载并解压:" -ForegroundColor Cyan
-                    Write-Host "     1. 浏览器打开: https://github.com/cintia09/openclaw-pro/archive/refs/heads/main.zip" -ForegroundColor White
+                    Write-Host "     1. 浏览器打开: https://github.com/cintia09/openclaw-pro/releases/latest" -ForegroundColor White
                     Write-Host "     2. 解压到当前目录，重命名为 openclaw-pro" -ForegroundColor White
                     Write-Host "     3. 重新运行此脚本" -ForegroundColor White
                     Write-Host ""
