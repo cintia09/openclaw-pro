@@ -1713,7 +1713,23 @@ function Main {
 
                 if (-not $buildOK) {
                     $originalDockerfile | Set-Content $dockerfilePath -Force -NoNewline
-                    throw "docker build failed — 无法拉取基础镜像。请检查网络连接，或手动配置 Docker 镜像加速。"
+                    Write-Host ""
+                    Write-Host "  ══════════════════════════════════════════════════" -ForegroundColor Red
+                    Write-Host "           镜像获取失败（下载和本地构建均失败）" -ForegroundColor Red
+                    Write-Host "  ══════════════════════════════════════════════════" -ForegroundColor Red
+                    Write-Host ""
+                    Write-Host "  请手动下载预构建镜像:" -ForegroundColor Yellow
+                    Write-Host "  https://github.com/$GITHUB_REPO/releases/download/v1.0.0/openclaw-pro-image.tar.gz" -ForegroundColor Cyan
+                    Write-Host ""
+                    Write-Host "  下载命令 (PowerShell, 支持断点续传):" -ForegroundColor Yellow
+                    Write-Host "  curl.exe -L -C - --retry 200 --retry-all-errors --retry-delay 3 -o openclaw-pro-image.tar.gz ``" -ForegroundColor White
+                    Write-Host "    `"https://github.com/$GITHUB_REPO/releases/download/v1.0.0/openclaw-pro-image.tar.gz`"" -ForegroundColor White
+                    Write-Host ""
+                    Write-Host "  下载完成后执行:" -ForegroundColor Yellow
+                    Write-Host "  docker load -i openclaw-pro-image.tar.gz" -ForegroundColor White
+                    Write-Host "  docker run -d --name openclaw-pro -p $($script:actualGatewayPort):18789 -p $($script:actualPanelPort):3000 -v ./home-data:/root openclaw-pro" -ForegroundColor White
+                    Write-Host ""
+                    throw "镜像获取失败 — 下载和本地构建均不可用。请按上方提示手动下载。"
                 }
                 $imageReady = $true
             }
