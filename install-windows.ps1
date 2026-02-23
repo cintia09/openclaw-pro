@@ -1288,12 +1288,13 @@ function Show-Completion {
         Write-Host ""
 
         # Windows 防火墙提醒（外网访问需要 - 已自动尝试开放）
-        if ($Domain) {
-            $ports = "${HttpPort},${HttpsPort}"
-        } else {
-            $ports = "${GatewayPort},${PanelPort}"
-        }
-        Write-Host "  🔒 防火墙端口已自动开放，如需重新设置:" -ForegroundColor Yellow
+        $portList = @()
+        $portList += $GatewayPort
+        $portList += $PanelPort
+        if ($HttpPort -and $HttpPort -gt 0) { $portList += $HttpPort }
+        if ($HttpsPort -and $HttpsPort -gt 0) { $portList += $HttpsPort }
+        $ports = ($portList | Sort-Object -Unique) -join ','
+        Write-Host "  🔒 防火墙端口已自动开放 (${ports})，如需重新设置:" -ForegroundColor Yellow
         Write-Host "     netsh advfirewall firewall add rule name=`"OpenClaw`" dir=in action=allow protocol=tcp localport=${ports}" -ForegroundColor White
         Write-Host ""
 
@@ -1890,42 +1891,72 @@ function Main {
         Remove-ResumeTask
         Remove-InstallState
 
-        # Check if container is already running
-        $running = & docker ps --filter "name=openclaw-pro" --filter "status=running" --format "{{.ID}} {{.Status}}" 2>&1
-        $stopped = & docker ps -a --filter "name=openclaw-pro" --filter "status=exited" --format "{{.ID}} {{.Status}}" 2>&1
-        $hasRunning = ($running -and $running -match '\S')
-        $hasStopped = ($stopped -and $stopped -match '\S')
+        # ── 检测已有容器 ──
+        $containerName = "openclaw-pro"   # 默认容器名
 
-        if ($hasRunning) {
-            # 容器正在运行
+        # 查找所有 openclaw-pro* 容器
+        $existingContainers = & docker ps -a --filter "name=openclaw-pro" --format "{{.Names}}|{{.Status}}|{{.Ports}}" 2>&1
+        $runningContainers = @()
+        $stoppedContainers = @()
+        if ($existingContainers) {
+            foreach ($line in $existingContainers) {
+                if ($line -match '\S') {
+                    if ($line -match 'Up ') {
+                        $runningContainers += $line
+                    } else {
+                        $stoppedContainers += $line
+                    }
+                }
+            }
+        }
+
+        # 清理已停止的容器
+        foreach ($sc in $stoppedContainers) {
+            $scName = ($sc -split '\|')[0]
+            Write-Info "清理已停止的容器: $scName"
+            & docker rm -f $scName 2>&1 | Out-Null
+        }
+
+        if ($runningContainers.Count -gt 0) {
+            Write-Host "" 
+            Write-Host "  ⚠️  发现正在运行的 OpenClaw 容器:" -ForegroundColor Yellow
             Write-Host ""
-            Write-Host "  ⚠️  发现 OpenClaw Pro 容器正在运行" -ForegroundColor Yellow
-            Write-Host ""
-            # 显示当前容器信息
-            $containerInfo = & docker ps --filter "name=openclaw-pro" --format "     容器ID: {{.ID}}  状态: {{.Status}}  端口: {{.Ports}}" 2>&1
-            Write-Host $containerInfo -ForegroundColor DarkGray
+            foreach ($rc in $runningContainers) {
+                $parts = $rc -split '\|'
+                Write-Host "     容器: $($parts[0])  状态: $($parts[1])  端口: $($parts[2])" -ForegroundColor DarkGray
+            }
             Write-Host ""
             Write-Host "  请选择操作:" -ForegroundColor White
-            Write-Host "     [1] 保持运行（不做任何修改）" -ForegroundColor Gray
-            Write-Host "     [2] 停止并重新配置（删除旧容器，重新选择端口）" -ForegroundColor Gray
+            Write-Host "     [1] 保留旧容器，新建一个实例（使用不同端口）" -ForegroundColor Gray
+            Write-Host "     [2] 停止旧容器，重新配置（替换）" -ForegroundColor Gray
             Write-Host ""
-            Write-Host "  输入选择 [1]: " -NoNewline -ForegroundColor White
+            Write-Host "  输入选择 [2]: " -NoNewline -ForegroundColor White
             $choice = (Read-Host).Trim()
 
-            if ($choice -eq '2') {
-                Write-Info "停止并删除旧容器..."
-                & docker rm -f openclaw-pro 2>&1 | Out-Null
-                Start-Sleep -Seconds 2  # 等待端口完全释放
-                Write-OK "旧容器已删除"
+            if ($choice -eq '1') {
+                # 保留旧容器，生成新容器名
+                $idx = 2
+                while ($true) {
+                    $candidate = "openclaw-pro-$idx"
+                    $existing = & docker ps -a --filter "name=$candidate" --format "{{.Names}}" 2>&1
+                    if (-not ($existing -match $candidate)) {
+                        $containerName = $candidate
+                        break
+                    }
+                    $idx++
+                    if ($idx -gt 20) { $containerName = "openclaw-pro-$(Get-Random -Maximum 999)"; break }
+                }
+                Write-Info "将创建新容器: $containerName"
             } else {
-                Write-OK "OpenClaw Pro 容器保持运行"
-                $launched = $true
+                # 删除所有旧容器
+                foreach ($rc in $runningContainers) {
+                    $rcName = ($rc -split '\|')[0]
+                    Write-Info "停止并删除: $rcName"
+                    & docker rm -f $rcName 2>&1 | Out-Null
+                }
+                Start-Sleep -Seconds 2  # 等待端口释放
+                Write-OK "旧容器已删除"
             }
-        } elseif ($hasStopped) {
-            # 容器已停止
-            Write-Info "发现已停止的旧容器，正在清理..."
-            & docker rm -f openclaw-pro 2>&1 | Out-Null
-            Start-Sleep -Seconds 1
         }
 
         if (-not $launched) {
@@ -2088,10 +2119,10 @@ function Main {
             }
             Write-OK "镜像准备完成"
 
-            # 再次检查是否有残留容器（防御性检查）
-            $existing = & docker ps -a --filter "name=openclaw-pro" --format "{{.Names}}" 2>&1
-            if ($existing -match "openclaw-pro") {
-                & docker rm -f openclaw-pro 2>&1 | Out-Null
+            # 再次检查目标容器名是否有残留（防御性检查）
+            $existing = & docker ps -a --filter "name=^${containerName}$" --format "{{.Names}}" 2>&1
+            if ($existing -match $containerName) {
+                & docker rm -f $containerName 2>&1 | Out-Null
                 Start-Sleep -Seconds 1
             }
 
@@ -2121,7 +2152,7 @@ function Main {
             # Build docker run arguments
             $runArgs = @(
                 "run", "-d",
-                "--name", "openclaw-pro",
+                "--name", $containerName,
                 "--hostname", "openclaw",
                 "-v", "${homeData}:/root",
                 "-e", "TZ=Asia/Shanghai",
@@ -2137,22 +2168,30 @@ function Main {
                 Write-OK "容器已启动"
                 $launched = $true
 
-                # 自动打开 Windows 防火墙端口
+                # 自动打开 Windows 防火墙端口（所有映射端口）
                 try {
-                    if ($deployConfig.Domain) {
-                        $fwPorts = "$($deployConfig.HttpPort),$($deployConfig.HttpsPort)"
-                    } else {
-                        $fwPorts = "$($deployConfig.GatewayPort),$($deployConfig.WebPort)"
+                    $fwPortList = @()
+                    $fwPortList += $deployConfig.GatewayPort
+                    $fwPortList += $deployConfig.WebPort
+                    if ($deployConfig.HttpPort -and $deployConfig.HttpPort -gt 0) {
+                        $fwPortList += $deployConfig.HttpPort
                     }
+                    if ($deployConfig.HttpsPort -and $deployConfig.HttpsPort -gt 0) {
+                        $fwPortList += $deployConfig.HttpsPort
+                    }
+                    $fwPorts = ($fwPortList | Sort-Object -Unique) -join ','
+
                     # 先删除旧规则（忽略错误）
                     & netsh advfirewall firewall delete rule name="OpenClaw" 2>$null | Out-Null
-                    # 添加新规则
-                    & netsh advfirewall firewall add rule name="OpenClaw" dir=in action=allow protocol=tcp localport=$fwPorts 2>&1 | Out-Null
+                    & netsh advfirewall firewall delete rule name="OpenClaw-$containerName" 2>$null | Out-Null
+                    # 添加新规则（以容器名标识）
+                    $fwRuleName = if ($containerName -eq 'openclaw-pro') { 'OpenClaw' } else { "OpenClaw-$containerName" }
+                    & netsh advfirewall firewall add rule name=$fwRuleName dir=in action=allow protocol=tcp localport=$fwPorts 2>&1 | Out-Null
                     if ($LASTEXITCODE -eq 0) {
                         Write-OK "防火墙端口已自动开放 ($fwPorts)"
                     } else {
                         Write-Warn "防火墙设置需要管理员权限，请手动执行:"
-                        Write-Host "     netsh advfirewall firewall add rule name=`"OpenClaw`" dir=in action=allow protocol=tcp localport=$fwPorts" -ForegroundColor White
+                        Write-Host "     netsh advfirewall firewall add rule name=`"$fwRuleName`" dir=in action=allow protocol=tcp localport=$fwPorts" -ForegroundColor White
                     }
                 } catch {
                     Write-Log "Firewall auto-open failed: $_"
