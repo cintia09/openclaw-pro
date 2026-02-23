@@ -1276,13 +1276,13 @@ function Show-Completion {
         Write-Host "  ─────────────────────────────────────────────────" -ForegroundColor DarkGray
         Write-Host ""
 
-        # Windows 防火墙提醒（外网访问需要）
+        # Windows 防火墙提醒（外网访问需要 - 已自动尝试开放）
         if ($Domain) {
             $ports = "${HttpPort},${HttpsPort}"
         } else {
             $ports = "${GatewayPort},${PanelPort}"
         }
-        Write-Host "  🔒 如需外网访问，请以管理员身份运行:" -ForegroundColor Yellow
+        Write-Host "  🔒 防火墙端口已自动开放，如需重新设置:" -ForegroundColor Yellow
         Write-Host "     netsh advfirewall firewall add rule name=`"OpenClaw`" dir=in action=allow protocol=tcp localport=${ports}" -ForegroundColor White
         Write-Host ""
 
@@ -1934,17 +1934,47 @@ function Main {
 
                     if ($downloadOK) {
                         Write-OK "镜像下载完成"
-                        Write-Info "正在加载镜像到 Docker..."
-                        & docker load -i $imageTar 2>&1 | ForEach-Object {
+                        Write-Info "正在加载镜像到 Docker...（1.6GB 需约 1-3 分钟，请耐心等待）"
+
+                        # 后台加载 + 前台旋转动画
+                        $loadJob = Start-Job -ScriptBlock {
+                            param($tar)
+                            & docker load -i $tar 2>&1
+                            return $LASTEXITCODE
+                        } -ArgumentList $imageTar
+
+                        $spinner = @('⠁','⠃','⠇','⠏','⠟','⠿','⡿','⣿','⣾','⣼','⣸','⣰','⣠','⣀','⢀','⠀')
+                        $si = 0
+                        $loadTimer = [System.Diagnostics.Stopwatch]::StartNew()
+                        while ($loadJob.State -eq 'Running') {
+                            $elapsed = [math]::Floor($loadTimer.Elapsed.TotalSeconds)
+                            $min = [math]::Floor($elapsed / 60)
+                            $sec = $elapsed % 60
+                            $spinChar = $spinner[$si % $spinner.Count]
+                            Write-Host "`r  $spinChar 加载中... 已耗时 ${min}分${sec}秒    " -NoNewline -ForegroundColor Cyan
+                            $si++
+                            Start-Sleep -Milliseconds 200
+                        }
+                        Write-Host ""
+                        $loadTimer.Stop()
+                        $loadOutput = Receive-Job $loadJob
+                        $loadExitCode = $loadJob.ChildJobs[0].JobStateInfo.Reason
+                        Remove-Job $loadJob -Force
+
+                        # 输出 docker load 日志
+                        $loadOutput | ForEach-Object {
                             Write-Log "docker load: $_"
                             if ($_ -match "Loaded image") {
                                 Write-Host "  $_" -ForegroundColor DarkGray
                             }
                         }
+
+                        # 检查镜像是否加载成功
+                        $loadCheck = & docker image inspect openclaw-pro 2>$null
                         if ($LASTEXITCODE -eq 0) {
+                            $totalSec = [math]::Floor($loadTimer.Elapsed.TotalSeconds)
                             $imageReady = $true
-                            Write-OK "预构建镜像加载完成"
-                            & docker tag openclaw-pro:latest openclaw-pro:latest 2>$null
+                            Write-OK "预构建镜像加载完成 (耗时 ${totalSec} 秒)"
                         } else {
                             Write-Warn "docker load 失败，将尝试本地构建"
                         }
@@ -2054,6 +2084,27 @@ function Main {
             if ($LASTEXITCODE -eq 0) {
                 Write-OK "容器已启动"
                 $launched = $true
+
+                # 自动打开 Windows 防火墙端口
+                try {
+                    if ($deployConfig.Domain) {
+                        $fwPorts = "$($deployConfig.HttpPort),$($deployConfig.HttpsPort)"
+                    } else {
+                        $fwPorts = "$($deployConfig.GatewayPort),$($deployConfig.WebPort)"
+                    }
+                    # 先删除旧规则（忽略错误）
+                    & netsh advfirewall firewall delete rule name="OpenClaw" 2>$null | Out-Null
+                    # 添加新规则
+                    & netsh advfirewall firewall add rule name="OpenClaw" dir=in action=allow protocol=tcp localport=$fwPorts 2>&1 | Out-Null
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-OK "防火墙端口已自动开放 ($fwPorts)"
+                    } else {
+                        Write-Warn "防火墙设置需要管理员权限，请手动执行:"
+                        Write-Host "     netsh advfirewall firewall add rule name=`"OpenClaw`" dir=in action=allow protocol=tcp localport=$fwPorts" -ForegroundColor White
+                    }
+                } catch {
+                    Write-Log "Firewall auto-open failed: $_"
+                }
             } else {
                 throw "docker run failed"
             }
