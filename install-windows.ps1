@@ -91,6 +91,92 @@ function Write-Suggestion {
     Write-Host "  💡 $Text" -ForegroundColor Cyan
 }
 
+
+function Write-ProgressBar {
+    <#
+    .SYNOPSIS
+        Draws an ASCII progress bar inline.
+        Usage: Write-ProgressBar -Percent 45 -Label "下载中"
+    #>
+    param(
+        [int]$Percent,
+        [string]$Label = "",
+        [int]$Width = 30
+    )
+    $filled = [math]::Floor($Width * $Percent / 100)
+    $empty  = $Width - $filled
+    $bar    = ("█" * $filled) + ("░" * $empty)
+    $line   = "  $Label [$bar] ${Percent}%"
+    Write-Host "`r$line" -NoNewline -ForegroundColor Cyan
+}
+
+function Start-AnimatedProgress {
+    <#
+    .SYNOPSIS
+        Runs a ScriptBlock while showing an animated spinner + elapsed time.
+        Returns the ScriptBlock result. Captures output via a temp file.
+    #>
+    param(
+        [string]$Label,
+        [scriptblock]$Action,
+        [string]$CompletedLabel = ""
+    )
+    $spinner = @("⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏")
+    $idx = 0
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+
+    # Run action as a background job
+    $job = Start-Job -ScriptBlock $Action
+
+    while ($job.State -eq "Running") {
+        $elapsed = $sw.Elapsed.ToString("mm\:ss")
+        $frame = $spinner[$idx % $spinner.Count]
+        Write-Host "`r  $frame $Label ($elapsed)" -NoNewline -ForegroundColor Yellow
+        Start-Sleep -Milliseconds 120
+        $idx++
+    }
+
+    $sw.Stop()
+    $elapsed = $sw.Elapsed.ToString("mm\:ss")
+
+    # Get job result
+    $result = Receive-Job -Job $job
+    $jobState = $job.State
+    Remove-Job -Job $job -Force
+
+    # Clear spinner line
+    Write-Host "`r$(' ' * 70)`r" -NoNewline
+
+    if ($CompletedLabel) {
+        Write-Host "  ✅ $CompletedLabel ($elapsed)" -ForegroundColor Green
+    }
+
+    return $result
+}
+
+function Show-StepProgress {
+    <#
+    .SYNOPSIS
+        Shows a multi-step progress list with checkmarks, similar to:
+        ✅ 更新软件包列表
+        ⏳ 安装 Docker Engine...
+        ○ 启动 Docker 服务
+    #>
+    param(
+        [string[]]$Steps,
+        [int]$CurrentStep   # 0-based index
+    )
+    for ($i = 0; $i -lt $Steps.Count; $i++) {
+        if ($i -lt $CurrentStep) {
+            Write-Host "     ✅ $($Steps[$i])" -ForegroundColor Green
+        } elseif ($i -eq $CurrentStep) {
+            Write-Host "     ⏳ $($Steps[$i])..." -ForegroundColor Yellow
+        } else {
+            Write-Host "     ○  $($Steps[$i])" -ForegroundColor DarkGray
+        }
+    }
+}
+
 # ─── ASCII Art Logo ────────────────────────────────────────────────────────────
 function Show-Logo {
     if ($SkipWelcome) { return }
@@ -265,33 +351,102 @@ function Remove-ResumeTask {
 function Install-Wsl2 {
     Write-Info "正在安装 WSL2 和 $UBUNTU_DISTRO..."
     Write-Info "首次安装约需 3-5 分钟（需要下载 Ubuntu 镜像）"
+    Write-Host ""
+
+    $steps = @("启用 WSL 功能", "下载 $UBUNTU_DISTRO 镜像", "安装并配置")
+    Show-StepProgress -Steps $steps -CurrentStep 0
 
     try {
-        $output = & wsl --install -d $UBUNTU_DISTRO --no-launch 2>&1
-        $exitCode = $LASTEXITCODE
-        Write-Log "wsl --install output: $output"
+        # Clear step display area
+        # Move cursor up to overwrite the step list during progress
+        $lineCount = $steps.Count
+        for ($i = 0; $i -lt $lineCount; $i++) {
+            Write-Host "`e[1A`e[2K" -NoNewline
+        }
+
+        # Show animated spinner during wsl --install
+        $distro = $UBUNTU_DISTRO
+        $spinner = @("⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏")
+        $idx = 0
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+
+        # Start wsl install as a background process
+        $pinfo = New-Object System.Diagnostics.ProcessStartInfo
+        $pinfo.FileName = "wsl.exe"
+        $pinfo.Arguments = "--install -d $distro --no-launch"
+        $pinfo.RedirectStandardOutput = $true
+        $pinfo.RedirectStandardError  = $true
+        $pinfo.UseShellExecute = $false
+        $pinfo.CreateNoWindow = $true
+
+        $proc = [System.Diagnostics.Process]::Start($pinfo)
+
+        while (-not $proc.HasExited) {
+            $elapsed = $sw.Elapsed.ToString("mm\:ss")
+            $frame = $spinner[$idx % $spinner.Count]
+
+            # Estimate phase based on elapsed time
+            if ($sw.Elapsed.TotalSeconds -lt 10) {
+                $phase = "启用 WSL 功能"
+                $pct = [math]::Min(30, [int]($sw.Elapsed.TotalSeconds * 3))
+            } elseif ($sw.Elapsed.TotalSeconds -lt 120) {
+                $phase = "下载 $distro 镜像"
+                $pct = [math]::Min(80, 30 + [int](($sw.Elapsed.TotalSeconds - 10) * 0.45))
+            } else {
+                $phase = "安装并配置"
+                $pct = [math]::Min(95, 80 + [int](($sw.Elapsed.TotalSeconds - 120) * 0.1))
+            }
+
+            Write-Host "`r  $frame $phase ($elapsed) " -NoNewline -ForegroundColor Yellow
+            Write-ProgressBar -Percent $pct -Label "" -Width 20
+            Start-Sleep -Milliseconds 150
+            $idx++
+        }
+
+        $output = $proc.StandardOutput.ReadToEnd()
+        $errOutput = $proc.StandardError.ReadToEnd()
+        $exitCode = $proc.ExitCode
+        $proc.Dispose()
+
+        $sw.Stop()
+        $elapsed = $sw.Elapsed.ToString("mm\:ss")
+
+        # Clear spinner line
+        Write-Host "`r$(' ' * 80)`r" -NoNewline
+
+        Write-Log "wsl --install output: $output $errOutput"
         Write-Log "wsl --install exit code: $exitCode"
 
-        # Exit code 0 or specific "reboot required" codes
+        # Show completed steps
+        Write-Host "     ✅ 启用 WSL 功能" -ForegroundColor Green
+        Write-Host "     ✅ 下载 $UBUNTU_DISTRO 镜像" -ForegroundColor Green
+
         if ($exitCode -eq 0) {
-            # Check if reboot is actually needed by testing wsl again
             Start-Sleep -Seconds 3
             $testOutput = & wsl --status 2>&1
             if ($LASTEXITCODE -ne 0) {
+                Write-Host "     ⚠️  安装并配置 — 需要重启" -ForegroundColor Yellow
+                Write-Host ""
+                Write-Info "安装耗时: $elapsed"
                 return "reboot"
             }
+            Write-Host "     ✅ 安装并配置 ($elapsed)" -ForegroundColor Green
+            Write-Host ""
             return "ok"
         } elseif ($exitCode -eq 1) {
-            # Common: reboot required
-            if ($output -match "restart|reboot|重启|重新启动") {
+            if ("$output $errOutput" -match "restart|reboot|重启|重新启动") {
+                Write-Host "     ⚠️  安装并配置 — 需要重启" -ForegroundColor Yellow
+                Write-Host ""
+                Write-Info "安装耗时: $elapsed"
                 return "reboot"
             }
             Write-Err "WSL 安装失败 (exit code: $exitCode)"
-            Write-Info "输出: $output"
+            Write-Info "输出: $output $errOutput"
             return "error"
         } else {
-            # Other non-zero: likely reboot needed
             Write-Warn "WSL 安装返回代码 $exitCode，可能需要重启"
+            Write-Host "     ⚠️  安装并配置 — 需要重启" -ForegroundColor Yellow
+            Write-Host ""
             return "reboot"
         }
     } catch {
@@ -310,15 +465,17 @@ function Wait-WslReady {
         try {
             $test = & wsl -d $DistroName --exec echo "ready" 2>&1
             if ($test -match "ready") {
+                Write-Host "`r$(' ' * 70)`r" -NoNewline
                 Write-OK "$DistroName 已就绪"
                 return $true
             }
         } catch { }
         Start-Sleep -Seconds 5
         $elapsed += 5
-        Write-Host "  ⏳ 等待中... ($elapsed/$MaxWaitSeconds 秒)" -ForegroundColor DarkGray -NoNewline
-        Write-Host "`r" -NoNewline
+        $pct = [math]::Min(99, [int]($elapsed * 100 / $MaxWaitSeconds))
+        Write-ProgressBar -Percent $pct -Label "等待就绪" -Width 20
     }
+    Write-Host ""
     Write-Err "$DistroName 启动超时"
     return $false
 }
@@ -328,72 +485,138 @@ function Install-DockerInWsl {
 
     Write-Info "在 $DistroName 中安装 Docker Engine..."
     Write-Info "预计需要 5-10 分钟..."
+    Write-Host ""
 
-    # Docker installation script (official method)
+    $dockerSteps = @(
+        "更新软件包列表",
+        "安装依赖组件",
+        "添加 Docker 软件源",
+        "下载并安装 Docker Engine",
+        "启动 Docker 服务",
+        "验证安装"
+    )
+    Show-StepProgress -Steps $dockerSteps -CurrentStep 0
+
+    # Docker installation script — outputs STEP markers for progress tracking
     $dockerInstallScript = @'
 #!/bin/bash
 set -e
 
-echo "==> 更新软件包列表..."
-sudo apt-get update -qq
+echo "STEP:0"
+sudo apt-get update -qq 2>&1
 
-echo "==> 安装依赖..."
-sudo apt-get install -y -qq ca-certificates curl
+echo "STEP:1"
+sudo apt-get install -y -qq ca-certificates curl 2>&1
 
-echo "==> 添加 Docker GPG 密钥..."
+echo "STEP:2"
 sudo install -m 0755 -d /etc/apt/keyrings
 sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
 sudo chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "${VERSION_CODENAME}") stable" |   sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update -qq 2>&1
 
-echo "==> 添加 Docker 软件源..."
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "${VERSION_CODENAME}") stable" | \
-  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+echo "STEP:3"
+sudo apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin 2>&1
 
-echo "==> 更新软件包列表（含 Docker 源）..."
-sudo apt-get update -qq
-
-echo "==> 安装 Docker Engine..."
-sudo apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-
-echo "==> 将当前用户加入 docker 组..."
+echo "STEP:4"
 sudo usermod -aG docker $USER 2>/dev/null || true
+sudo service docker start 2>&1
 
-echo "==> 启动 Docker 服务..."
-sudo service docker start
-
-echo "==> 验证 Docker 安装..."
+echo "STEP:5"
 sudo docker --version
 sudo docker info --format "{{.ServerVersion}}" 2>/dev/null && echo "Docker daemon running OK" || echo "WARNING: Docker daemon may not be fully ready yet"
 
 echo "DOCKER_INSTALL_COMPLETE"
 '@
 
-    # Write script to temp location accessible from WSL
     $tmpScript = Join-Path $env:TEMP "openclaw-docker-setup.sh"
     $dockerInstallScript | Set-Content $tmpScript -Encoding UTF8 -Force
-
-    # Convert Windows path to WSL path
     $wslTmpPath = "/tmp/openclaw-docker-setup.sh"
 
     try {
-        # Copy script into WSL (PowerShell does not support < redirection)
         Get-Content $tmpScript -Raw | & wsl -d $DistroName --exec bash -c "cat > $wslTmpPath"
         & wsl -d $DistroName --exec bash -c "chmod +x $wslTmpPath"
 
-        # Run the installation script
-        Write-Info "开始安装（此过程需要较长时间，请耐心等待）..."
-        $output = & wsl -d $DistroName --exec bash "$wslTmpPath" 2>&1
+        # Run with real-time output parsing for step progress
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $spinner = @("⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏")
+        $sidx = 0
+        $currentStep = 0
 
-        Write-Log "Docker install output: $output"
+        # Start process
+        $pinfo = New-Object System.Diagnostics.ProcessStartInfo
+        $pinfo.FileName = "wsl.exe"
+        $pinfo.Arguments = "-d $DistroName --exec bash $wslTmpPath"
+        $pinfo.RedirectStandardOutput = $true
+        $pinfo.RedirectStandardError  = $true
+        $pinfo.UseShellExecute = $false
+        $pinfo.CreateNoWindow = $true
 
-        if ($output -match "DOCKER_INSTALL_COMPLETE") {
-            Write-OK "Docker Engine 安装完成"
+        $proc = [System.Diagnostics.Process]::Start($pinfo)
+        $allOutput = ""
+
+        # Clear previous step display (go up N lines)
+        for ($i = 0; $i -lt $dockerSteps.Count; $i++) {
+            Write-Host "`e[1A`e[2K" -NoNewline
+        }
+
+        while (-not $proc.HasExited) {
+            # Try reading available output
+            if (-not $proc.StandardOutput.EndOfStream) {
+                $line = $proc.StandardOutput.ReadLine()
+                $allOutput += "$line`n"
+                if ($line -match "^STEP:(\d+)") {
+                    $currentStep = [int]$Matches[1]
+                    # Redraw steps
+                    Write-Host "`r$(' ' * 80)`r" -NoNewline
+                    for ($i = 0; $i -lt $dockerSteps.Count; $i++) {
+                        if ($i -lt $currentStep) {
+                            Write-Host "     ✅ $($dockerSteps[$i])" -ForegroundColor Green
+                        } elseif ($i -eq $currentStep) {
+                            # Will be shown by spinner below
+                            break
+                        }
+                    }
+                }
+            }
+
+            $elapsed = $sw.Elapsed.ToString("mm\:ss")
+            $frame = $spinner[$sidx % $spinner.Count]
+            if ($currentStep -lt $dockerSteps.Count) {
+                Write-Host "`r  $frame $($dockerSteps[$currentStep])... ($elapsed)" -NoNewline -ForegroundColor Yellow
+            }
+            Start-Sleep -Milliseconds 150
+            $sidx++
+        }
+
+        # Read remaining output
+        $remaining = $proc.StandardOutput.ReadToEnd()
+        $allOutput += $remaining
+        $errOutput = $proc.StandardError.ReadToEnd()
+        $allOutput += $errOutput
+        $proc.Dispose()
+
+        $sw.Stop()
+        $totalTime = $sw.Elapsed.ToString("mm\:ss")
+
+        # Clear spinner line
+        Write-Host "`r$(' ' * 80)`r" -NoNewline
+
+        Write-Log "Docker install output: $allOutput"
+
+        if ($allOutput -match "DOCKER_INSTALL_COMPLETE") {
+            # Show all steps completed
+            for ($i = 0; $i -lt $dockerSteps.Count; $i++) {
+                Write-Host "     ✅ $($dockerSteps[$i])" -ForegroundColor Green
+            }
+            Write-Host ""
+            Write-OK "Docker Engine 安装完成 ($totalTime)"
             Remove-Item $tmpScript -Force -ErrorAction SilentlyContinue
             return $true
         } else {
             Write-Err "Docker 安装可能未完成"
             Write-Info "最后几行输出:"
-            $output | Select-Object -Last 10 | ForEach-Object { Write-Info "  $_" }
+            $allOutput -split "`n" | Select-Object -Last 10 | ForEach-Object { Write-Info "  $_" }
             return $false
         }
     } catch {
@@ -441,7 +664,8 @@ function Copy-DeployPackageToWsl {
         }
 
         # Copy all files from the docker deploy package directory
-        Write-Info "正在复制文件..."
+        $fileCount = (Get-ChildItem -Path $sourceDir -Recurse -File).Count
+        Write-Info "正在复制 $fileCount 个文件..."
         Copy-Item -Path "$sourceDir\*" -Destination $targetWslPath -Recurse -Force -ErrorAction Stop
 
         Write-OK "文件复制完成"
