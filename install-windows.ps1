@@ -1300,6 +1300,55 @@ function Main {
                         Write-OK "下载完成 (${zipSize}MB)"
                     }
 
+                    # ── File integrity check ──
+                    Write-Info "正在验证文件完整性..."
+                    try {
+                        # 1. Basic size check
+                        if ((Get-Item $zipFile).Length -lt 1024) {
+                            throw "文件过小 (< 1KB)，可能下载不完整"
+                        }
+
+                        # 2. ZIP magic number check (PK)
+                        $header = [byte[]](Get-Content $zipFile -Encoding Byte -TotalCount 4)
+                        if ($header[0] -ne 0x50 -or $header[1] -ne 0x4B -or $header[2] -ne 0x03 -or $header[3] -ne 0x04) {
+                            throw "文件不是有效的 ZIP 格式（文件头校验失败）"
+                        }
+
+                        # 3. Try opening as ZIP archive to validate structure
+                        Add-Type -AssemblyName System.IO.Compression.FileSystem
+                        $zip = [IO.Compression.ZipFile]::OpenRead($zipFile)
+                        $entryCount = $zip.Entries.Count
+                        $zip.Dispose()
+
+                        if ($entryCount -eq 0) {
+                            throw "ZIP 文件为空，无任何条目"
+                        }
+
+                        # 4. Check for Dockerfile in the archive
+                        $zip = [IO.Compression.ZipFile]::OpenRead($zipFile)
+                        $hasDockerfile = $false
+                        foreach ($entry in $zip.Entries) {
+                            if ($entry.Name -eq "Dockerfile") {
+                                $hasDockerfile = $true
+                                break
+                            }
+                        }
+                        $zip.Dispose()
+
+                        if (-not $hasDockerfile) {
+                            Write-Warn "ZIP 包中未找到 Dockerfile，可能是错误的包"
+                        }
+
+                        $hash = (Get-FileHash $zipFile -Algorithm SHA256).Hash.Substring(0, 12)
+                        Write-OK "完整性验证通过 ($entryCount 个文件, SHA256: ${hash}...)"
+                    } catch {
+                        Write-Err "文件完整性检查失败: $_"
+                        Write-Info "删除损坏的下载文件，请重新运行安装命令"
+                        Remove-Item $zipFile -Force -ErrorAction SilentlyContinue
+                        Read-Host "按回车退出"
+                        exit 1
+                    }
+
                     # Extract ZIP
                     Write-Info "正在解压..."
                     if (Test-Path $localDeployDir) {
