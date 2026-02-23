@@ -888,8 +888,8 @@ function Download-Robust {
         [string]$OutFile,              # 输出文件路径
         [long]$ExpectedSize,           # 预期文件大小（字节）
         [int]$ChunkSizeMB = 2,         # 每块大小（MB）
-        [int]$Threads = 16,            # 并行线程数
-        [int]$RetryPerChunk = 5        # 每块最大重试次数
+        [int]$Threads = 8,             # 并行线程数
+        [int]$RetryPerChunk = 20       # 每块最大重试次数
     )
 
     $chunkSize = [long]($ChunkSizeMB * 1024 * 1024)
@@ -1923,14 +1923,14 @@ function Main {
                         "https://mirror.ghproxy.com/$imageUrl"      # ghproxy 代理
                     )
 
-                    # 多线程分块下载 — 16线程并行，每块 2MB 独立请求
+                    # 多线程分块下载 — 8线程并行，每块 2MB，每块最多重试20次
                     $downloadOK = Download-Robust `
                         -Urls $downloadUrls `
                         -OutFile $imageTar `
                         -ExpectedSize $imageAsset.size `
                         -ChunkSizeMB 2 `
-                        -Threads 16 `
-                        -RetryPerChunk 5
+                        -Threads 8 `
+                        -RetryPerChunk 20
 
                     if ($downloadOK) {
                         Write-OK "镜像下载完成"
