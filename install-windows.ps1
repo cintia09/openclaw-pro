@@ -1147,17 +1147,17 @@ function Main {
                     $sw = [System.Diagnostics.Stopwatch]::StartNew()
                     $spinner = @("⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏")
                     $sidx = 0
+                    $lastPct = -1
 
-                    # Use WebClient for progress (Invoke-WebRequest is slow with large files)
+                    # Use WebClient for progress
                     $wc = New-Object System.Net.WebClient
                     $downloadComplete = $false
                     $downloadError = $null
 
                     Register-ObjectEvent -InputObject $wc -EventName DownloadProgressChanged -Action {
-                        $pct = $Event.SourceArgs.ProgressPercentage
-                        $received = [math]::Round($Event.SourceArgs.BytesReceived / 1MB, 1)
-                        $total = [math]::Round($Event.SourceArgs.TotalBytesToReceive / 1MB, 1)
-                        Write-Host "`r  📥 下载中: ${received}MB / ${total}MB ($pct%)" -NoNewline -ForegroundColor Cyan
+                        $script:lastPct = $Event.SourceArgs.ProgressPercentage
+                        $script:lastReceived = [math]::Round($Event.SourceArgs.BytesReceived / 1MB, 1)
+                        $script:lastTotal = [math]::Round($Event.SourceArgs.TotalBytesToReceive / 1MB, 1)
                     } | Out-Null
 
                     Register-ObjectEvent -InputObject $wc -EventName DownloadFileCompleted -Action {
@@ -1172,12 +1172,18 @@ function Main {
                     while (-not $downloadComplete) {
                         $elapsed = $sw.Elapsed.ToString("mm\:ss")
                         $frame = $spinner[$sidx % $spinner.Count]
-                        Write-Host "`r  $frame 下载中... ($elapsed)" -NoNewline -ForegroundColor Yellow
+                        if ($lastPct -ge 0) {
+                            # Show progress with percentage
+                            $bar = "[" + ("█" * [math]::Floor($lastPct / 5)) + ("░" * (20 - [math]::Floor($lastPct / 5))) + "]"
+                            Write-Host "`r  $frame $bar ${lastReceived}MB / ${lastTotal}MB (${lastPct}%) $elapsed  " -NoNewline -ForegroundColor Cyan
+                        } else {
+                            Write-Host "`r  $frame 下载中... ($elapsed)                    " -NoNewline -ForegroundColor Yellow
+                        }
                         Start-Sleep -Milliseconds 200
                         $sidx++
                     }
                     $wc.Dispose()
-                    Write-Host "`r$(' ' * 70)`r" -NoNewline
+                    Write-Host "`r$(' ' * 80)`r" -NoNewline
 
                     if ($downloadError) {
                         throw $downloadError
