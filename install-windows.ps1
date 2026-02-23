@@ -353,8 +353,8 @@ echo "DOCKER_INSTALL_COMPLETE"
     $wslTmpPath = "/tmp/openclaw-docker-setup.sh"
 
     try {
-        # Copy script into WSL
-        & wsl -d $DistroName --exec bash -c "cat > $wslTmpPath" < $tmpScript
+        # Copy script into WSL (PowerShell does not support < redirection)
+        Get-Content $tmpScript -Raw | & wsl -d $DistroName --exec bash -c "cat > $wslTmpPath"
         & wsl -d $DistroName --exec bash -c "chmod +x $wslTmpPath"
 
         # Run the installation script
@@ -499,8 +499,8 @@ echo ""
     $tmpDeploy = Join-Path $env:TEMP "openclaw-deploy.sh"
     $deployScript | Set-Content $tmpDeploy -Encoding UTF8 -Force
 
-    # Copy to WSL
-    & wsl -d $DistroName --exec bash -c "cat > /tmp/openclaw-deploy-run.sh" < $tmpDeploy
+    # Copy to WSL (PowerShell does not support < redirection)
+    Get-Content $tmpDeploy -Raw | & wsl -d $DistroName --exec bash -c "cat > /tmp/openclaw-deploy-run.sh"
     & wsl -d $DistroName --exec bash -c "chmod +x /tmp/openclaw-deploy-run.sh"
 
     # Open a new Windows Terminal / PowerShell window with WSL to run interactive deploy
