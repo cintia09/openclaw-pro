@@ -879,167 +879,232 @@ function Find-AvailablePort {
     return $port
 }
 
-# ─── Robust Chunked Download (断点续传分块下载) ───────────────────────────────
-# 将大文件拆成 2MB 小块，每块独立 HTTP Range 请求，断线自动重试。
-# 与浏览器类似：每块是短暂连接，不依赖长连接稳定性。
+# ─── Robust Multi-threaded Chunked Download (多线程分块断点续传) ──────────────
+# 将大文件拆成 2MB 小块，N 个线程并行下载，每块独立 HTTP Range 请求。
+# 断线只影响单个块的单个线程，自动重试。支持跨次运行续传（.progress 文件）。
 function Download-Robust {
     param(
         [string[]]$Urls,               # 多个下载源 URL（直连 + 代理）
         [string]$OutFile,              # 输出文件路径
         [long]$ExpectedSize,           # 预期文件大小（字节）
         [int]$ChunkSizeMB = 2,         # 每块大小（MB）
-        [int]$MaxTotalRetries = 100,   # 总重试上限
+        [int]$Threads = 4,             # 并行线程数
         [int]$RetryPerChunk = 5        # 每块最大重试次数
     )
 
     $chunkSize = [long]($ChunkSizeMB * 1024 * 1024)
-    $totalChunks = [math]::Ceiling($ExpectedSize / $chunkSize)
-    $totalRetries = 0
-    $urlIndex = 0
+    $totalChunks = [int][math]::Ceiling($ExpectedSize / $chunkSize)
     $totalMB = [math]::Round($ExpectedSize / 1MB, 1)
 
-    # 续传：对齐到块边界
-    $startByte = [long]0
-    if (Test-Path $OutFile) {
-        $fileLen = (Get-Item $OutFile).Length
-        if ($fileLen -ge $ExpectedSize) {
-            Write-OK "镜像文件已完整下载 (${totalMB}MB)"
-            return $true
+    # ── 进度文件：记录已完成的块号（支持跨次续传）──
+    $progressFile = "${OutFile}.progress"
+    $completedSet = [System.Collections.Concurrent.ConcurrentDictionary[int,byte]]::new()
+
+    if (Test-Path $progressFile) {
+        Get-Content $progressFile -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_ -match '^\d+$') {
+                $completedSet.TryAdd([int]$_, [byte]1) | Out-Null
+            }
         }
-        # 对齐到块边界（丢弃未完成的块）
-        $startByte = [long]([math]::Floor($fileLen / $chunkSize) * $chunkSize)
-        if ($startByte -ne $fileLen -and $startByte -gt 0) {
-            $fs = [IO.File]::Open($OutFile, [IO.FileMode]::Open, [IO.FileAccess]::Write)
-            $fs.SetLength($startByte)
-            $fs.Close()
-        }
-        if ($startByte -gt 0) {
-            $resumeMB = [math]::Round($startByte / 1MB, 1)
-            Write-Info "续传下载，从 ${resumeMB}MB / ${totalMB}MB 继续 (块 $([math]::Floor($startByte / $chunkSize) + 1)/${totalChunks})"
+        if ($completedSet.Count -gt 0) {
+            $doneMB = [math]::Round([math]::Min([long]$completedSet.Count * $chunkSize, $ExpectedSize) / 1MB, 1)
+            Write-Info "续传下载，已完成 $($completedSet.Count)/${totalChunks} 块 (${doneMB}MB / ${totalMB}MB)"
         }
     }
 
-    $startChunk = [long]([math]::Floor($startByte / $chunkSize))
-    $speedTimer = [System.Diagnostics.Stopwatch]::StartNew()
-    $displayTimer = [System.Diagnostics.Stopwatch]::StartNew()
-    $speedBase = $startByte
-    $consecutiveFails = 0
+    # 全部完成 + 文件大小正确 → 跳过
+    if ($completedSet.Count -ge $totalChunks) {
+        if ((Test-Path $OutFile) -and (Get-Item $OutFile).Length -eq $ExpectedSize) {
+            Write-OK "镜像文件已完整下载 (${totalMB}MB)"
+            Remove-Item $progressFile -Force -ErrorAction SilentlyContinue
+            return $true
+        }
+    }
 
-    Write-Info "分块下载模式: ${totalChunks} 块 x ${ChunkSizeMB}MB (断线自动续传)"
+    # ── 预分配文件（允许多线程随机写入）──
+    if (-not (Test-Path $OutFile) -or (Get-Item $OutFile).Length -ne $ExpectedSize) {
+        Write-Info "预分配 ${totalMB}MB 磁盘空间..."
+        $fs = [IO.File]::Create($OutFile)
+        $fs.SetLength($ExpectedSize)
+        $fs.Close()
+        # 预分配时清空进度（文件内容已重置）
+        $completedSet.Clear()
+        if (Test-Path $progressFile) { Remove-Item $progressFile -Force -ErrorAction SilentlyContinue }
+    }
 
-    for ($chunk = $startChunk; $chunk -lt $totalChunks; $chunk++) {
-        $rangeStart = [long]($chunk * $chunkSize)
-        $rangeEnd = [long]([math]::Min(($chunk + 1) * $chunkSize - 1, $ExpectedSize - 1))
-        $expectedLen = [long]($rangeEnd - $rangeStart + 1)
+    # ── 构建待下载块队列 ──
+    $chunkQueue = [System.Collections.Concurrent.ConcurrentQueue[int]]::new()
+    $pendingCount = 0
+    for ($i = 0; $i -lt $totalChunks; $i++) {
+        if (-not $completedSet.ContainsKey($i)) {
+            $chunkQueue.Enqueue($i)
+            $pendingCount++
+        }
+    }
+    if ($pendingCount -eq 0) {
+        Write-OK "所有块已下载完成"
+        Remove-Item $progressFile -Force -ErrorAction SilentlyContinue
+        return $true
+    }
 
-        $chunkOK = $false
-        $chunkRetries = 0
+    # 失败块记录
+    $failedChunks = [System.Collections.Concurrent.ConcurrentBag[int]]::new()
 
-        while (-not $chunkOK -and $chunkRetries -lt $RetryPerChunk -and $totalRetries -lt $MaxTotalRetries) {
-            $dlUrl = $Urls[$urlIndex % $Urls.Count]
-            $response = $null; $stream = $null; $fileStream = $null
-            try {
-                $webRequest = [System.Net.HttpWebRequest]::Create($dlUrl)
-                $webRequest.AllowAutoRedirect = $true
-                $webRequest.Timeout = 15000            # 15 秒连接超时（块小，不需要太长）
-                $webRequest.ReadWriteTimeout = 15000   # 15 秒读取超时
-                $webRequest.UserAgent = "OpenClaw-Installer/1.0"
-                $webRequest.KeepAlive = $false         # 每块独立连接
-                $webRequest.AddRange([long]$rangeStart, [long]$rangeEnd)
+    # 实际线程数不超过待下载块数
+    $actualThreads = [math]::Min($Threads, $pendingCount)
+    Write-Info "${actualThreads} 线程并行下载: ${pendingCount} 块 x ${ChunkSizeMB}MB (断线自动续传)"
 
-                $response = $webRequest.GetResponse()
-                $stream = $response.GetResponseStream()
+    # ── Worker 脚本（每个 Runspace 执行）──
+    $workerScript = {
+        param(
+            [System.Collections.Concurrent.ConcurrentQueue[int]]$Queue,
+            [string[]]$Urls,
+            [string]$FilePath,
+            [long]$ChunkSize,
+            [long]$FileSize,
+            [int]$MaxRetry,
+            [System.Collections.Concurrent.ConcurrentDictionary[int,byte]]$Done,
+            [string]$ProgressPath,
+            [System.Collections.Concurrent.ConcurrentBag[int]]$Failed
+        )
 
-                # 检查服务器是否支持 Range 请求
-                if ($rangeStart -gt 0 -and $response.StatusCode -ne [System.Net.HttpStatusCode]::PartialContent) {
-                    $stream.Close(); $response.Close()
-                    throw "服务器不支持 Range 请求 (返回 $($response.StatusCode))，切换下载源"
+        $chunkIdx = 0
+        while ($Queue.TryDequeue([ref]$chunkIdx)) {
+            $rangeStart = [long]($chunkIdx * $ChunkSize)
+            $rangeEnd   = [long]([math]::Min(($chunkIdx + 1) * $ChunkSize - 1, $FileSize - 1))
+            $expectedLen = [long]($rangeEnd - $rangeStart + 1)
+
+            $ok = $false
+            for ($retry = 0; $retry -lt $MaxRetry -and -not $ok; $retry++) {
+                $urlIdx = $retry % $Urls.Count
+                $resp = $null; $netStream = $null; $fs = $null
+                try {
+                    $req = [System.Net.HttpWebRequest]::Create($Urls[$urlIdx])
+                    $req.AllowAutoRedirect = $true
+                    $req.Timeout = 15000
+                    $req.ReadWriteTimeout = 15000
+                    $req.UserAgent = "OpenClaw-Installer/1.0"
+                    $req.KeepAlive = $false
+                    $req.AddRange([long]$rangeStart, [long]$rangeEnd)
+
+                    $resp = $req.GetResponse()
+                    $netStream = $resp.GetResponseStream()
+
+                    # 打开文件（共享读写，允许多线程同时操作）
+                    $fs = [IO.File]::Open($FilePath,
+                        [IO.FileMode]::Open, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
+                    $fs.Seek($rangeStart, [IO.SeekOrigin]::Begin) | Out-Null
+
+                    $buf = New-Object byte[] 65536
+                    $got = [long]0
+                    while ($got -lt $expectedLen) {
+                        $toRead = [int][math]::Min($buf.Length, $expectedLen - $got)
+                        $n = $netStream.Read($buf, 0, $toRead)
+                        if ($n -eq 0) { break }
+                        $fs.Write($buf, 0, $n)
+                        $got += $n
+                    }
+                    $fs.Flush()
+                    $fs.Close(); $fs = $null
+                    $netStream.Close(); $netStream = $null
+                    $resp.Close(); $resp = $null
+
+                    if ($got -eq $expectedLen) {
+                        $ok = $true
+                        $Done.TryAdd($chunkIdx, [byte]1) | Out-Null
+                        # 记录进度（追加模式，即使并发写入偶尔交错也无影响）
+                        try { [IO.File]::AppendAllText($ProgressPath, "$chunkIdx`r`n") } catch {}
+                    }
+                } catch {
+                    if ($retry -lt $MaxRetry - 1) {
+                        Start-Sleep -Seconds ([math]::Min(($retry + 1) * 2, 8))
+                    }
+                } finally {
+                    if ($fs) { try { $fs.Close() } catch {} }
+                    if ($netStream) { try { $netStream.Close() } catch {} }
+                    if ($resp) { try { $resp.Close() } catch {} }
                 }
+            }
 
-                $fileStream = New-Object IO.FileStream($OutFile,
-                    [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::Write, [IO.FileShare]::None)
-                $fileStream.Seek($rangeStart, [IO.SeekOrigin]::Begin) | Out-Null
-
-                $buffer = New-Object byte[] 65536   # 64KB 读缓冲
-                $chunkDownloaded = [long]0
-
-                while ($chunkDownloaded -lt $expectedLen) {
-                    $toRead = [int][math]::Min($buffer.Length, $expectedLen - $chunkDownloaded)
-                    $read = $stream.Read($buffer, 0, $toRead)
-                    if ($read -eq 0) { break }
-                    $fileStream.Write($buffer, 0, $read)
-                    $chunkDownloaded += $read
-                }
-
-                $fileStream.Flush()
-                $fileStream.Close(); $fileStream = $null
-                $stream.Close(); $stream = $null
-                $response.Close(); $response = $null
-
-                if ($chunkDownloaded -eq $expectedLen) {
-                    $chunkOK = $true
-                    $consecutiveFails = 0
-                } else {
-                    throw "块数据不完整: ${chunkDownloaded} / ${expectedLen} 字节"
-                }
-            } catch {
-                Write-Log "Chunk ${chunk}/${totalChunks} failed (retry ${chunkRetries}): $_"
-                $chunkRetries++
-                $totalRetries++
-                $consecutiveFails++
-
-                # 连续失败 2 次后切换下载源
-                if ($consecutiveFails -ge 2 -and $Urls.Count -gt 1) {
-                    $urlIndex++
-                    $srcLabel = ([Uri]$Urls[$urlIndex % $Urls.Count]).Host
-                    Write-Warn "切换下载源: $srcLabel (第 ${totalRetries} 次重试)"
-                    $consecutiveFails = 0
-                } elseif ($chunkRetries -gt 1) {
-                    Write-Warn "块 $($chunk+1)/${totalChunks} 第 ${chunkRetries} 次重试..."
-                }
-
-                $waitSec = [math]::Min($chunkRetries * 2, 10)
-                Start-Sleep -Seconds $waitSec
-            } finally {
-                if ($fileStream) { try { $fileStream.Close() } catch {} }
-                if ($stream) { try { $stream.Close() } catch {} }
-                if ($response) { try { $response.Close() } catch {} }
+            if (-not $ok) {
+                $Failed.Add($chunkIdx)
             }
         }
+    }
 
-        if (-not $chunkOK) {
-            Write-Host ""
-            Write-Warn "下载失败: 块 $($chunk+1)/${totalChunks} 重试 ${RetryPerChunk} 次仍失败 (总计 ${totalRetries} 次重试)"
-            return $false
-        }
+    # ── 启动 RunspacePool ──
+    $pool = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspacePool(1, $actualThreads)
+    $pool.Open()
 
-        # 进度显示
-        $downloaded = $rangeEnd + 1
-        if ($displayTimer.ElapsedMilliseconds -gt 300 -or $chunk -eq $totalChunks - 1) {
-            $pct = [math]::Round($downloaded * 100 / $ExpectedSize)
-            $dlMB = [math]::Round($downloaded / 1MB, 1)
-            $elapsedSec = $speedTimer.Elapsed.TotalSeconds
-            $speedMBps = if ($elapsedSec -gt 0) {
-                [math]::Round(($downloaded - $speedBase) / $elapsedSec / 1MB, 1)
-            } else { 0 }
-            $eta = ""
-            if ($speedMBps -gt 0) {
-                $remainMB = $totalMB - $dlMB
-                $etaSec = [int]($remainMB / $speedMBps)
+    $handles = [System.Collections.ArrayList]::new()
+    for ($t = 0; $t -lt $actualThreads; $t++) {
+        $ps = [PowerShell]::Create()
+        $ps.RunspacePool = $pool
+        $ps.AddScript($workerScript).
+            AddArgument($chunkQueue).
+            AddArgument($Urls).
+            AddArgument($OutFile).
+            AddArgument($chunkSize).
+            AddArgument($ExpectedSize).
+            AddArgument($RetryPerChunk).
+            AddArgument($completedSet).
+            AddArgument($progressFile).
+            AddArgument($failedChunks) | Out-Null
+        $asyncResult = $ps.BeginInvoke()
+        $handles.Add(@{ PS = $ps; AR = $asyncResult }) | Out-Null
+    }
+
+    # ── 主线程：监控进度 ──
+    $speedTimer = [System.Diagnostics.Stopwatch]::StartNew()
+    $initialDone = $completedSet.Count - $pendingCount + $pendingCount   # = total - pending at start
+    $initialDone = $totalChunks - $pendingCount
+
+    while ($handles | Where-Object { -not $_.AR.IsCompleted }) {
+        Start-Sleep -Milliseconds 500
+        $doneNow = $completedSet.Count
+        $currentBytes = [long][math]::Min([long]$doneNow * $chunkSize, $ExpectedSize)
+        $pct = [math]::Round($currentBytes * 100 / $ExpectedSize)
+        $dlMB = [math]::Round($currentBytes / 1MB, 1)
+        $elapsedSec = $speedTimer.Elapsed.TotalSeconds
+        $newChunks = $doneNow - $initialDone
+        $speedMBps = if ($elapsedSec -gt 1) {
+            [math]::Round([long]$newChunks * $chunkSize / $elapsedSec / 1MB, 1)
+        } else { 0 }
+        $eta = ""
+        if ($speedMBps -gt 0) {
+            $remainMB = $totalMB - $dlMB
+            $etaSec = [int]($remainMB / $speedMBps)
+            if ($etaSec -gt 0) {
                 $etaMin = [math]::Floor($etaSec / 60)
                 $etaS = $etaSec % 60
                 $eta = " ETA ${etaMin}m${etaS}s"
             }
-            Write-Host "`r  ⏳ 下载镜像: ${dlMB}MB / ${totalMB}MB (${pct}%) ${speedMBps}MB/s${eta}    " -NoNewline -ForegroundColor Cyan
-            $displayTimer.Restart()
         }
+        Write-Host "`r  ⏳ ${actualThreads}线程下载: ${dlMB}MB / ${totalMB}MB (${pct}%) ${speedMBps}MB/s${eta} [${doneNow}/${totalChunks}块]    " -NoNewline -ForegroundColor Cyan
     }
-
     Write-Host ""
 
-    # 最终验证
+    # ── 回收 Runspace ──
+    foreach ($h in $handles) {
+        try { $h.PS.EndInvoke($h.AR) } catch {}
+        $h.PS.Dispose()
+    }
+    $pool.Close()
+    $pool.Dispose()
+
+    # ── 失败块处理 ──
+    if ($failedChunks.Count -gt 0) {
+        $failList = @()
+        foreach ($fc in $failedChunks) { $failList += $fc }
+        Write-Warn "$($failedChunks.Count) 个块下载失败 (块号: $($failList[0..([math]::Min(9, $failList.Count-1))] -join ', '))"
+        Write-Warn "重新运行脚本即可自动续传剩余块"
+        return $false
+    }
+
+    # ── 最终验证 ──
     $finalSize = (Get-Item $OutFile).Length
     if ($finalSize -eq $ExpectedSize) {
+        Remove-Item $progressFile -Force -ErrorAction SilentlyContinue
         return $true
     } else {
         Write-Warn "文件大小不匹配: ${finalSize} / ${ExpectedSize} 字节"
@@ -1858,13 +1923,13 @@ function Main {
                         "https://mirror.ghproxy.com/$imageUrl"      # ghproxy 代理
                     )
 
-                    # 分块下载 — 每块 2MB 独立请求，断线只需重试当前块
+                    # 多线程分块下载 — 4线程并行，每块 2MB 独立请求
                     $downloadOK = Download-Robust `
                         -Urls $downloadUrls `
                         -OutFile $imageTar `
                         -ExpectedSize $imageAsset.size `
                         -ChunkSizeMB 2 `
-                        -MaxTotalRetries 100 `
+                        -Threads 4 `
                         -RetryPerChunk 5
 
                     if ($downloadOK) {
