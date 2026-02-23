@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenClaw 管理面板</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="shell">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-badge">🐾</div>
+        <div style="min-width:0">
+          <div class="brand-title">OpenClaw</div>
+          <div class="brand-sub">管理面板</div>
+        </div>
+      </div>
+
+      <nav class="nav" id="nav">
+        <a href="#dashboard" data-route="dashboard" class="active"><span class="ico">📊</span><span>仪表盘</span></a>
+        <a href="#openclaw" data-route="openclaw"><span class="ico">🐾</span><span>OpenClaw</span></a>
+        <a href="#ai" data-route="ai"><span class="ico">🤖</span><span>AI 配置</span></a>
+        <a href="#messaging" data-route="messaging"><span class="ico">💬</span><span>消息平台</span></a>
+        <a href="#trading" data-route="trading"><span class="ico">📈</span><span>交易系统</span></a>
+        <a href="#plugins" data-route="plugins"><span class="ico">🧩</span><span>插件市场</span></a>
+        <a href="#browser" data-route="browser"><span class="ico">🌐</span><span>浏览器</span></a>
+        <a href="#terminal" data-route="terminal"><span class="ico">🖥</span><span>终端</span></a>
+        <a href="#settings" data-route="settings"><span class="ico">⚙️</span><span>系统设置</span></a>
+        <a href="#logs" data-route="logs"><span class="ico">📋</span><span>日志</span></a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <span class="dim">v2</span>
+        <span class="dim" id="sidebar-status">●</span>
+      </div>
+    </aside>
+
+    <!-- Topbar -->
+    <header class="topbar">
+      <div class="top-title">
+        <button class="hamburger" id="btn-hamburger" title="菜单">☰</button>
+        <h1 id="page-title">仪表盘</h1>
+      </div>
+      <div class="user-actions">
+        <a class="btn btn-ghost" href="/gateway" target="_blank" rel="noopener">打开 Gateway</a>
+        <button class="btn" id="btn-logout">退出</button>
+      </div>
+    </header>
+
+    <!-- Content -->
+    <main class="content">
+      <!-- Dashboard -->
+      <section class="page active" id="page-dashboard" data-title="仪表盘">
+        <div class="grid">
+          <div class="card" style="grid-column: span 12;">
+            <div class="row" style="justify-content:space-between">
+              <div>
+                <div style="font-weight:900;font-size:18px">系统概览</div>
+                <div class="muted small" style="margin-top:4px">服务状态 / 运行时间 / 资源使用</div>
+              </div>
+              <div class="row">
+                <button class="btn" id="btn-refresh-status">刷新</button>
+                <button class="btn btn-primary" id="btn-restart-gateway">重启 Gateway</button>
+              </div>
+            </div>
+            <div class="sep"></div>
+            <div class="grid">
+              <div class="card" style="grid-column: span 3;">
+                <h2>Gateway</h2>
+                <div class="kpi"><div>
+                  <div class="big" id="kpi-gateway">—</div>
+                  <div class="sub" id="kpi-gateway-sub">—</div>
+                </div></div>
+              </div>
+              <div class="card" style="grid-column: span 3;">
+                <h2>Web</h2>
+                <div class="kpi"><div>
+                  <div class="big"><span class="pulse online"></span>在线</div>
+                  <div class="sub">面板服务运行中</div>
+                </div></div>
+              </div>
+              <div class="card" style="grid-column: span 3;">
+                <h2>Caddy</h2>
+                <div class="kpi"><div>
+                  <div class="big" id="kpi-caddy">—</div>
+                  <div class="sub" id="kpi-domain">—</div>
+                </div></div>
+              </div>
+              <div class="card" style="grid-column: span 3;">
+                <h2>资源</h2>
+                <div class="kpi"><div>
+                  <div class="big" id="kpi-memory">—</div>
+                  <div class="sub" id="kpi-uptime">—</div>
+                </div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- OpenClaw -->
+      <section class="page" id="page-openclaw" data-title="OpenClaw">
+        <div class="grid">
+          <div class="card" style="grid-column: span 12;">
+            <div class="row" style="justify-content:space-between">
+              <div>
+                <div style="font-weight:900;font-size:18px">OpenClaw 引擎</div>
+                <div class="muted small" style="margin-top:4px">安装 / 版本 / Gateway 运行状态</div>
+              </div>
+              <div class="row">
+                <button class="btn" id="btn-oc-refresh">刷新</button>
+              </div>
+            </div>
+            <div class="sep"></div>
+            <div class="grid">
+              <div class="card" style="grid-column: span 4;">
+                <h2>安装状态</h2>
+                <div class="kpi"><div>
+                  <div class="big" id="oc-installed">—</div>
+                  <div class="sub" id="oc-version">—</div>
+                </div></div>
+              </div>
+              <div class="card" style="grid-column: span 4;">
+                <h2>Gateway</h2>
+                <div class="kpi"><div>
+                  <div class="big" id="oc-gateway">—</div>
+                  <div class="sub">后台进程检测</div>
+                </div></div>
+              </div>
+              <div class="card" style="grid-column: span 4;">
+                <h2>操作</h2>
+                <div class="row">
+                  <button class="btn btn-primary" id="btn-oc-install">安装 / 更新</button>
+                  <button class="btn" id="btn-oc-start">启动 Gateway</button>
+                </div>
+                <div class="muted small" style="margin-top:10px">安装/更新过程会有日志输出</div>
+              </div>
+            </div>
+            <div class="sep"></div>
+            <div class="card" style="grid-column: span 12;">
+              <h2>安装/更新日志</h2>
+              <pre class="terminal" id="oc-log" style="height:260px"></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- AI -->
+      <section class="page" id="page-ai" data-title="AI 配置">
+        <div class="grid">
+          <div class="card" style="grid-column: span 12;">
+            <div class="row" style="justify-content:space-between">
+              <div>
+                <div style="font-weight:900;font-size:18px">AI Provider</div>
+                <div class="muted small" style="margin-top:4px">设置 Provider / API Key / 模型</div>
+              </div>
+              <div class="row">
+                <button class="btn" id="btn-ai-load">读取当前配置</button>
+                <button class="btn btn-primary" id="btn-ai-save">保存</button>
+              </div>
+            </div>
+            <div class="sep"></div>
+            <div class="grid">
+              <div style="grid-column: span 6;">
+                <div class="field">
+                  <div class="label"><span>Provider</span></div>
+                  <select class="input" id="ai-provider">
+                    <option value="anthropic">Anthropic (Claude)</option>
+                    <option value="openai">OpenAI (GPT)</option>
+                    <option value="github-copilot">GitHub Copilot</option>
+                    <option value="gemini">Google Gemini</option>
+                    <option value="openrouter">OpenRouter</option>
+                    <option value="custom">自定义</option>
+                  </select>
+                </div>
+              </div>
+              <div style="grid-column: span 6;">
+                <div class="field">
+                  <div class="label"><span>模型</span></div>
+                  <input class="input" id="ai-model" placeholder="claude-sonnet-4-20250514" />
+                </div>
+              </div>
+              <div style="grid-column: span 6;">
+                <div class="field">
+                  <div class="label"><span>API Key</span></div>
+                  <input class="input" type="password" id="ai-apikey" placeholder="sk-..." autocomplete="off" />
+                  <div class="muted small" style="margin-top:6px">不输入则保持原值（如后端支持 mask 逻辑）。</div>
+                </div>
+              </div>
+              <div style="grid-column: span 6;" id="ai-custom-url-wrap" hidden>
+                <div class="field">
+                  <div class="label"><span>Base URL（自定义）</span></div>
+                  <input class="input" id="ai-custom-url" placeholder="https://api.example.com/v1" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Messaging -->
+      <section class="page" id="page-messaging" data-title="消息平台">
+        <div class="card">
+          <div class="row" style="justify-content:space-between">
+            <div>
+              <div style="font-weight:900;font-size:18px">消息平台</div>
+              <div class="muted small" style="margin-top:4px">飞书 / Telegram / Discord / Signal / WhatsApp</div>
+            </div>
+            <div class="row">
+              <button class="btn" id="btn-msg-load">读取当前配置</button>
+            </div>
+          </div>
+          <div class="sep"></div>
+          <div class="tabs" id="msg-tabs">
+            <button class="tab active" data-tab="feishu">飞书</button>
+            <button class="tab" data-tab="telegram">Telegram</button>
+            <button class="tab" data-tab="discord">Discord</button>
+            <button class="tab" data-tab="signal">Signal</button>
+            <button class="tab" data-tab="whatsapp">WhatsApp</button>
+          </div>
+
+          <div id="msg-panels">
+            <div class="msg-panel" data-panel="feishu">
+              <div class="grid">
+                <div style="grid-column: span 4;">
+                  <div class="field">
+                    <div class="label"><span>启用</span></div>
+                    <select class="input" id="feishu-enabled">
+                      <option value="true">启用</option>
+                      <option value="false">关闭</option>
+                    </select>
+                  </div>
+                </div>
+                <div style="grid-column: span 8;"></div>
+                <div style="grid-column: span 6;" class="field"><div class="label"><span>App ID</span></div><input class="input" id="feishu-appid" /></div>
+                <div style="grid-column: span 6;" class="field"><div class="label"><span>App Secret</span></div><input class="input" type="password" id="feishu-secret" /></div>
+                <div style="grid-column: span 6;" class="field"><div class="label"><span>Verification Token</span></div><input class="input" id="feishu-token" /></div>
+                <div style="grid-column: span 6;" class="field"><div class="label"><span>Encrypt Key</span></div><input class="input" type="password" id="feishu-encrypt" /></div>
+              </div>
+              <div class="sep"></div>
+              <div class="row"><button class="btn btn-primary" data-save-msg="feishu">保存</button></div>
+            </div>
+
+            <div class="msg-panel" data-panel="telegram" hidden>
+              <div class="grid">
+                <div style="grid-column: span 4;" class="field"><div class="label"><span>启用</span></div><select class="input" id="telegram-enabled"><option value="true">启用</option><option value="false">关闭</option></select></div>
+                <div style="grid-column: span 8;"></div>
+                <div style="grid-column: span 6;" class="field"><div class="label"><span>Bot Token</span></div><input class="input" type="password" id="telegram-token" /></div>
+                <div style="grid-column: span 6;" class="field"><div class="label"><span>Allowed User IDs</span></div><input class="input" id="telegram-users" placeholder="逗号分隔" /></div>
+              </div>
+              <div class="sep"></div>
+              <div class="row"><button class="btn btn-primary" data-save-msg="telegram">保存</button></div>
+            </div>
+
+            <div class="msg-panel" data-panel="discord" hidden>
+              <div class="grid">
+                <div style="grid-column: span 4;" class="field"><div class="label"><span>启用</span></div><select class="input" id="discord-enabled"><option value="true">启用</option><option value="false">关闭</option></select></div>
+                <div style="grid-column: span 8;"></div>
+                <div style="grid-column: span 6;" class="field"><div class="label"><span>Bot Token</span></div><input class="input" type="password" id="discord-token" /></div>
+                <div style="grid-column: span 6;" class="field"><div class="label"><span>Guild ID</span></div><input class="input" id="discord-guild" /></div>
+              </div>
+              <div class="sep"></div>
+              <div class="row"><button class="btn btn-primary" data-save-msg="discord">保存</button></div>
+            </div>
+
+            <div class="msg-panel" data-panel="signal" hidden>
+              <div class="grid">
+                <div style="grid-column: span 4;" class="field"><div class="label"><span>启用</span></div><select class="input" id="signal-enabled"><option value="true">启用</option><option value="false">关闭</option></select></div>
+                <div style="grid-column: span 8;"></div>
+                <div style="grid-column: span 6;" class="field"><div class="label"><span>Signal CLI 路径</span></div><input class="input" id="signal-cli" placeholder="/usr/local/bin/signal-cli" /></div>
+                <div style="grid-column: span 6;" class="field"><div class="label"><span>手机号</span></div><input class="input" id="signal-phone" placeholder="+86..." /></div>
+              </div>
+              <div class="sep"></div>
+              <div class="row"><button class="btn btn-primary" data-save-msg="signal">保存</button></div>
+            </div>
+
+            <div class="msg-panel" data-panel="whatsapp" hidden>
+              <div class="grid">
+                <div style="grid-column: span 4;" class="field"><div class="label"><span>启用</span></div><select class="input" id="whatsapp-enabled"><option value="true">启用</option><option value="false">关闭</option></select></div>
+                <div style="grid-column: span 8;"></div>
+                <div style="grid-column: span 6;" class="field"><div class="label"><span>API URL</span></div><input class="input" id="whatsapp-url" /></div>
+                <div style="grid-column: span 6;" class="field"><div class="label"><span>API Key</span></div><input class="input" type="password" id="whatsapp-key" /></div>
+              </div>
+              <div class="sep"></div>
+              <div class="row"><button class="btn btn-primary" data-save-msg="whatsapp">保存</button></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Trading -->
+      <section class="page" id="page-trading" data-title="交易系统">
+        <div class="grid">
+          <div class="card" style="grid-column: span 12;">
+            <div class="row" style="justify-content:space-between">
+              <div>
+                <div style="font-weight:900;font-size:18px">交易系统</div>
+                <div class="muted small" style="margin-top:4px">安装 / 更新 / 参数配置</div>
+              </div>
+              <div class="row">
+                <button class="btn" id="btn-trading-refresh">刷新</button>
+              </div>
+            </div>
+            <div class="sep"></div>
+
+            <div id="trading-not-installed">
+              <div class="grid">
+                <div style="grid-column: span 6;" class="field"><div class="label"><span>GitHub Token</span></div><input class="input" type="password" id="trading-gh-token" /></div>
+                <div style="grid-column: span 6;" class="field"><div class="label"><span>仓库地址</span></div><input class="input" id="trading-repo" placeholder="https://github.com/user/repo" /></div>
+              </div>
+              <div class="row" style="margin-top:12px">
+                <button class="btn btn-primary" id="btn-trading-install">下载安装</button>
+              </div>
+              <div class="muted small" id="trading-install-status" style="margin-top:10px"></div>
+            </div>
+
+            <div id="trading-installed" hidden>
+              <div class="row" style="justify-content:space-between">
+                <div class="row">
+                  <span class="badge">版本/Commit</span>
+                  <span id="trading-commit" class="muted"></span>
+                </div>
+                <div class="row">
+                  <button class="btn btn-warning" id="btn-trading-update">更新</button>
+                </div>
+              </div>
+              <div class="sep"></div>
+              <div class="grid">
+                <div style="grid-column: span 6;">
+                  <h2>策略参数（JSON）</h2>
+                  <textarea class="input" id="strategy-params" style="min-height:220px;font-family:var(--mono)"></textarea>
+                  <div class="row" style="margin-top:10px">
+                    <button class="btn btn-primary" id="btn-strategy-save">保存策略参数</button>
+                  </div>
+                </div>
+                <div style="grid-column: span 6;">
+                  <h2>自动交易</h2>
+                  <div class="muted small">默认建议关闭。开启会使用真实资金下单，请自行确认风险。</div>
+                  <div class="sep"></div>
+                  <div class="row">
+                    <button class="btn btn-danger" id="btn-auto-trade">（占位）开关</button>
+                    <span class="dim small">当前页仅展示，实际接入后再打通。</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Plugins -->
+      <section class="page" id="page-plugins" data-title="插件市场">
+        <div class="card">
+          <div class="row" style="justify-content:space-between">
+            <div>
+              <div style="font-weight:900;font-size:18px">插件市场</div>
+              <div class="muted small" style="margin-top:4px">一键安装常用 Skills / 增强功能</div>
+            </div>
+            <div class="row">
+              <button class="btn" id="btn-plugins-refresh">刷新</button>
+            </div>
+          </div>
+          <div class="sep"></div>
+
+          <div class="tabs" id="plugins-tabs">
+            <button class="tab active" data-ptab="skills">Skills</button>
+            <button class="tab" data-ptab="pro">增强功能</button>
+          </div>
+
+          <div id="plugins-skills"></div>
+          <div id="plugins-pro" hidden></div>
+        </div>
+      </section>
+
+      <!-- Browser -->
+      <section class="page" id="page-browser" data-title="浏览器">
+        <div class="card" style="padding:12px">
+          <div class="row" style="justify-content:space-between;margin-bottom:10px">
+            <div>
+              <span style="font-weight:900;font-size:16px">🌐 容器内浏览器</span>
+              <span class="muted small" style="margin-left:10px">可用于登录微博、淘宝等平台，Cookie 持久化在容器 volume 中</span>
+            </div>
+            <div class="row">
+              <button class="btn btn-secondary" onclick="document.getElementById('browser-frame').src=document.getElementById('browser-frame').src">🔄 刷新</button>
+              <button class="btn" onclick="window.open('/browser/vnc.html?autoconnect=true&resize=scale','_blank')">↗ 新窗口</button>
+            </div>
+          </div>
+          <iframe id="browser-frame" src="/browser/vnc.html?autoconnect=true&resize=scale&reconnect=true&reconnect_delay=2000" style="width:100%;height:calc(100vh - 160px);border:1px solid #333;border-radius:8px;background:#1a1a2e"></iframe>
+        </div>
+      </section>
+
+      <!-- Terminal -->
+      <section class="page" id="page-terminal" data-title="终端">
+        <div class="card">
+          <div class="terminal-toolbar">
+            <div class="row">
+              <span class="badge">实时日志</span>
+              <span class="muted small">WebSocket: /api/ws/logs</span>
+            </div>
+            <div class="row">
+              <button class="btn" id="btn-term-clear">清空</button>
+              <button class="btn" id="btn-term-pause">暂停</button>
+              <button class="btn btn-primary" id="btn-term-download">下载日志</button>
+            </div>
+          </div>
+          <pre class="terminal" id="terminal"></pre>
+          <div class="row" style="margin-top:10px">
+            <span class="muted small" id="term-state">未连接</span>
+            <label class="chip" style="cursor:pointer">
+              <input type="checkbox" id="term-autoscroll" checked />
+              <span>自动滚动</span>
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <!-- Settings -->
+      <section class="page" id="page-settings" data-title="系统设置">
+        <div class="grid">
+          <div class="card" style="grid-column: span 6;">
+            <div style="font-weight:900;font-size:16px">常规</div>
+            <div class="sep"></div>
+            <div class="field">
+              <div class="label"><span>时区</span></div>
+              <select class="input" id="settings-tz">
+                <option value="Asia/Shanghai">Asia/Shanghai (UTC+8)</option>
+                <option value="Asia/Tokyo">Asia/Tokyo (UTC+9)</option>
+                <option value="America/New_York">America/New_York (UTC-5)</option>
+                <option value="America/Los_Angeles">America/Los_Angeles (UTC-8)</option>
+                <option value="Europe/London">Europe/London (UTC+0)</option>
+                <option value="UTC">UTC</option>
+              </select>
+            </div>
+            <div class="row"><button class="btn btn-primary" id="btn-settings-save">保存</button></div>
+          </div>
+
+          <div class="card" style="grid-column: span 6;">
+            <div style="font-weight:900;font-size:16px">语音识别（STT）</div>
+            <div class="sep"></div>
+            <div class="grid">
+              <div style="grid-column: span 6;" class="field">
+                <div class="label"><span>Provider</span></div>
+                <select class="input" id="stt-provider">
+                  <option value="gemini">Google (Gemini)</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="groq">Groq</option>
+                  <option value="deepgram">Deepgram</option>
+                  <option value="local">本地(免费)</option>
+                </select>
+              </div>
+              <div style="grid-column: span 6;" class="field" id="stt-model-wrap">
+                <div class="label"><span>模型</span></div>
+                <select class="input" id="stt-model">
+                  <option value="whisper-1">whisper-1</option>
+                  <option value="distil-whisper-large-v3">distil-whisper-large-v3</option>
+                  <option value="whisper-large-v3">whisper-large-v3</option>
+                  <option value="local-whisper">local-whisper</option>
+                </select>
+              </div>
+              <div style="grid-column: span 12;" class="field" id="stt-key-wrap">
+                <div class="label"><span>API Key</span></div>
+                <input class="input" type="password" id="stt-api-key" placeholder="仅在非本地 Provider 需要" />
+              </div>
+            </div>
+            <div class="row" id="stt-local-hint" hidden>
+              <span class="muted small">无需 API Key，使用本地 Whisper 模型</span>
+              <button class="btn" id="btn-stt-install">一键安装</button>
+            </div>
+            <div class="sep"></div>
+            <div class="row">
+              <button class="btn btn-primary" id="btn-stt-save">保存 STT 配置</button>
+              <button class="btn" id="btn-stt-load">读取当前配置</button>
+            </div>
+          </div>
+
+          <div class="card" style="grid-column: span 12;">
+            <div style="font-weight:900;font-size:16px">面板登录密码</div>
+            <div class="sep"></div>
+            <div class="grid">
+              <div style="grid-column: span 4;" class="field"><div class="label"><span>当前密码</span></div><input class="input" type="password" id="old-password" autocomplete="current-password" /></div>
+              <div style="grid-column: span 4;" class="field"><div class="label"><span>新密码</span></div><input class="input" type="password" id="new-password" autocomplete="new-password" /></div>
+              <div style="grid-column: span 4;" class="field"><div class="label"><span>确认新密码</span></div><input class="input" type="password" id="confirm-password" autocomplete="new-password" /></div>
+            </div>
+            <div class="row"><button class="btn btn-warning" id="btn-password">修改密码</button></div>
+            <div class="muted small" style="margin-top:10px">提示：默认账号 admin / openclaw（首次启动会自动创建）</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Logs -->
+      <section class="page" id="page-logs" data-title="日志">
+        <div class="card">
+          <div class="row" style="justify-content:space-between">
+            <div>
+              <div style="font-weight:900;font-size:18px">日志</div>
+              <div class="muted small" style="margin-top:4px">轮询查看 / 敏感字段已脱敏</div>
+            </div>
+            <div class="row">
+              <button class="btn" id="btn-logs-refresh">刷新</button>
+              <label class="chip" style="cursor:pointer">
+                <input type="checkbox" id="logs-auto" />
+                <span>自动刷新</span>
+              </label>
+            </div>
+          </div>
+          <div class="sep"></div>
+          <pre class="terminal" id="log-viewer" style="height:520px"></pre>
+        </div>
+      </section>
+
+      <!-- Setup wizard (light hint only) -->
+      <div id="wizard" hidden>
+        <div class="toast">
+          <div class="t"><b>首次使用提示</b></div>
+          <div class="s">检测到尚未配置 Provider。请到「AI 配置」完成基础设置。</div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

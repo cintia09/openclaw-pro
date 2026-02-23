@@ -1,0 +1,37 @@
+# version field removed (deprecated in modern Docker Compose)
+
+services:
+  openclaw:
+    build: .
+    container_name: openclaw-pro
+    hostname: openclaw
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - NET_BIND_SERVICE
+      - KILL
+      - DAC_OVERRIDE
+    security_opt:
+      - no-new-privileges
+    volumes:
+      - ../home-docker:/root
+    environment:
+      - TZ=${TZ:-Asia/Shanghai}
+    # 端口按需配置：
+    # 内网模式（无HTTPS）：
+    #   ports:
+    #     - "18789:18789"   # Gateway
+    #     - "3000:3000"     # Web管理面板
+    #     - "6080:6080"     # noVNC 浏览器远程访问（可选）
+    # HTTPS模式：
+    #   ports:
+    #     - "80:80"
+    #     - "8443:443"
+    #     - "127.0.0.1:18789:18789"
+    ports:
+      - "${PORT_MAPPING:-18789:18789}"
+      - "${WEB_PORT_MAPPING:-3000:3000}"
+    restart: unless-stopped

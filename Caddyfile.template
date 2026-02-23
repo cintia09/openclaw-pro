@@ -1,0 +1,35 @@
+${DOMAIN} {
+    # 浏览器（noVNC）— 需要WebSocket支持
+    handle_path /browser/* {
+        reverse_proxy localhost:6080
+    }
+
+    # WebSocket for log streaming
+    handle /api/ws/* {
+        reverse_proxy localhost:3000
+    }
+
+    # API（管理面板后端）
+    handle /api/* {
+        reverse_proxy localhost:3000
+    }
+
+    # OpenClaw Gateway (strip /gateway prefix)
+    handle_path /gateway/* {
+        reverse_proxy localhost:18789
+    }
+
+    # Web管理面板（静态页面 + fallback）
+    handle {
+        reverse_proxy localhost:3000
+    }
+
+    # 安全headers
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options SAMEORIGIN
+        X-XSS-Protection "1; mode=block"
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        Referrer-Policy strict-origin-when-cross-origin
+    }
+}

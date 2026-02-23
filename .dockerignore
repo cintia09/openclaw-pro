@@ -1,0 +1,11 @@
+.git
+.gitignore
+*.md
+LICENSE
+install.sh
+install-windows.bat
+install-windows.ps1
+openclaw-docker.sh
+docker-compose.yml
+.install-state.json
+install-log.txt

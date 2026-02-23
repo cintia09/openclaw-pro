@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>登录 · OpenClaw</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="auth">
+    <div class="auth-card">
+      <div class="auth-brand">
+        <div class="auth-logo">🐾</div>
+        <div style="min-width:0">
+          <div class="auth-title">OpenClaw</div>
+          <div class="auth-subtitle">AI 私人助手管理面板</div>
+          <div class="auth-kicker">请登录后继续</div>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="label"><span>用户名</span></div>
+        <input class="input" id="login-username" autocomplete="username" placeholder="admin" />
+      </div>
+
+      <div class="field">
+        <div class="label"><span>密码</span></div>
+        <input class="input" id="login-password" type="password" autocomplete="current-password" placeholder="请输入密码" />
+      </div>
+
+      <div class="field" id="setup-confirm-field" style="display:none">
+        <div class="label"><span>确认密码</span></div>
+        <input class="input" id="login-password2" type="password" autocomplete="new-password" placeholder="再次输入密码" />
+      </div>
+
+      <div class="auth-actions">
+        <button class="btn btn-primary" id="login-submit">登录</button>
+      </div>
+
+      <div class="auth-hint" id="login-hint"></div>
+
+      <div class="sep"></div>
+      <div class="muted small">首次使用需要先设置管理密码（账号固定为 admin）。</div>
+    </div>
+  </div>
+
+  <script src="/login.js"></script>
+</body>
+</html>

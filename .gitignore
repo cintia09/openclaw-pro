@@ -1,0 +1,8 @@
+# Runtime / install outputs
+.install-state.json
+install-log.txt
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
