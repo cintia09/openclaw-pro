@@ -1525,51 +1525,91 @@ function Main {
                     Write-Info "正在下载... (无需从 Docker Hub 拉取)"
 
                     $imageTar = Join-Path $env:TEMP "openclaw-pro-image.tar.gz"
+                    $downloadOK = $false
 
-                    # 断点续传下载
-                    $webRequest = [System.Net.HttpWebRequest]::Create($imageUrl)
-                    $webRequest.AllowAutoRedirect = $true
-                    $webRequest.Timeout = 300000
-                    $webRequest.UserAgent = "OpenClaw-Installer/1.0"
+                    # GitHub Release 下载（直连 + 代理镜像重试）
+                    $downloadUrls = @(
+                        $imageUrl,                                  # 直连 GitHub
+                        "https://ghfast.top/$imageUrl",             # ghfast 代理
+                        "https://mirror.ghproxy.com/$imageUrl"      # ghproxy 代理
+                    )
 
-                    $existingSize = 0
+                    # 检查已有完整文件
                     if (Test-Path $imageTar) {
-                        $existingSize = (Get-Item $imageTar).Length
-                        if ($existingSize -lt $imageAsset.size) {
-                            $webRequest.AddRange($existingSize)
-                            Write-Info "续传下载，已有 $([math]::Round($existingSize/1MB,1))MB"
-                        } elseif ($existingSize -eq $imageAsset.size) {
+                        if ((Get-Item $imageTar).Length -eq $imageAsset.size) {
                             Write-OK "镜像文件已存在，跳过下载"
                             $downloadOK = $true
                         }
                     }
 
-                    if (-not $downloadOK) {
-                        $response = $webRequest.GetResponse()
-                        $totalSize = $response.ContentLength + $existingSize
-                        $stream = $response.GetResponseStream()
-                        $fileMode = if ($existingSize -gt 0 -and $response.StatusCode -eq 206) { [IO.FileMode]::Append } else { [IO.FileMode]::Create; $existingSize = 0 }
-                        $fileStream = New-Object IO.FileStream($imageTar, $fileMode)
-                        $buffer = New-Object byte[] 131072
-                        $downloaded = $existingSize
-                        $sw = [System.Diagnostics.Stopwatch]::StartNew()
-
-                        while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
-                            $fileStream.Write($buffer, 0, $read)
-                            $downloaded += $read
-                            if ($sw.ElapsedMilliseconds -gt 500) {
-                                $pct = [math]::Round($downloaded * 100 / $totalSize)
-                                $dlMB = [math]::Round($downloaded / 1MB, 1)
-                                $totMB = [math]::Round($totalSize / 1MB, 1)
-                                Write-Host "`r  ⏳ 下载镜像: ${dlMB}MB / ${totMB}MB (${pct}%)" -NoNewline -ForegroundColor Cyan
-                                $sw.Restart()
-                            }
+                    foreach ($dlUrl in $downloadUrls) {
+                        if ($downloadOK) { break }
+                        $isProxy = ($dlUrl -ne $imageUrl)
+                        if ($isProxy) {
+                            $proxyHost = ([Uri]$dlUrl).Host
+                            Write-Warn "直连下载失败，尝试代理: $proxyHost"
                         }
-                        Write-Host ""
-                        $fileStream.Close()
-                        $stream.Close()
-                        $response.Close()
-                        $downloadOK = $true
+
+                        $response = $null; $stream = $null; $fileStream = $null
+                        try {
+                            $webRequest = [System.Net.HttpWebRequest]::Create($dlUrl)
+                            $webRequest.AllowAutoRedirect = $true
+                            $webRequest.Timeout = 30000            # 30秒连接超时
+                            $webRequest.ReadWriteTimeout = 30000   # 30秒读超时
+                            $webRequest.UserAgent = "OpenClaw-Installer/1.0"
+
+                            # 断点续传
+                            $existingSize = 0
+                            if (Test-Path $imageTar) {
+                                $existingSize = (Get-Item $imageTar).Length
+                                if ($existingSize -gt 0 -and $existingSize -lt $imageAsset.size) {
+                                    $webRequest.AddRange($existingSize)
+                                    Write-Info "续传下载，已有 $([math]::Round($existingSize/1MB,1))MB"
+                                }
+                            }
+
+                            $response = $webRequest.GetResponse()
+                            $stream = $response.GetResponseStream()
+
+                            # 判断续传是否被接受
+                            $isResumed = ($existingSize -gt 0 -and $response.StatusCode -eq 206)
+                            if (-not $isResumed) { $existingSize = 0 }
+                            $totalSize = $response.ContentLength + $existingSize
+
+                            $fileMode = if ($isResumed) { [IO.FileMode]::Append } else { [IO.FileMode]::Create }
+                            $fileStream = New-Object IO.FileStream($imageTar, $fileMode)
+                            $buffer = New-Object byte[] 131072
+                            $downloaded = $existingSize
+                            $speedTimer = [System.Diagnostics.Stopwatch]::StartNew()
+                            $displayTimer = [System.Diagnostics.Stopwatch]::StartNew()
+                            $speedBase = $existingSize
+
+                            while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                                $fileStream.Write($buffer, 0, $read)
+                                $downloaded += $read
+                                if ($displayTimer.ElapsedMilliseconds -gt 500) {
+                                    $pct = [math]::Round($downloaded * 100 / $totalSize)
+                                    $dlMB = [math]::Round($downloaded / 1MB, 1)
+                                    $totMB = [math]::Round($totalSize / 1MB, 1)
+                                    $elapsedSec = $speedTimer.Elapsed.TotalSeconds
+                                    $speedMBps = if ($elapsedSec -gt 0) { [math]::Round(($downloaded - $speedBase) / $elapsedSec / 1MB, 1) } else { 0 }
+                                    Write-Host "`r  ⏳ 下载镜像: ${dlMB}MB / ${totMB}MB (${pct}%) ${speedMBps}MB/s    " -NoNewline -ForegroundColor Cyan
+                                    $displayTimer.Restart()
+                                }
+                            }
+                            Write-Host ""
+                            $fileStream.Close(); $fileStream = $null
+                            $stream.Close(); $stream = $null
+                            $response.Close(); $response = $null
+                            $downloadOK = $true
+                        } catch {
+                            Write-Host ""  # 结束进度行
+                            Write-Log "Download failed from ${dlUrl}: $_"
+                        } finally {
+                            if ($fileStream) { try { $fileStream.Close() } catch {} }
+                            if ($stream) { try { $stream.Close() } catch {} }
+                            if ($response) { try { $response.Close() } catch {} }
+                        }
                     }
 
                     if ($downloadOK) {
@@ -1584,7 +1624,6 @@ function Main {
                         if ($LASTEXITCODE -eq 0) {
                             $imageReady = $true
                             Write-OK "预构建镜像加载完成"
-                            # Tag as openclaw-pro if loaded with different name
                             & docker tag openclaw-pro:latest openclaw-pro:latest 2>$null
                         } else {
                             Write-Warn "docker load 失败，将尝试本地构建"
@@ -1596,7 +1635,7 @@ function Main {
                 }
             } catch {
                 Write-Log "Pre-built image download failed: $_"
-                Write-Info "未找到预构建镜像，将本地构建"
+                Write-Info "预构建镜像获取失败，将本地构建"
             }
 
             # ── 尝试 2: 本地构建 (fallback) ──
