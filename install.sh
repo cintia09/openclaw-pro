@@ -19,6 +19,8 @@ if ! command -v git &>/dev/null; then
     sudo dnf install -y -q git
   elif command -v yum &>/dev/null; then
     sudo yum install -y -q git
+  elif command -v brew &>/dev/null; then
+    brew install git
   else
     echo "❌ Cannot install git automatically. Please install git first."
     exit 1

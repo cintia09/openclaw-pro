@@ -597,7 +597,7 @@ $('btn-password').addEventListener('click', async ()=>{
   const confirm = $('confirm-password').value;
 
   if (!oldPassword) return toast('缺少参数', '请输入当前密码');
-  if (!newPassword || newPassword.length < 6) return toast('参数错误', '新密码至少 6 位');
+  if (!newPassword || newPassword.length < 8) return toast('参数错误', '新密码至少 8 位');
   if (newPassword !== confirm) return toast('参数错误', '两次密码不一致');
 
   const r = await api('/api/password', { method:'POST', body:{ oldPassword, newPassword } });
@@ -613,7 +613,7 @@ $('btn-password').addEventListener('click', async ()=>{
 $('btn-settings-save').addEventListener('click', async ()=> {
   const tz = $('settings-timezone') ? $('settings-timezone').value : '';
   try {
-    const r = await api('/config', 'POST', { timezone: tz });
+    const r = await api('/api/config', { method: 'POST', body: { timezone: tz } });
     toast(r.success ? '已保存' : '保存失败', r.error || '');
   } catch(e) { toast('保存失败', e.message); }
 });

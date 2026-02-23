@@ -487,13 +487,18 @@ cmd_config() {
             ;;
         3)
             read -p "HTTPS域名 [留空禁用]: " NEW_DOMAIN
-            jq ".domain = \"$NEW_DOMAIN\"" "$CONFIG_FILE" > /tmp/cfg.tmp && mv /tmp/cfg.tmp "$CONFIG_FILE"
-            warn "域名已更新，需要重建容器: $0 rebuild"
+            # 域名格式校验，防止 jq 注入
+            if [ -n "$NEW_DOMAIN" ] && ! echo "$NEW_DOMAIN" | grep -qE '^[a-zA-Z0-9]([a-zA-Z0-9.\-]*[a-zA-Z0-9])?$'; then
+                error "域名格式无效"
+            else
+                jq --arg d "$NEW_DOMAIN" '.domain = $d' "$CONFIG_FILE" > /tmp/cfg.tmp && mv /tmp/cfg.tmp "$CONFIG_FILE"
+                warn "域名已更新，需要重建容器: $0 rebuild"
+            fi
             ;;
         4)
             read -p "时区 [当前: $(jq -r '.timezone' "$CONFIG_FILE" 2>/dev/null)]: " NEW_TZ
             if [ -n "$NEW_TZ" ]; then
-                jq ".timezone = \"$NEW_TZ\"" "$CONFIG_FILE" > /tmp/cfg.tmp && mv /tmp/cfg.tmp "$CONFIG_FILE"
+                jq --arg tz "$NEW_TZ" '.timezone = $tz' "$CONFIG_FILE" > /tmp/cfg.tmp && mv /tmp/cfg.tmp "$CONFIG_FILE"
                 warn "时区已更新，需要重建容器: $0 rebuild"
             fi
             ;;
