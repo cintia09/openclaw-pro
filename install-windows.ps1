@@ -1472,47 +1472,37 @@ function Main {
         # Find available host ports
         $script:actualGatewayPort = Find-AvailablePort -PreferredPort ([int]$OPENCLAW_PORT)
         $script:actualPanelPort   = Find-AvailablePort -PreferredPort ([int]$WEB_PANEL_PORT)
-        Write-Info "网关端口: $($script:actualGatewayPort) → 容器 $OPENCLAW_PORT"
+        if ($script:actualGatewayPort -ne [int]$OPENCLAW_PORT) {
+            Write-Warn "端口 $OPENCLAW_PORT 已被占用，网关将使用端口: $($script:actualGatewayPort)"
+        }
         if ($script:actualPanelPort -ne [int]$WEB_PANEL_PORT) {
-            Write-Info "管理面板端口: $($script:actualPanelPort) → 容器 $WEB_PANEL_PORT"
+            Write-Warn "端口 $WEB_PANEL_PORT 已被占用，管理面板将使用端口: $($script:actualPanelPort)"
         }
 
         Write-Info "正在构建镜像..."
         try {
             Push-Location $localDeployDir
-            # docker build with retry — first try direct, then try with mirror
+            # docker build with retry — first try direct, then try with mirrors
             $buildOK = $false
-            $mirrors = @(
-                $null,                                              # direct (no mirror)
-                "https://docker.m.daocloud.io",                     # DaoCloud
-                "https://dockerhub.icu",                            # dockerhub.icu
-                "https://docker.1panel.live"                        # 1Panel
+            $dockerfilePath = Join-Path $localDeployDir "Dockerfile"
+            $originalDockerfile = Get-Content $dockerfilePath -Raw
+            $mirrorPrefixes = @(
+                $null,                                    # direct (Docker Hub)
+                "docker.m.daocloud.io/library/",          # DaoCloud
+                "dockerhub.icu/library/",                 # dockerhub.icu
+                "docker.1panel.live/library/"              # 1Panel
             )
 
-            foreach ($mirror in $mirrors) {
-                if ($mirror) {
-                    Write-Warn "Docker Hub 连接失败，尝试镜像: $mirror"
-                    # Create/update daemon.json with mirror
-                    $daemonJson = '{"registry-mirrors": ["' + $mirror + '"]}'
-                    $daemonPath = "$env:USERPROFILE\.docker\daemon.json"
-                    try {
-                        # Read existing config
-                        if (Test-Path $daemonPath) {
-                            $existing = Get-Content $daemonPath -Raw | ConvertFrom-Json
-                            $existing | Add-Member -NotePropertyName "registry-mirrors" -NotePropertyValue @($mirror) -Force
-                            $existing | ConvertTo-Json -Depth 10 | Set-Content $daemonPath -Force
-                        } else {
-                            $daemonJson | Set-Content $daemonPath -Force
-                        }
-                        Write-Info "已配置镜像加速，正在重启 Docker..."
-                        & docker system info 2>&1 | Out-Null
-                        Start-Sleep -Seconds 3
-                    } catch {
-                        Write-Log "Failed to configure mirror ${mirror}: $_"
-                    }
+            foreach ($prefix in $mirrorPrefixes) {
+                if ($prefix) {
+                    Write-Warn "Docker Hub 连接失败，尝试镜像源: $prefix"
+                    # Rewrite Dockerfile FROM line to use mirror prefix
+                    $mirroredContent = $originalDockerfile -replace '^FROM ubuntu:', "FROM ${prefix}ubuntu:"
+                    $mirroredContent | Set-Content $dockerfilePath -Force -NoNewline
+                    Write-Info "已修改 Dockerfile 使用镜像源"
                 }
 
-                & docker build -t openclaw-pro . 2>&1 | ForEach-Object {
+                & docker build --no-cache -t openclaw-pro . 2>&1 | ForEach-Object {
                     if ($_ -match "^#\d+ \[" -or $_ -match "^Step " -or $_ -match "Successfully") {
                         Write-Host "  $_" -ForegroundColor DarkGray
                     }
@@ -1520,12 +1510,19 @@ function Main {
                 }
                 if ($LASTEXITCODE -eq 0) {
                     $buildOK = $true
+                    # Restore original Dockerfile after successful build
+                    if ($prefix) {
+                        $originalDockerfile | Set-Content $dockerfilePath -Force -NoNewline
+                        Write-Log "Restored original Dockerfile after mirror build"
+                    }
                     break
                 }
             }
 
+            # Always restore original Dockerfile
             if (-not $buildOK) {
-                throw "docker build failed — 无法拉取基础镜像。请检查网络连接，或配置 Docker 镜像加速。"
+                $originalDockerfile | Set-Content $dockerfilePath -Force -NoNewline
+                throw "docker build failed — 无法拉取基础镜像。请检查网络连接，或手动配置 Docker 镜像加速。"
             }
             Write-OK "镜像构建完成"
 
