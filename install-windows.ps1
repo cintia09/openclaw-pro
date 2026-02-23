@@ -29,6 +29,8 @@ $TASK_NAME       = "OpenClawSetup"
 $UBUNTU_DISTRO   = "Ubuntu-24.04"
 $OPENCLAW_PORT   = "18789"
 $WEB_PANEL_PORT  = "3000"
+$DEFAULT_HTTPS_PORT = "443"
+$DEFAULT_HTTP_PORT  = "80"
 $WSL_TARGET_DIR  = "/root/openclaw-pro"
 $GITHUB_REPO     = "cintia09/openclaw-pro"
 $IMAGE_NAME      = "openclaw-pro"
@@ -877,13 +879,118 @@ function Find-AvailablePort {
     return $port
 }
 
+# ─── Deploy Config: Interactive port/domain setup ─────────────────────────────
+function Get-DeployConfig {
+    Write-Host ""
+    Write-Host "  ╔══════════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "  ║       🐾 OpenClaw Pro — 部署配置                ║" -ForegroundColor Cyan
+    Write-Host "  ╚══════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host ""
+
+    $config = @{
+        GatewayPort  = [int]$OPENCLAW_PORT
+        WebPort      = [int]$WEB_PANEL_PORT
+        HttpPort     = 0
+        HttpsPort    = 0
+        Domain       = ""
+        PortArgs     = @()
+        HttpsEnabled = $false
+    }
+
+    # 1. Gateway 端口
+    $gwPort = Find-AvailablePort -PreferredPort ([int]$OPENCLAW_PORT)
+    Write-Host "  Gateway 端口 [默认 ${gwPort}]: " -NoNewline -ForegroundColor White
+    $customGw = Read-Host
+    if ($customGw -match '^\d+$' -and [int]$customGw -ge 1 -and [int]$customGw -le 65535) {
+        $gwPort = [int]$customGw
+    }
+    $config.GatewayPort = $gwPort
+
+    # 2. HTTPS 域名
+    Write-Host ""
+    Write-Host "  💡 输入域名可启用 HTTPS（自动申请 Let's Encrypt 证书）" -ForegroundColor DarkGray
+    Write-Host "     需要域名已解析到本机IP，且 80/443 端口可从外网访问" -ForegroundColor DarkGray
+    Write-Host "     留空则使用 HTTP 直连模式（局域网/本机访问）" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "  HTTPS 域名 (可选，留空跳过): " -NoNewline -ForegroundColor White
+    $domain = (Read-Host).Trim()
+
+    if ($domain -and $domain -match '^[a-zA-Z0-9]([a-zA-Z0-9.\-]*[a-zA-Z0-9])?$') {
+        $config.Domain = $domain
+        $config.HttpsEnabled = $true
+
+        # HTTP 端口 (ACME 验证 + 跳转HTTPS)
+        $httpPort = [int]$DEFAULT_HTTP_PORT
+        if (-not (Test-PortAvailable $httpPort)) {
+            $httpPort = Find-AvailablePort -PreferredPort 8080 -RangeStart 8080 -RangeEnd 8099
+            Write-Warn "端口 80 已被占用，HTTP 使用端口 $httpPort"
+            Write-Warn "⚠️ Let's Encrypt 需要 80 端口，非标准端口可能导致证书申请失败"
+        }
+        $config.HttpPort = $httpPort
+
+        # HTTPS 端口
+        $httpsPort = [int]$DEFAULT_HTTPS_PORT
+        if (-not (Test-PortAvailable $httpsPort)) {
+            $httpsPort = Find-AvailablePort -PreferredPort 8443 -RangeStart 8443 -RangeEnd 8499
+            Write-Warn "端口 443 已被占用，HTTPS 使用端口 $httpsPort"
+        }
+        $config.HttpsPort = $httpsPort
+
+        # HTTPS 模式: Caddy 对外，Gateway/Web 仅本机
+        $config.PortArgs = @(
+            "-p", "$($config.HttpPort):80",
+            "-p", "$($config.HttpsPort):443",
+            "-p", "127.0.0.1:$($config.GatewayPort):18789",
+            "-p", "127.0.0.1:$($config.WebPort):3000"
+        )
+    } elseif ($domain) {
+        Write-Warn "域名格式无效，将使用 HTTP 直连模式"
+        $config.Domain = ""
+    }
+
+    if (-not $config.HttpsEnabled) {
+        # HTTP 直连模式: Gateway + Web 面板直接暴露
+        $webPort = Find-AvailablePort -PreferredPort ([int]$WEB_PANEL_PORT) -RangeStart 3001 -RangeEnd 3099
+        if ($webPort -ne [int]$WEB_PANEL_PORT) {
+            Write-Warn "端口 $WEB_PANEL_PORT 已被占用，Web面板使用端口 $webPort"
+        }
+        $config.WebPort = $webPort
+
+        $config.PortArgs = @(
+            "-p", "$($config.GatewayPort):18789",
+            "-p", "$($config.WebPort):3000"
+        )
+    }
+
+    # 显示配置摘要
+    Write-Host ""
+    Write-Host "  ─────────────────────────────────────────────────" -ForegroundColor DarkGray
+    Write-Host "  📋 端口映射:" -ForegroundColor White
+    if ($config.HttpsEnabled) {
+        Write-Host "     HTTP   $($config.HttpPort) → 容器 80  (证书验证+跳转)" -ForegroundColor Gray
+        Write-Host "     HTTPS  $($config.HttpsPort) → 容器 443 (主入口)" -ForegroundColor Gray
+        Write-Host "     Gateway 127.0.0.1:$($config.GatewayPort) (仅内部)" -ForegroundColor Gray
+        Write-Host "     域名: $($config.Domain)" -ForegroundColor Cyan
+    } else {
+        Write-Host "     Gateway $($config.GatewayPort) → 容器 18789" -ForegroundColor Gray
+        Write-Host "     Web面板 $($config.WebPort) → 容器 3000" -ForegroundColor Gray
+    }
+    Write-Host "  ─────────────────────────────────────────────────" -ForegroundColor DarkGray
+    Write-Host ""
+
+    return $config
+}
+
 # ─── Phase 5: Cleanup + Summary ───────────────────────────────────────────────
 function Show-Completion {
     param(
         [bool]$DeployLaunched,
         [bool]$IsDockerDesktop = $false,
         [int]$GatewayPort = 18789,
-        [int]$PanelPort = 3000
+        [int]$PanelPort = 3000,
+        [string]$Domain = "",
+        [int]$HttpPort = 0,
+        [int]$HttpsPort = 0
     )
 
     Write-Host ""
@@ -909,11 +1016,43 @@ function Show-Completion {
     if ($DeployLaunched) {
         Write-Host "  🚀  OpenClaw Pro 容器已启动" -ForegroundColor Cyan
         Write-Host ""
-        Write-Host "  访问地址: " -NoNewline -ForegroundColor White
-        Write-Host "http://localhost:$GatewayPort" -ForegroundColor Cyan
+
+        if ($Domain) {
+            # HTTPS 模式
+            Write-Host "  📋 端口映射:" -ForegroundColor White
+            Write-Host "     HTTP   ${HttpPort} → 证书验证 + 跳转HTTPS" -ForegroundColor Gray
+            Write-Host "     HTTPS  ${HttpsPort} → 主入口（Caddy 反代）" -ForegroundColor Gray
+            Write-Host "     Gateway 127.0.0.1:${GatewayPort} → 内部（不对外）" -ForegroundColor Gray
+            Write-Host ""
+            Write-Host "  🌐 访问地址:" -ForegroundColor White
+            $httpsUrl = if ($HttpsPort -eq 443) { "https://${Domain}" } else { "https://${Domain}:${HttpsPort}" }
+            Write-Host "     主站:     $httpsUrl" -ForegroundColor Cyan
+            Write-Host "     管理面板: ${httpsUrl}/admin" -ForegroundColor Cyan
+        } else {
+            # HTTP 直连模式
+            Write-Host "  📋 端口映射:" -ForegroundColor White
+            Write-Host "     Gateway ${GatewayPort} → 容器 18789 (API入口)" -ForegroundColor Gray
+            Write-Host "     Web面板 ${PanelPort} → 容器 3000  (管理面板)" -ForegroundColor Gray
+            Write-Host ""
+            Write-Host "  🌐 访问地址:" -ForegroundColor White
+            Write-Host "     Gateway:  http://localhost:${GatewayPort}" -ForegroundColor Cyan
+            Write-Host "     管理面板: http://localhost:${PanelPort}" -ForegroundColor Cyan
+        }
+
         Write-Host ""
         Write-Host "  ─────────────────────────────────────────────────" -ForegroundColor DarkGray
         Write-Host ""
+
+        # Windows 防火墙提醒（外网访问需要）
+        if ($Domain) {
+            $ports = "${HttpPort},${HttpsPort}"
+        } else {
+            $ports = "${GatewayPort},${PanelPort}"
+        }
+        Write-Host "  🔒 如需外网访问，请以管理员身份运行:" -ForegroundColor Yellow
+        Write-Host "     netsh advfirewall firewall add rule name=`"OpenClaw`" dir=in action=allow protocol=tcp localport=${ports}" -ForegroundColor White
+        Write-Host ""
+
         Write-Host "  📋 管理命令：" -ForegroundColor White
         Write-Host "     docker ps                      # 查看容器状态" -ForegroundColor Gray
         Write-Host "     docker logs openclaw-pro       # 查看日志" -ForegroundColor Gray
@@ -931,10 +1070,11 @@ function Show-Completion {
         Write-Host "     docker ps -a                   # 检查所有容器" -ForegroundColor Gray
         Write-Host "     docker logs openclaw-pro       # 查看构建日志" -ForegroundColor Gray
         Write-Host ""
-        Write-Host "  📋 手动部署:" -ForegroundColor Cyan
-        Write-Host "     cd openclaw-pro" -ForegroundColor White
-        Write-Host "     docker build -t openclaw-pro ." -ForegroundColor White
-        Write-Host "     docker run -d --name openclaw-pro -p ${GatewayPort}:18789 -p ${PanelPort}:3000 -v ./home-data:/root openclaw-pro" -ForegroundColor White
+        Write-Host "  📋 手动下载镜像后重新运行安装脚本:" -ForegroundColor Cyan
+        Write-Host "     curl.exe -L -C - --retry 200 --retry-all-errors --retry-delay 3 -o openclaw-pro-image.tar.gz ``" -ForegroundColor White
+        Write-Host "       `"https://github.com/$GITHUB_REPO/releases/download/v1.0.0/openclaw-pro-image.tar.gz`"" -ForegroundColor White
+        Write-Host "     docker load -i openclaw-pro-image.tar.gz" -ForegroundColor White
+        Write-Host "     # 然后重新运行安装脚本即可" -ForegroundColor Gray
     }
 
     Write-Host ""
@@ -1494,24 +1634,30 @@ function Main {
             $launched = $true
         } else {
 
-        # Find available host ports
-        $script:actualGatewayPort = Find-AvailablePort -PreferredPort ([int]$OPENCLAW_PORT)
-        $script:actualPanelPort   = Find-AvailablePort -PreferredPort ([int]$WEB_PANEL_PORT)
-        if ($script:actualGatewayPort -ne [int]$OPENCLAW_PORT) {
-            Write-Warn "端口 $OPENCLAW_PORT 已被占用，网关将使用端口: $($script:actualGatewayPort)"
-        }
-        if ($script:actualPanelPort -ne [int]$WEB_PANEL_PORT) {
-            Write-Warn "端口 $WEB_PANEL_PORT 已被占用，管理面板将使用端口: $($script:actualPanelPort)"
-        }
+        # Interactive port/domain configuration
+        $deployConfig = Get-DeployConfig
+        $script:actualGatewayPort = $deployConfig.GatewayPort
+        $script:actualPanelPort   = $deployConfig.WebPort
+        $script:deployDomain      = $deployConfig.Domain
+        $script:httpPort          = $deployConfig.HttpPort
+        $script:httpsPort         = $deployConfig.HttpsPort
 
         Write-Info "正在准备镜像..."
         try {
             Push-Location $localDeployDir
 
-            # 策略: 优先从 GitHub Release 下载预构建镜像，失败则本地构建
+            # 策略: 检查本地已有镜像 → 下载预构建 → 本地构建
             $imageReady = $false
 
+            # ── 尝试 0: 检查镜像是否已存在 ──
+            $existingImage = & docker image inspect openclaw-pro 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                Write-OK "镜像 openclaw-pro 已存在，跳过下载/构建"
+                $imageReady = $true
+            }
+
             # ── 尝试 1: 下载预构建镜像 ──
+            if (-not $imageReady) {
             Write-Info "检查预构建镜像..."
             try {
                 $releaseApi = "https://api.github.com/repos/$GITHUB_REPO/releases/latest"
@@ -1674,6 +1820,7 @@ function Main {
                 Write-Log "Pre-built image download failed: $_"
                 Write-Info "预构建镜像获取失败，将本地构建"
             }
+            }  # end if (-not $imageReady) for download
 
             # ── 尝试 2: 本地构建 (fallback) ──
             if (-not $imageReady) {
@@ -1727,7 +1874,7 @@ function Main {
                     Write-Host ""
                     Write-Host "  下载完成后执行:" -ForegroundColor Yellow
                     Write-Host "  docker load -i openclaw-pro-image.tar.gz" -ForegroundColor White
-                    Write-Host "  docker run -d --name openclaw-pro -p $($script:actualGatewayPort):18789 -p $($script:actualPanelPort):3000 -v ./home-data:/root openclaw-pro" -ForegroundColor White
+                    Write-Host "  然后重新运行安装脚本即可（会自动检测已加载的镜像）" -ForegroundColor Gray
                     Write-Host ""
                     throw "镜像获取失败 — 下载和本地构建均不可用。请按上方提示手动下载。"
                 }
@@ -1742,26 +1889,46 @@ function Main {
                 & docker rm -f openclaw-pro 2>&1 | Out-Null
             }
 
-            # Create home-data directory
+            # Create home-data directory and write docker-config.json
             $homeData = Join-Path $localDeployDir "home-data"
             if (-not (Test-Path $homeData)) {
                 New-Item -ItemType Directory -Path $homeData -Force | Out-Null
             }
+            $configDir = Join-Path $homeData ".openclaw"
+            if (-not (Test-Path $configDir)) {
+                New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+            }
 
-            & docker run -d `
-                --name openclaw-pro `
-                --hostname openclaw `
-                -v "${homeData}:/root" `
-                -p "$($script:actualGatewayPort):18789" `
-                -p "$($script:actualPanelPort):3000" `
-                --restart unless-stopped `
-                openclaw-pro 2>&1
+            # Write config for container's start-services.sh (Caddy reads domain from here)
+            $dockerConfigJson = @{
+                port       = $deployConfig.GatewayPort
+                web_port   = $deployConfig.WebPort
+                http_port  = $deployConfig.HttpPort
+                https_port = $deployConfig.HttpsPort
+                domain     = $deployConfig.Domain
+                timezone   = "Asia/Shanghai"
+                created    = (Get-Date -Format "o")
+            } | ConvertTo-Json -Depth 2
+            $dockerConfigJson | Set-Content (Join-Path $configDir "docker-config.json") -Force
+            Write-Log "Wrote docker-config.json: domain=$($deployConfig.Domain)"
+
+            # Build docker run arguments
+            $runArgs = @(
+                "run", "-d",
+                "--name", "openclaw-pro",
+                "--hostname", "openclaw",
+                "-v", "${homeData}:/root",
+                "-e", "TZ=Asia/Shanghai",
+                "--restart", "unless-stopped"
+            )
+            $runArgs += $deployConfig.PortArgs
+            $runArgs += "openclaw-pro"
+
+            Write-Log "docker run args: $($runArgs -join ' ')"
+            & docker @runArgs 2>&1
 
             if ($LASTEXITCODE -eq 0) {
                 Write-OK "容器已启动"
-                if ($script:actualGatewayPort -ne [int]$OPENCLAW_PORT) {
-                    Write-Warn "注意: 端口 $OPENCLAW_PORT 已被占用，实际映射到 $($script:actualGatewayPort)"
-                }
                 $launched = $true
             } else {
                 throw "docker run failed"
@@ -1776,7 +1943,11 @@ function Main {
             Write-Host "     2. Docker Desktop 未完全启动" -ForegroundColor White
             Write-Host "        解决: 等待系统托盘 Docker 图标显示 Running，再重新运行" -ForegroundColor Gray
             Write-Host ""
-            Write-Suggestion "手动构建: cd openclaw-pro && docker build -t openclaw-pro . && docker run -d --name openclaw-pro -p $($script:actualGatewayPort):18789 openclaw-pro"
+            Write-Host "  💡 手动下载镜像后重新运行安装脚本:" -ForegroundColor Cyan
+            Write-Host "     curl.exe -L -C - --retry 200 --retry-all-errors --retry-delay 3 -o openclaw-pro-image.tar.gz ``" -ForegroundColor White
+            Write-Host "       `"https://github.com/$GITHUB_REPO/releases/download/v1.0.0/openclaw-pro-image.tar.gz`"" -ForegroundColor White
+            Write-Host "     docker load -i openclaw-pro-image.tar.gz" -ForegroundColor White
+            Write-Host "     # 然后重新运行安装脚本" -ForegroundColor Gray
             Pop-Location -ErrorAction SilentlyContinue
             $launched = $false
         }
@@ -1823,7 +1994,10 @@ function Main {
 
     $gwPort = if ($script:actualGatewayPort) { $script:actualGatewayPort } else { [int]$OPENCLAW_PORT }
     $wpPort = if ($script:actualPanelPort) { $script:actualPanelPort } else { [int]$WEB_PANEL_PORT }
-    Show-Completion -DeployLaunched $launched -IsDockerDesktop $dockerDesktopMode -GatewayPort $gwPort -PanelPort $wpPort
+    $dom    = if ($script:deployDomain) { $script:deployDomain } else { "" }
+    $hPort  = if ($script:httpPort) { $script:httpPort } else { 0 }
+    $hsPort = if ($script:httpsPort) { $script:httpsPort } else { 0 }
+    Show-Completion -DeployLaunched $launched -IsDockerDesktop $dockerDesktopMode -GatewayPort $gwPort -PanelPort $wpPort -Domain $dom -HttpPort $hPort -HttpsPort $hsPort
 
     Read-Host "按回车关闭此窗口"
 }
