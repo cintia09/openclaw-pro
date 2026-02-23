@@ -1527,27 +1527,40 @@ function Main {
                     $imageTar = Join-Path $env:TEMP "openclaw-pro-image.tar.gz"
                     $downloadOK = $false
 
-                    # GitHub Release 下载（直连 + 代理镜像重试）
+                    # GitHub Release 下载（断线自动续传，最多重试 10 次）
                     $downloadUrls = @(
                         $imageUrl,                                  # 直连 GitHub
                         "https://ghfast.top/$imageUrl",             # ghfast 代理
                         "https://mirror.ghproxy.com/$imageUrl"      # ghproxy 代理
                     )
+                    $maxRetries = 10          # 总重试次数（跨所有 URL）
+                    $retryCount = 0
+                    $urlIndex = 0
+                    $totalExpected = $imageAsset.size
 
                     # 检查已有完整文件
                     if (Test-Path $imageTar) {
-                        if ((Get-Item $imageTar).Length -eq $imageAsset.size) {
+                        if ((Get-Item $imageTar).Length -eq $totalExpected) {
                             Write-OK "镜像文件已存在，跳过下载"
                             $downloadOK = $true
                         }
                     }
 
-                    foreach ($dlUrl in $downloadUrls) {
-                        if ($downloadOK) { break }
+                    while (-not $downloadOK -and $retryCount -lt $maxRetries) {
+                        $dlUrl = $downloadUrls[$urlIndex]
                         $isProxy = ($dlUrl -ne $imageUrl)
-                        if ($isProxy) {
-                            $proxyHost = ([Uri]$dlUrl).Host
-                            Write-Warn "直连下载失败，尝试代理: $proxyHost"
+
+                        if ($retryCount -eq 0) {
+                            if ($isProxy) {
+                                $proxyHost = ([Uri]$dlUrl).Host
+                                Write-Info "使用代理下载: $proxyHost"
+                            }
+                        } else {
+                            $existMB = 0
+                            if (Test-Path $imageTar) { $existMB = [math]::Round((Get-Item $imageTar).Length / 1MB, 1) }
+                            $srcLabel = if ($isProxy) { ([Uri]$dlUrl).Host } else { "GitHub" }
+                            Write-Warn "下载中断，第 ${retryCount}/${maxRetries} 次重试 (已下载 ${existMB}MB, via $srcLabel)"
+                            Start-Sleep -Seconds ([math]::Min($retryCount * 2, 10))  # 递增等待
                         }
 
                         $response = $null; $stream = $null; $fileStream = $null
@@ -1555,16 +1568,16 @@ function Main {
                             $webRequest = [System.Net.HttpWebRequest]::Create($dlUrl)
                             $webRequest.AllowAutoRedirect = $true
                             $webRequest.Timeout = 30000            # 30秒连接超时
-                            $webRequest.ReadWriteTimeout = 30000   # 30秒读超时
+                            $webRequest.ReadWriteTimeout = 60000   # 60秒读超时（大文件需要更宽松）
                             $webRequest.UserAgent = "OpenClaw-Installer/1.0"
+                            $webRequest.KeepAlive = $true
 
                             # 断点续传
                             $existingSize = 0
                             if (Test-Path $imageTar) {
                                 $existingSize = (Get-Item $imageTar).Length
-                                if ($existingSize -gt 0 -and $existingSize -lt $imageAsset.size) {
+                                if ($existingSize -gt 0 -and $existingSize -lt $totalExpected) {
                                     $webRequest.AddRange($existingSize)
-                                    Write-Info "续传下载，已有 $([math]::Round($existingSize/1MB,1))MB"
                                 }
                             }
 
@@ -1576,17 +1589,23 @@ function Main {
                             if (-not $isResumed) { $existingSize = 0 }
                             $totalSize = $response.ContentLength + $existingSize
 
+                            if ($isResumed) {
+                                Write-Info "续传下载，从 $([math]::Round($existingSize/1MB,1))MB 继续"
+                            }
+
                             $fileMode = if ($isResumed) { [IO.FileMode]::Append } else { [IO.FileMode]::Create }
                             $fileStream = New-Object IO.FileStream($imageTar, $fileMode)
-                            $buffer = New-Object byte[] 131072
+                            $buffer = New-Object byte[] 262144     # 256KB 缓冲区
                             $downloaded = $existingSize
                             $speedTimer = [System.Diagnostics.Stopwatch]::StartNew()
                             $displayTimer = [System.Diagnostics.Stopwatch]::StartNew()
                             $speedBase = $existingSize
+                            $stallTimer = [System.Diagnostics.Stopwatch]::StartNew()
 
                             while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
                                 $fileStream.Write($buffer, 0, $read)
                                 $downloaded += $read
+                                $stallTimer.Restart()
                                 if ($displayTimer.ElapsedMilliseconds -gt 500) {
                                     $pct = [math]::Round($downloaded * 100 / $totalSize)
                                     $dlMB = [math]::Round($downloaded / 1MB, 1)
@@ -1598,13 +1617,28 @@ function Main {
                                 }
                             }
                             Write-Host ""
+                            $fileStream.Flush()
                             $fileStream.Close(); $fileStream = $null
                             $stream.Close(); $stream = $null
                             $response.Close(); $response = $null
-                            $downloadOK = $true
+
+                            # 验证文件完整性
+                            $finalSize = (Get-Item $imageTar).Length
+                            if ($finalSize -eq $totalExpected) {
+                                $downloadOK = $true
+                            } else {
+                                Write-Warn "文件不完整: ${finalSize} / ${totalExpected} 字节"
+                                $retryCount++
+                            }
                         } catch {
                             Write-Host ""  # 结束进度行
                             Write-Log "Download failed from ${dlUrl}: $_"
+                            $retryCount++
+                            # 连接失败 3 次后切换到下一个 URL
+                            if ($retryCount % 3 -eq 0 -and $urlIndex -lt ($downloadUrls.Count - 1)) {
+                                $urlIndex++
+                                Write-Info "切换下载源..."
+                            }
                         } finally {
                             if ($fileStream) { try { $fileStream.Close() } catch {} }
                             if ($stream) { try { $stream.Close() } catch {} }
