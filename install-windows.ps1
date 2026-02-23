@@ -28,7 +28,10 @@ $SCRIPT_VERSION  = "1.0.0"
 $TASK_NAME       = "OpenClawSetup"
 $UBUNTU_DISTRO   = "Ubuntu-24.04"
 $OPENCLAW_PORT   = "18789"
+$WEB_PANEL_PORT  = "3000"
 $WSL_TARGET_DIR  = "/root/openclaw-pro"
+$GITHUB_REPO     = "cintia09/openclaw-pro"
+$IMAGE_NAME      = "openclaw-pro"
 $SCRIPT_URL      = "https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1"
 $SCRIPT_DIR      = if ($MyInvocation.MyCommand.Path) {
     Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -1501,52 +1504,144 @@ function Main {
             Write-Warn "端口 $WEB_PANEL_PORT 已被占用，管理面板将使用端口: $($script:actualPanelPort)"
         }
 
-        Write-Info "正在构建镜像..."
+        Write-Info "正在准备镜像..."
         try {
             Push-Location $localDeployDir
-            # docker build with retry — first try direct, then try with mirrors
-            $buildOK = $false
-            $dockerfilePath = Join-Path $localDeployDir "Dockerfile"
-            $originalDockerfile = Get-Content $dockerfilePath -Raw
-            $mirrorPrefixes = @(
-                $null,                                    # direct (Docker Hub)
-                "docker.m.daocloud.io/library/",          # DaoCloud
-                "dockerhub.icu/library/",                 # dockerhub.icu
-                "docker.1panel.live/library/"              # 1Panel
-            )
 
-            foreach ($prefix in $mirrorPrefixes) {
-                if ($prefix) {
-                    Write-Warn "Docker Hub 连接失败，尝试镜像源: $prefix"
-                    # Rewrite Dockerfile FROM line to use mirror prefix
-                    $mirroredContent = $originalDockerfile -replace '^FROM ubuntu:', "FROM ${prefix}ubuntu:"
-                    $mirroredContent | Set-Content $dockerfilePath -Force -NoNewline
-                    Write-Info "已修改 Dockerfile 使用镜像源"
-                }
+            # 策略: 优先从 GitHub Release 下载预构建镜像，失败则本地构建
+            $imageReady = $false
 
-                & docker build --no-cache -t openclaw-pro . 2>&1 | ForEach-Object {
-                    if ($_ -match "^#\d+ \[" -or $_ -match "^Step " -or $_ -match "Successfully") {
-                        Write-Host "  $_" -ForegroundColor DarkGray
+            # ── 尝试 1: 下载预构建镜像 ──
+            Write-Info "检查预构建镜像..."
+            try {
+                $releaseApi = "https://api.github.com/repos/$GITHUB_REPO/releases/latest"
+                $releaseInfo = Invoke-RestMethod -Uri $releaseApi -TimeoutSec 10 -ErrorAction Stop
+                $imageAsset = $releaseInfo.assets | Where-Object { $_.name -eq "openclaw-pro-image.tar.gz" } | Select-Object -First 1
+
+                if ($imageAsset) {
+                    $imageUrl = $imageAsset.browser_download_url
+                    $imageSize = [math]::Round($imageAsset.size / 1MB, 1)
+                    Write-Info "发现预构建镜像 ($($releaseInfo.tag_name), ${imageSize}MB)"
+                    Write-Info "正在下载... (无需从 Docker Hub 拉取)"
+
+                    $imageTar = Join-Path $env:TEMP "openclaw-pro-image.tar.gz"
+
+                    # 断点续传下载
+                    $webRequest = [System.Net.HttpWebRequest]::Create($imageUrl)
+                    $webRequest.AllowAutoRedirect = $true
+                    $webRequest.Timeout = 300000
+                    $webRequest.UserAgent = "OpenClaw-Installer/1.0"
+
+                    $existingSize = 0
+                    if (Test-Path $imageTar) {
+                        $existingSize = (Get-Item $imageTar).Length
+                        if ($existingSize -lt $imageAsset.size) {
+                            $webRequest.AddRange($existingSize)
+                            Write-Info "续传下载，已有 $([math]::Round($existingSize/1MB,1))MB"
+                        } elseif ($existingSize -eq $imageAsset.size) {
+                            Write-OK "镜像文件已存在，跳过下载"
+                            $downloadOK = $true
+                        }
                     }
-                    Write-Log "docker build: $_"
+
+                    if (-not $downloadOK) {
+                        $response = $webRequest.GetResponse()
+                        $totalSize = $response.ContentLength + $existingSize
+                        $stream = $response.GetResponseStream()
+                        $fileMode = if ($existingSize -gt 0 -and $response.StatusCode -eq 206) { [IO.FileMode]::Append } else { [IO.FileMode]::Create; $existingSize = 0 }
+                        $fileStream = New-Object IO.FileStream($imageTar, $fileMode)
+                        $buffer = New-Object byte[] 131072
+                        $downloaded = $existingSize
+                        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+
+                        while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                            $fileStream.Write($buffer, 0, $read)
+                            $downloaded += $read
+                            if ($sw.ElapsedMilliseconds -gt 500) {
+                                $pct = [math]::Round($downloaded * 100 / $totalSize)
+                                $dlMB = [math]::Round($downloaded / 1MB, 1)
+                                $totMB = [math]::Round($totalSize / 1MB, 1)
+                                Write-Host "`r  ⏳ 下载镜像: ${dlMB}MB / ${totMB}MB (${pct}%)" -NoNewline -ForegroundColor Cyan
+                                $sw.Restart()
+                            }
+                        }
+                        Write-Host ""
+                        $fileStream.Close()
+                        $stream.Close()
+                        $response.Close()
+                        $downloadOK = $true
+                    }
+
+                    if ($downloadOK) {
+                        Write-OK "镜像下载完成"
+                        Write-Info "正在加载镜像到 Docker..."
+                        & docker load -i $imageTar 2>&1 | ForEach-Object {
+                            Write-Log "docker load: $_"
+                            if ($_ -match "Loaded image") {
+                                Write-Host "  $_" -ForegroundColor DarkGray
+                            }
+                        }
+                        if ($LASTEXITCODE -eq 0) {
+                            $imageReady = $true
+                            Write-OK "预构建镜像加载完成"
+                            # Tag as openclaw-pro if loaded with different name
+                            & docker tag openclaw-pro:latest openclaw-pro:latest 2>$null
+                        } else {
+                            Write-Warn "docker load 失败，将尝试本地构建"
+                        }
+                        Remove-Item $imageTar -Force -ErrorAction SilentlyContinue
+                    }
+                } else {
+                    Write-Log "No image asset found in release"
                 }
-                if ($LASTEXITCODE -eq 0) {
-                    $buildOK = $true
-                    # Restore original Dockerfile after successful build
+            } catch {
+                Write-Log "Pre-built image download failed: $_"
+                Write-Info "未找到预构建镜像，将本地构建"
+            }
+
+            # ── 尝试 2: 本地构建 (fallback) ──
+            if (-not $imageReady) {
+                Write-Info "正在本地构建镜像...（首次约需 5-10 分钟）"
+                $buildOK = $false
+                $dockerfilePath = Join-Path $localDeployDir "Dockerfile"
+                $originalDockerfile = Get-Content $dockerfilePath -Raw
+                $mirrorPrefixes = @(
+                    $null,                                    # direct (Docker Hub)
+                    "docker.m.daocloud.io/library/",          # DaoCloud
+                    "dockerhub.icu/library/",                 # dockerhub.icu
+                    "docker.1panel.live/library/"              # 1Panel
+                )
+
+                foreach ($prefix in $mirrorPrefixes) {
                     if ($prefix) {
-                        $originalDockerfile | Set-Content $dockerfilePath -Force -NoNewline
-                        Write-Log "Restored original Dockerfile after mirror build"
+                        Write-Warn "Docker Hub 连接失败，尝试镜像源: $prefix"
+                        $mirroredContent = $originalDockerfile -replace '^FROM ubuntu:', "FROM ${prefix}ubuntu:"
+                        $mirroredContent | Set-Content $dockerfilePath -Force -NoNewline
+                        Write-Info "已修改 Dockerfile 使用镜像源"
                     }
-                    break
-                }
-            }
 
-            # Always restore original Dockerfile
-            if (-not $buildOK) {
-                $originalDockerfile | Set-Content $dockerfilePath -Force -NoNewline
-                throw "docker build failed — 无法拉取基础镜像。请检查网络连接，或手动配置 Docker 镜像加速。"
+                    & docker build --no-cache -t openclaw-pro . 2>&1 | ForEach-Object {
+                        if ($_ -match "^#\d+ \[" -or $_ -match "^Step " -or $_ -match "Successfully") {
+                            Write-Host "  $_" -ForegroundColor DarkGray
+                        }
+                        Write-Log "docker build: $_"
+                    }
+                    if ($LASTEXITCODE -eq 0) {
+                        $buildOK = $true
+                        if ($prefix) {
+                            $originalDockerfile | Set-Content $dockerfilePath -Force -NoNewline
+                        }
+                        break
+                    }
+                }
+
+                if (-not $buildOK) {
+                    $originalDockerfile | Set-Content $dockerfilePath -Force -NoNewline
+                    throw "docker build failed — 无法拉取基础镜像。请检查网络连接，或手动配置 Docker 镜像加速。"
+                }
+                $imageReady = $true
             }
-            Write-OK "镜像构建完成"
+            Write-OK "镜像准备完成"
 
             # Check if container exists
             $existing = & docker ps -a --filter "name=openclaw-pro" --format "{{.Names}}" 2>&1

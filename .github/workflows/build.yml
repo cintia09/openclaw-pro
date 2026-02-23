@@ -1,10 +1,9 @@
-name: Build & Push Docker Image
+name: Build & Release Docker Image
 
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    tags: ['v*']          # 只在打 tag (如 v1.0.0) 时构建
+  workflow_dispatch:       # 也支持手动触发
 
 env:
   REGISTRY: ghcr.io
@@ -14,25 +13,63 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write      # 需要 write 权限上传 Release
       packages: write
 
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Log in to GHCR
-        if: github.event_name == 'push'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
-        uses: docker/build-push-action@v5
+      # 构建镜像
+      - name: Build Docker image
+        run: docker build -t openclaw-pro:latest .
+
+      # 推送到 GHCR (可选，给有条件访问的用户)
+      - name: Tag and push to GHCR
+        run: |
+          docker tag openclaw-pro:latest ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          docker tag openclaw-pro:latest ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+
+      # 导出镜像为 tar.gz (用户直接下载，无需 Docker Hub/GHCR)
+      - name: Export image as tar.gz
+        run: |
+          docker save openclaw-pro:latest | gzip > openclaw-pro-image.tar.gz
+          ls -lh openclaw-pro-image.tar.gz
+          sha256sum openclaw-pro-image.tar.gz > openclaw-pro-image.tar.gz.sha256
+
+      # 上传到 GitHub Release
+      - name: Create Release and upload image
+        uses: softprops/action-gh-release@v2
         with:
-          context: .
-          push: ${{ github.event_name == 'push' }}
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          name: OpenClaw Pro ${{ github.ref_name }}
+          body: |
+            ## OpenClaw Pro Docker 镜像
+
+            ### 一键安装 (Windows)
+            ```powershell
+            irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1 | iex
+            ```
+
+            ### 一键安装 (Linux/macOS)
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.sh | bash
+            ```
+
+            ### 手动安装
+            1. 下载 `openclaw-pro-image.tar.gz`
+            2. `docker load < openclaw-pro-image.tar.gz`
+            3. `docker run -d --name openclaw-pro -p 18789:18789 -p 3000:3000 -v ./home-data:/root --restart unless-stopped openclaw-pro:latest`
+          files: |
+            openclaw-pro-image.tar.gz
+            openclaw-pro-image.tar.gz.sha256
