@@ -1080,20 +1080,113 @@ function Main {
         Write-Info "Docker Desktop 模式：在本地部署..."
 
         $localDeployDir = Join-Path (Get-Location) "openclaw-pro"
-        if (-not (Test-Path "$localDeployDir\.git")) {
-            Write-Info "正在克隆仓库到 $localDeployDir ..."
-            try {
-                & git clone https://github.com/cintia09/openclaw-pro.git "$localDeployDir" 2>&1
-                if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
-                Write-OK "仓库克隆完成"
-            } catch {
-                Write-Err "克隆仓库失败: $_"
-                Write-Suggestion "请手动运行: git clone https://github.com/cintia09/openclaw-pro.git openclaw-pro"
-                Read-Host "按回车退出"
-                exit 1
+        if (-not (Test-Path "$localDeployDir\Dockerfile")) {
+            Write-Info "正在下载部署包到 $localDeployDir ..."
+
+            # Prefer git if available, otherwise download ZIP from GitHub
+            $hasGit = $null -ne (Get-Command git -ErrorAction SilentlyContinue)
+
+            if ($hasGit) {
+                Write-Info "使用 git clone 下载..."
+                try {
+                    & git clone https://github.com/cintia09/openclaw-pro.git "$localDeployDir" 2>&1
+                    if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
+                    Write-OK "仓库克隆完成"
+                } catch {
+                    Write-Warn "git clone 失败，尝试 ZIP 下载..."
+                    $hasGit = $false
+                }
+            }
+
+            if (-not $hasGit) {
+                # Download ZIP archive from GitHub (no git required)
+                $zipUrl = "https://github.com/cintia09/openclaw-pro/archive/refs/heads/main.zip"
+                $zipFile = Join-Path $env:TEMP "openclaw-pro.zip"
+
+                try {
+                    Write-Info "正在下载 ZIP 包..."
+                    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+                    # Show download progress
+                    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+                    $spinner = @("⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏")
+                    $sidx = 0
+
+                    # Use WebClient for progress (Invoke-WebRequest is slow with large files)
+                    $wc = New-Object System.Net.WebClient
+                    $downloadComplete = $false
+                    $downloadError = $null
+
+                    Register-ObjectEvent -InputObject $wc -EventName DownloadProgressChanged -Action {
+                        $pct = $Event.SourceArgs.ProgressPercentage
+                        $received = [math]::Round($Event.SourceArgs.BytesReceived / 1MB, 1)
+                        $total = [math]::Round($Event.SourceArgs.TotalBytesToReceive / 1MB, 1)
+                        Write-Host "`r  📥 下载中: ${received}MB / ${total}MB ($pct%)" -NoNewline -ForegroundColor Cyan
+                    } | Out-Null
+
+                    Register-ObjectEvent -InputObject $wc -EventName DownloadFileCompleted -Action {
+                        $script:downloadComplete = $true
+                        if ($Event.SourceArgs.Error) {
+                            $script:downloadError = $Event.SourceArgs.Error.Message
+                        }
+                    } | Out-Null
+
+                    $wc.DownloadFileAsync([Uri]$zipUrl, $zipFile)
+
+                    while (-not $downloadComplete) {
+                        $elapsed = $sw.Elapsed.ToString("mm\:ss")
+                        $frame = $spinner[$sidx % $spinner.Count]
+                        Write-Host "`r  $frame 下载中... ($elapsed)" -NoNewline -ForegroundColor Yellow
+                        Start-Sleep -Milliseconds 200
+                        $sidx++
+                    }
+                    $wc.Dispose()
+                    Write-Host "`r$(' ' * 70)`r" -NoNewline
+
+                    if ($downloadError) {
+                        throw $downloadError
+                    }
+
+                    $zipSize = [math]::Round((Get-Item $zipFile).Length / 1MB, 1)
+                    Write-OK "下载完成 (${zipSize}MB)"
+
+                    # Extract ZIP
+                    Write-Info "正在解压..."
+                    if (Test-Path $localDeployDir) {
+                        Remove-Item $localDeployDir -Recurse -Force
+                    }
+                    Expand-Archive -Path $zipFile -DestinationPath $env:TEMP -Force
+
+                    # GitHub ZIP extracts to openclaw-pro-main/
+                    $extractedDir = Join-Path $env:TEMP "openclaw-pro-main"
+                    if (Test-Path $extractedDir) {
+                        Move-Item $extractedDir $localDeployDir -Force
+                    } else {
+                        # Try finding the extracted folder
+                        $found = Get-ChildItem $env:TEMP -Directory -Filter "openclaw-pro-*" | Select-Object -First 1
+                        if ($found) {
+                            Move-Item $found.FullName $localDeployDir -Force
+                        } else {
+                            throw "解压后未找到部署目录"
+                        }
+                    }
+
+                    Write-OK "解压完成"
+                    Remove-Item $zipFile -Force -ErrorAction SilentlyContinue
+                } catch {
+                    Write-Err "下载失败: $_"
+                    Write-Host ""
+                    Write-Host "  💡 请手动下载并解压:" -ForegroundColor Cyan
+                    Write-Host "     1. 浏览器打开: https://github.com/cintia09/openclaw-pro/archive/refs/heads/main.zip" -ForegroundColor White
+                    Write-Host "     2. 解压到当前目录，重命名为 openclaw-pro" -ForegroundColor White
+                    Write-Host "     3. 重新运行此脚本" -ForegroundColor White
+                    Write-Host ""
+                    Read-Host "按回车退出"
+                    exit 1
+                }
             }
         } else {
-            Write-OK "仓库已存在，跳过克隆"
+            Write-OK "部署包已存在，跳过下载"
         }
 
         # Build and run with Docker
