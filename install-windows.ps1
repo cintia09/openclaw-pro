@@ -1490,9 +1490,10 @@ function Show-Completion {
     )
 
     Write-Host ""
+    $completionTitle = if ($script:upgradeMode) { "升级完成" } else { "安装完成" }
     if ($DeployLaunched) {
         Write-Host "  ══════════════════════════════════════════════════" -ForegroundColor Green
-        Write-Host "                🎉  安装完成！" -ForegroundColor Green
+        Write-Host "                🎉  $completionTitle！" -ForegroundColor Green
         Write-Host "  ══════════════════════════════════════════════════" -ForegroundColor Green
     } else {
         Write-Host "  ══════════════════════════════════════════════════" -ForegroundColor Yellow
@@ -2374,6 +2375,7 @@ function Main {
 
         # ── 检测已有容器 ──
         $containerName = "openclaw-pro"   # 默认容器名
+        $script:upgradeMode = $false
 
         # 查找所有 openclaw-pro* 容器
         $existingContainers = & docker ps -a --filter "name=openclaw-pro" --format "{{.Names}}|{{.Status}}|{{.Ports}}" 2>&1
@@ -2409,10 +2411,12 @@ function Main {
             Write-Host ""
             Write-Host "  请选择操作:" -ForegroundColor White
             Write-Host "     [1] 保留旧容器，新建一个实例（使用不同端口）" -ForegroundColor Gray
-            Write-Host "     [2] 停止旧容器，重新配置（替换）" -ForegroundColor Gray
+            Write-Host "     [2] 升级/替换旧容器（保留原有配置和数据）" -ForegroundColor Gray
+            Write-Host "     [3] 停止旧容器，重新配置（全部重新设置）" -ForegroundColor Gray
             Write-Host ""
             Write-Host "  输入选择 [2]: " -NoNewline -ForegroundColor White
             $choice = (Read-Host).Trim()
+            if (-not $choice) { $choice = '2' }
 
             if ($choice -eq '1') {
                 # 保留旧容器，生成新容器名和独立数据目录
@@ -2433,8 +2437,107 @@ function Main {
                     }
                 }
                 Write-Info "将创建新容器: $containerName（数据目录: home-data-$idx，与代码目录平级）"
+            } elseif ($choice -eq '2') {
+                # ── 升级模式：读取旧容器对应的配置，删除旧容器后复用相同配置 ──
+                $upgradeContainerName = ""
+                if ($runningContainers.Count -eq 1) {
+                    $upgradeContainerName = ($runningContainers[0] -split '\|')[0]
+                } else {
+                    Write-Host ""
+                    Write-Host "  请选择要升级的容器:" -ForegroundColor Cyan
+                    for ($i = 0; $i -lt $runningContainers.Count; $i++) {
+                        $parts = $runningContainers[$i] -split '\|'
+                        Write-Host "     [$($i + 1)] $($parts[0])  (状态: $($parts[1])  端口: $($parts[2]))" -ForegroundColor White
+                    }
+                    Write-Host ""
+                    Write-Host "  输入选择 [默认1]: " -NoNewline -ForegroundColor White
+                    $upChoice = (Read-Host).Trim()
+                    if ($upChoice -match '^\d+$' -and [int]$upChoice -ge 1 -and [int]$upChoice -le $runningContainers.Count) {
+                        $upgradeContainerName = ($runningContainers[[int]$upChoice - 1] -split '\|')[0]
+                    } else {
+                        $upgradeContainerName = ($runningContainers[0] -split '\|')[0]
+                    }
+                }
+                $containerName = $upgradeContainerName
+
+                # 读取旧容器的配置
+                $upgradeHomeDataName = "home-data"
+                if ($containerName -match '^openclaw-pro-(\d+)$') {
+                    $upgradeHomeDataName = "home-data-$($Matches[1])"
+                }
+                $upgradeConfigFile = Join-Path $homeBaseDir "$upgradeHomeDataName\.openclaw\docker-config.json"
+                $upgradeConfig = $null
+                if (Test-Path $upgradeConfigFile) {
+                    try {
+                        $upgradeConfig = Get-Content $upgradeConfigFile -Raw | ConvertFrom-Json
+                        Write-OK "读取到旧容器配置"
+                    } catch {
+                        Write-Warn "读取旧配置失败，将重新配置"
+                    }
+                }
+
+                if ($upgradeConfig) {
+                    # 显示旧配置让用户确认
+                    Write-Host ""
+                    Write-Host "  📋 当前配置（将沿用）:" -ForegroundColor Cyan
+                    if ($upgradeConfig.domain) {
+                        $isIpDom = ($upgradeConfig.domain -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')
+                        if ($isIpDom) {
+                            Write-Host "     IP: $($upgradeConfig.domain) (自签名 HTTPS)" -ForegroundColor White
+                        } else {
+                            Write-Host "     域名: $($upgradeConfig.domain)" -ForegroundColor White
+                        }
+                        Write-Host "     证书: $(if ($upgradeConfig.cert_mode -eq 'internal') { '自签证书' } else { 'Let''s Encrypt' })" -ForegroundColor White
+                        Write-Host "     HTTP: $($upgradeConfig.http_port)  HTTPS: $($upgradeConfig.https_port)" -ForegroundColor White
+                    } else {
+                        Write-Host "     Gateway 端口: $($upgradeConfig.port)" -ForegroundColor White
+                        Write-Host "     Web面板端口: $($upgradeConfig.web_port)" -ForegroundColor White
+                    }
+                    Write-Host "     数据目录: $(Join-Path $homeBaseDir $upgradeHomeDataName)" -ForegroundColor White
+                    Write-Host ""
+
+                    # 构建 $deployConfig 复用旧配置
+                    $script:upgradeMode = $true
+                    $deployConfig = @{
+                        GatewayPort  = if ($upgradeConfig.port) { [int]$upgradeConfig.port } else { [int]$OPENCLAW_PORT }
+                        WebPort      = if ($upgradeConfig.web_port) { [int]$upgradeConfig.web_port } else { [int]$WEB_PANEL_PORT }
+                        HttpPort     = if ($upgradeConfig.http_port) { [int]$upgradeConfig.http_port } else { 0 }
+                        HttpsPort    = if ($upgradeConfig.https_port) { [int]$upgradeConfig.https_port } else { 0 }
+                        CertMode     = if ($upgradeConfig.cert_mode) { $upgradeConfig.cert_mode } else { "letsencrypt" }
+                        Domain       = if ($upgradeConfig.domain) { $upgradeConfig.domain } else { "" }
+                        PortArgs     = @()
+                        AutoOpenFirewall = $true
+                        HttpsEnabled = [bool]$upgradeConfig.domain
+                    }
+                    if ($deployConfig.HttpsEnabled) {
+                        $deployConfig.PortArgs = @(
+                            "-p", "$($deployConfig.HttpPort):80",
+                            "-p", "$($deployConfig.HttpsPort):443"
+                        )
+                    } else {
+                        $deployConfig.PortArgs = @(
+                            "-p", "$($deployConfig.GatewayPort):18789",
+                            "-p", "$($deployConfig.WebPort):3000"
+                        )
+                    }
+
+                    $script:actualGatewayPort = $deployConfig.GatewayPort
+                    $script:actualPanelPort   = $deployConfig.WebPort
+                    $script:deployDomain      = $deployConfig.Domain
+                    $script:certMode          = $deployConfig.CertMode
+                    $script:httpPort          = $deployConfig.HttpPort
+                    $script:httpsPort         = $deployConfig.HttpsPort
+                    $script:autoOpenFirewall  = $deployConfig.AutoOpenFirewall
+                }
+
+                # 停止并删除旧容器
+                Write-Info "停止并删除: $containerName"
+                & docker rm -f $containerName 2>&1 | Out-Null
+                Start-Sleep -Seconds 2
+                Write-OK "旧容器已删除"
+                Write-Info "💡 数据目录 (home-data) 不会被删除，原有配置和数据均保留"
             } else {
-                # 删除旧容器 — 让用户选择删除哪些
+                # [3] 重新配置 — 原有的删除逻辑
                 if ($runningContainers.Count -eq 1) {
                     # 只有一个，直接删除
                     $rcName = ($runningContainers[0] -split '\|')[0]
@@ -2480,15 +2583,19 @@ function Main {
 
         if (-not $launched) {
 
-        # Interactive port/domain configuration
-        $deployConfig = Get-DeployConfig
-        $script:actualGatewayPort = $deployConfig.GatewayPort
-        $script:actualPanelPort   = $deployConfig.WebPort
-        $script:deployDomain      = $deployConfig.Domain
-        $script:certMode          = $deployConfig.CertMode
-        $script:httpPort          = $deployConfig.HttpPort
-        $script:httpsPort         = $deployConfig.HttpsPort
-        $script:autoOpenFirewall  = $deployConfig.AutoOpenFirewall
+        # Interactive port/domain configuration (upgrade mode skips this)
+        if ($script:upgradeMode -and $deployConfig) {
+            Write-OK "升级模式：沿用旧容器配置，跳过端口/域名配置"
+        } else {
+            $deployConfig = Get-DeployConfig
+            $script:actualGatewayPort = $deployConfig.GatewayPort
+            $script:actualPanelPort   = $deployConfig.WebPort
+            $script:deployDomain      = $deployConfig.Domain
+            $script:certMode          = $deployConfig.CertMode
+            $script:httpPort          = $deployConfig.HttpPort
+            $script:httpsPort         = $deployConfig.HttpsPort
+            $script:autoOpenFirewall  = $deployConfig.AutoOpenFirewall
+        }
 
         Write-Info "正在准备镜像..."
         try {
