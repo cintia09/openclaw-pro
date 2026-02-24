@@ -24,7 +24,7 @@ param(
 )
 
 # ─── Constants ────────────────────────────────────────────────────────────────
-$SCRIPT_VERSION  = "1.0.0"
+$SCRIPT_VERSION  = "1.0.1"
 $TASK_NAME       = "OpenClawSetup"
 $UBUNTU_DISTRO   = "Ubuntu-24.04"
 $OPENCLAW_PORT   = "18789"
