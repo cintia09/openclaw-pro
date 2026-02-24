@@ -1239,22 +1239,36 @@ function Get-DeployConfig {
     $domain = (Read-Host).Trim()
 
     if ($domain -and $domain -match '^[a-zA-Z0-9]([a-zA-Z0-9.\-]*[a-zA-Z0-9])?$') {
-        $config.Domain = $domain
-        $config.HttpsEnabled = $true
+        # 检测输入是否为 IP 地址
+        $isIpAddress = ($domain -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')
 
-        Write-Host ""
-        Write-Host "  🔐 证书模式:" -ForegroundColor White
-        Write-Host "     [1] Let's Encrypt 公网证书（默认，需公网DNS+80/443可达）" -ForegroundColor Gray
-        Write-Host "     [2] 自签证书（Caddy Internal，适合局域网测试）" -ForegroundColor Gray
-        Write-Host ""
-        Write-Host "  请选择证书模式 [1/2，默认1]: " -NoNewline -ForegroundColor White
-        $certChoice = (Read-Host).Trim()
-        if ($certChoice -eq '2') {
+        if ($isIpAddress) {
+            # IP 地址只能使用自签证书
+            $config.Domain = $domain
+            $config.HttpsEnabled = $true
             $config.CertMode = "internal"
-            Write-Info "已选择自签证书模式（Caddy Internal）"
+            Write-Host ""
+            Write-Host "  🔐 检测到 IP 地址，将使用自签证书 HTTPS 模式" -ForegroundColor Yellow
+            Write-Host "     访问时浏览器会提示「不安全」，点击「继续访问」即可正常使用" -ForegroundColor DarkGray
+            Write-Host "     如需受信任的证书，请使用域名并选择 Let's Encrypt" -ForegroundColor DarkGray
         } else {
-            $config.CertMode = "letsencrypt"
-            Write-Info "已选择 Let's Encrypt 公网证书模式"
+            $config.Domain = $domain
+            $config.HttpsEnabled = $true
+
+            Write-Host ""
+            Write-Host "  🔐 证书模式:" -ForegroundColor White
+            Write-Host "     [1] Let's Encrypt 公网证书（默认，需公网DNS+80/443可达）" -ForegroundColor Gray
+            Write-Host "     [2] 自签证书（Caddy Internal，适合局域网测试）" -ForegroundColor Gray
+            Write-Host ""
+            Write-Host "  请选择证书模式 [1/2，默认1]: " -NoNewline -ForegroundColor White
+            $certChoice = (Read-Host).Trim()
+            if ($certChoice -eq '2') {
+                $config.CertMode = "internal"
+                Write-Info "已选择自签证书模式（Caddy Internal）"
+            } else {
+                $config.CertMode = "letsencrypt"
+                Write-Info "已选择 Let's Encrypt 公网证书模式"
+            }
         }
 
         # HTTP 端口 (ACME 验证 + 跳转HTTPS)
@@ -1287,6 +1301,53 @@ function Get-DeployConfig {
     } elseif ($domain) {
         Write-Warn "域名格式无效，将使用 HTTP 直连模式"
         $config.Domain = ""
+    } else {
+        # 域名为空 — 提供 IP 自签名 HTTPS 选项
+        Write-Host ""
+        Write-Host "  🔒 是否启用 HTTPS（自签证书 + 本机 IP）？" -ForegroundColor White
+        Write-Host "     无需域名，Caddy 自动为本机 IP 生成自签名证书" -ForegroundColor DarkGray
+        Write-Host "     浏览器会提示「不安全」，点击「继续访问」即可" -ForegroundColor DarkGray
+        Write-Host ""
+        Write-Host "     [1] 不需要，使用 HTTP 直连（默认）" -ForegroundColor Gray
+        Write-Host "     [2] 启用 IP 自签名 HTTPS" -ForegroundColor Gray
+        Write-Host ""
+        Write-Host "  输入选择 [1/2，默认1]: " -NoNewline -ForegroundColor White
+        $ipHttpsChoice = (Read-Host).Trim()
+        if ($ipHttpsChoice -eq '2') {
+            # 获取本机 IP
+            $localIp = ""
+            try {
+                $localIp = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.PrefixOrigin -ne 'WellKnown' -and $_.IPAddress -ne '127.0.0.1' } | Select-Object -First 1).IPAddress
+            } catch { }
+            if (-not $localIp) {
+                try {
+                    $localIp = ([System.Net.Dns]::GetHostAddresses([System.Net.Dns]::GetHostName()) | Where-Object { $_.AddressFamily -eq 'InterNetwork' -and $_.ToString() -ne '127.0.0.1' } | Select-Object -First 1).ToString()
+                } catch { }
+            }
+            if ($localIp) {
+                Write-Host "  检测到本机 IP: $localIp" -ForegroundColor Cyan
+                Write-Host "  使用此 IP？按回车确认，或输入其他 IP: " -NoNewline -ForegroundColor White
+                $customIp = (Read-Host).Trim()
+                if ($customIp -and $customIp -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') {
+                    $localIp = $customIp
+                }
+                $config.Domain = $localIp
+                $config.HttpsEnabled = $true
+                $config.CertMode = "internal"
+                Write-OK "已启用 IP 自签名 HTTPS: $localIp"
+            } else {
+                Write-Host "  请输入本机 IP 地址: " -NoNewline -ForegroundColor White
+                $manualIp = (Read-Host).Trim()
+                if ($manualIp -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') {
+                    $config.Domain = $manualIp
+                    $config.HttpsEnabled = $true
+                    $config.CertMode = "internal"
+                    Write-OK "已启用 IP 自签名 HTTPS: $manualIp"
+                } else {
+                    Write-Warn "IP 格式无效，将使用 HTTP 直连模式"
+                }
+            }
+        }
     }
 
     if (-not $config.HttpsEnabled) {
@@ -1316,7 +1377,13 @@ function Get-DeployConfig {
             Write-Host "     证书: Let's Encrypt 公网证书" -ForegroundColor Gray
         }
         Write-Host "     Gateway/Web 面板: 仅容器内部访问（不占宿主机端口）" -ForegroundColor Gray
-        Write-Host "     域名: $($config.Domain)" -ForegroundColor Cyan
+        $isIpDomain = ($config.Domain -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')
+        if ($isIpDomain) {
+            Write-Host "     IP: $($config.Domain) (自签名 HTTPS)" -ForegroundColor Cyan
+            Write-Host "     ⚠️  浏览器会提示不安全，点击「继续访问」即可" -ForegroundColor Yellow
+        } else {
+            Write-Host "     域名: $($config.Domain)" -ForegroundColor Cyan
+        }
     } else {
         Write-Host "     Gateway $($config.GatewayPort) → 容器 18789" -ForegroundColor Gray
         Write-Host "     Web面板 $($config.WebPort) → 容器 3000" -ForegroundColor Gray
@@ -1398,7 +1465,7 @@ function Show-Completion {
             Write-Host "     HTTPS  ${HttpsPort} → 主入口（Caddy 反代）" -ForegroundColor Gray
             if ($CertMode -eq "internal") {
                 Write-Host "     证书模式: 自签证书（局域网测试）" -ForegroundColor Yellow
-                Write-Host "     ⚠️ 首次访问可能提示不受信任，需在客户端信任证书" -ForegroundColor Yellow
+                Write-Host "     ⚠️ 首次访问浏览器会提示「不安全」，点击「继续访问」/「高级」即可" -ForegroundColor Yellow
             } else {
                 Write-Host "     证书模式: Let's Encrypt 公网证书" -ForegroundColor Gray
             }

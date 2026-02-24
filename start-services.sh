@@ -101,6 +101,14 @@ if [ -f "$CONFIG_FILE" ]; then
     if [ -n "$DOMAIN" ]; then
         echo "[start-services] HTTPS domain configured: $DOMAIN"
         echo "[start-services] Certificate mode: $CERT_MODE"
+
+        # IP 地址需要加 https:// 前缀，Caddy 才会为其启用 HTTPS
+        if echo "$DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+            DOMAIN="https://$DOMAIN"
+            CERT_MODE="internal"  # IP 地址只能使用自签证书
+            echo "[start-services] IP address detected, using https:// prefix"
+        fi
+
         export DOMAIN
         if [ "$CERT_MODE" = "internal" ]; then
             TLS_BLOCK="tls internal"
