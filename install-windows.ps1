@@ -1647,37 +1647,137 @@ function Main {
         Write-Info "Docker Desktop 模式：在本地部署..."
 
         $localDeployDir = Join-Path (Get-Location) "openclaw-pro"
-        if (-not (Test-Path "$localDeployDir\Dockerfile")) {
+        $latestReleaseTag = ""
+        $latestReleaseInfo = $null
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $releaseApi = "https://api.github.com/repos/$GITHUB_REPO/releases/latest"
+            $latestReleaseInfo = Invoke-RestMethod -Uri $releaseApi -TimeoutSec 10 -ErrorAction Stop
+            $latestReleaseTag = ($latestReleaseInfo.tag_name | ForEach-Object { "$_" }).Trim()
+            if ($latestReleaseTag) {
+                Write-Info "远端最新 Release: $latestReleaseTag"
+                $latestVer = $latestReleaseTag.TrimStart('v','V')
+                if ($latestVer -and $latestVer -ne $SCRIPT_VERSION) {
+                    Write-Warn "当前脚本版本 v$SCRIPT_VERSION 与最新 Release $latestReleaseTag 不一致（可能命中缓存旧脚本）"
+                }
+            }
+        } catch {
+            Write-Log "Fetch latest release failed: $_"
+        }
+
+        $needDeployPackageDownload = -not (Test-Path "$localDeployDir\Dockerfile")
+        if (-not $needDeployPackageDownload) {
+            $localDeployVersion = ""
+            if (Test-Path "$localDeployDir\.git") {
+                try {
+                    $localDeployVersion = (& git -C $localDeployDir describe --tags --abbrev=0 2>$null | Select-Object -First 1)
+                } catch { }
+            }
+            if (-not $localDeployVersion -and (Test-Path "$localDeployDir\.release-version")) {
+                try {
+                    $localDeployVersion = (Get-Content "$localDeployDir\.release-version" -ErrorAction SilentlyContinue | Select-Object -First 1)
+                } catch { }
+            }
+
+            Write-OK "检测到本地部署包"
+            if ($localDeployVersion) {
+                Write-Info "本地部署包版本: $localDeployVersion"
+            }
+
+            if ($latestReleaseTag -and $localDeployVersion -and $localDeployVersion -eq $latestReleaseTag) {
+                Write-Host "" 
+                Write-Host "  本地部署包与远端版本一致 ($latestReleaseTag)" -ForegroundColor Green
+                Write-Host "  请选择部署包策略:" -ForegroundColor Cyan
+                Write-Host "     [1] 使用本地部署包（默认）" -ForegroundColor White
+                Write-Host "     [2] 重新更新部署包" -ForegroundColor White
+                Write-Host "" 
+                Write-Host "  输入选择 [1/2，默认1]: " -NoNewline -ForegroundColor White
+                $deployChoice = (Read-Host).Trim()
+                if ($deployChoice -eq '2') {
+                    $needDeployPackageDownload = $true
+                    Write-Info "已选择更新部署包"
+                }
+            } else {
+                Write-Host "" 
+                Write-Host "  发现部署包版本可能落后" -ForegroundColor Yellow
+                if ($latestReleaseTag) {
+                    Write-Host "     远端最新: $latestReleaseTag" -ForegroundColor DarkGray
+                }
+                if ($localDeployVersion) {
+                    Write-Host "     本地版本: $localDeployVersion" -ForegroundColor DarkGray
+                }
+                Write-Host "  请选择部署包策略:" -ForegroundColor Cyan
+                Write-Host "     [1] 使用本地部署包" -ForegroundColor White
+                Write-Host "     [2] 更新到最新部署包（默认）" -ForegroundColor White
+                Write-Host "" 
+                Write-Host "  输入选择 [1/2，默认2]: " -NoNewline -ForegroundColor White
+                $deployChoice = (Read-Host).Trim()
+                if ($deployChoice -ne '1') {
+                    $needDeployPackageDownload = $true
+                    Write-Info "已选择更新部署包"
+                }
+            }
+        }
+
+        if ($needDeployPackageDownload) {
             Write-Info "正在下载部署包到 $localDeployDir ..."
 
             # Prefer git if available, otherwise download ZIP from GitHub
             $hasGit = $null -ne (Get-Command git -ErrorAction SilentlyContinue)
 
             if ($hasGit) {
-                Write-Info "使用 git clone 下载..."
-                try {
-                    # Clone with tags so we can checkout the latest release
-                    & git clone --depth 1 https://github.com/cintia09/openclaw-pro.git "$localDeployDir" 2>&1
-                    if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
-                    # Try to switch to latest release tag
+                if (Test-Path "$localDeployDir\.git") {
+                    Write-Info "检测到本地 git 仓库，正在更新..."
                     try {
                         Push-Location $localDeployDir
-                        & git fetch --tags --depth 1 2>&1 | Out-Null
-                        $latestTag = & git tag --sort=-v:refname 2>$null | Select-Object -First 1
+                        & git fetch --tags --depth 1 origin 2>&1 | Out-Null
+                        $latestTag = if ($latestReleaseTag) { $latestReleaseTag } else { (& git tag --sort=-v:refname 2>$null | Select-Object -First 1) }
                         if ($latestTag) {
                             & git checkout $latestTag 2>&1 | Out-Null
-                            Write-OK "仓库克隆完成 (Release: $latestTag)"
+                            Write-OK "仓库更新完成 (Release: $latestTag)"
                         } else {
-                            Write-OK "仓库克隆完成 (main 分支)"
+                            & git pull --ff-only 2>&1 | Out-Null
+                            Write-OK "仓库更新完成 (main 分支)"
+                        }
+                        if ($latestTag) {
+                            $latestTag | Set-Content (Join-Path $localDeployDir ".release-version") -Force
                         }
                         Pop-Location
                     } catch {
-                        Write-OK "仓库克隆完成 (main 分支)"
+                        Write-Warn "git 仓库更新失败，尝试 ZIP 下载..."
                         Pop-Location -ErrorAction SilentlyContinue
+                        $hasGit = $false
                     }
-                } catch {
-                    Write-Warn "git clone 失败，尝试 ZIP 下载..."
-                    $hasGit = $false
+                } else {
+                    Write-Info "使用 git clone 下载..."
+                    try {
+                        if (Test-Path $localDeployDir) {
+                            Remove-Item $localDeployDir -Recurse -Force
+                        }
+                        # Clone with tags so we can checkout the latest release
+                        & git clone --depth 1 https://github.com/cintia09/openclaw-pro.git "$localDeployDir" 2>&1
+                        if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
+                        # Try to switch to latest release tag
+                        try {
+                            Push-Location $localDeployDir
+                            & git fetch --tags --depth 1 2>&1 | Out-Null
+                            $latestTag = if ($latestReleaseTag) { $latestReleaseTag } else { (& git tag --sort=-v:refname 2>$null | Select-Object -First 1) }
+                            if ($latestTag) {
+                                & git checkout $latestTag 2>&1 | Out-Null
+                                $latestTag | Set-Content (Join-Path $localDeployDir ".release-version") -Force
+                                Write-OK "仓库克隆完成 (Release: $latestTag)"
+                            } else {
+                                Write-OK "仓库克隆完成 (main 分支)"
+                            }
+                            Pop-Location
+                        } catch {
+                            Write-OK "仓库克隆完成 (main 分支)"
+                            Pop-Location -ErrorAction SilentlyContinue
+                        }
+                    } catch {
+                        Write-Warn "git clone 失败，尝试 ZIP 下载..."
+                        $hasGit = $false
+                    }
                 }
             }
 
@@ -1841,8 +1941,15 @@ function Main {
                         exit 1
                     }
 
-                    # Extract ZIP
+                    # Extract ZIP（保留已有 home-data）
                     Write-Info "正在解压..."
+                    $backupHomeData = Join-Path $env:TEMP "openclaw-home-data-backup"
+                    if (Test-Path $backupHomeData) {
+                        Remove-Item $backupHomeData -Recurse -Force -ErrorAction SilentlyContinue
+                    }
+                    if (Test-Path "$localDeployDir\home-data") {
+                        Move-Item "$localDeployDir\home-data" $backupHomeData -Force
+                    }
                     if (Test-Path $localDeployDir) {
                         Remove-Item $localDeployDir -Recurse -Force
                     }
@@ -1866,6 +1973,12 @@ function Main {
                     }
                     if ($extractedDir) {
                         Move-Item $extractedDir $localDeployDir -Force
+                        if ($latestReleaseTag) {
+                            $latestReleaseTag | Set-Content (Join-Path $localDeployDir ".release-version") -Force
+                        }
+                        if (Test-Path $backupHomeData) {
+                            Move-Item $backupHomeData (Join-Path $localDeployDir "home-data") -Force
+                        }
                     } else {
                         throw "解压后未找到部署目录"
                     }
@@ -1885,7 +1998,7 @@ function Main {
                 }
             }
         } else {
-            Write-OK "部署包已存在，跳过下载"
+            Write-OK "已选择使用本地部署包，跳过更新"
         }
 
         # Build and run with Docker
@@ -1983,13 +2096,47 @@ function Main {
             $existingImage = & docker image inspect openclaw-pro 2>$null
             if ($LASTEXITCODE -eq 0) {
                 Write-OK "检测到本地镜像 openclaw-pro"
+                $localImageReleaseTag = ""
+                $imageTagFile = Join-Path $localDeployDir "home-data\.openclaw\image-release-tag.txt"
+                if (Test-Path $imageTagFile) {
+                    $localImageReleaseTag = (Get-Content $imageTagFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+                    if ($localImageReleaseTag) {
+                        Write-Info "本地镜像版本标记: $localImageReleaseTag"
+                    }
+                }
+
+                $effectiveLatestTag = $latestReleaseTag
+                if (-not $effectiveLatestTag) {
+                    try {
+                        $releaseApi = "https://api.github.com/repos/$GITHUB_REPO/releases/latest"
+                        $tmpReleaseInfo = Invoke-RestMethod -Uri $releaseApi -TimeoutSec 10 -ErrorAction Stop
+                        $effectiveLatestTag = ($tmpReleaseInfo.tag_name | ForEach-Object { "$_" }).Trim()
+                    } catch { }
+                }
+
                 Write-Host ""
                 Write-Host "  请选择镜像策略:" -ForegroundColor Cyan
-                Write-Host "     [1] 使用本地镜像（默认，最快）" -ForegroundColor White
-                Write-Host "     [2] 强制下载最新镜像（覆盖更新）" -ForegroundColor White
+                if ($effectiveLatestTag -and $localImageReleaseTag -and $effectiveLatestTag -eq $localImageReleaseTag) {
+                    Write-Host "     当前本地镜像与远端最新版本一致 ($effectiveLatestTag)" -ForegroundColor Green
+                    Write-Host "     [1] 使用本地镜像（默认，最快）" -ForegroundColor White
+                    Write-Host "     [2] 仍然强制下载最新镜像" -ForegroundColor White
+                } elseif ($effectiveLatestTag) {
+                    if ($localImageReleaseTag) {
+                        Write-Host "     远端最新: $effectiveLatestTag， 本地: $localImageReleaseTag" -ForegroundColor Yellow
+                    } else {
+                        Write-Host "     远端最新: $effectiveLatestTag， 本地版本未知" -ForegroundColor Yellow
+                    }
+                    Write-Host "     [1] 使用本地镜像" -ForegroundColor White
+                    Write-Host "     [2] 下载最新镜像（默认）" -ForegroundColor White
+                } else {
+                    Write-Host "     [1] 使用本地镜像（默认，最快）" -ForegroundColor White
+                    Write-Host "     [2] 强制下载最新镜像（覆盖更新）" -ForegroundColor White
+                }
                 Write-Host ""
-                Write-Host "  请输入选择 [1/2，默认1]: " -NoNewline -ForegroundColor White
+                $defaultImageChoice = if ($effectiveLatestTag -and ($localImageReleaseTag -ne $effectiveLatestTag)) { '2' } else { '1' }
+                Write-Host "  请输入选择 [1/2，默认$defaultImageChoice]: " -NoNewline -ForegroundColor White
                 $imageChoice = (Read-Host).Trim()
+                if (-not $imageChoice) { $imageChoice = $defaultImageChoice }
 
                 if ($imageChoice -eq '2') {
                     $forceRefreshImage = $true
@@ -2168,6 +2315,9 @@ function Main {
                 created    = (Get-Date -Format "o")
             } | ConvertTo-Json -Depth 2
             $dockerConfigJson | Set-Content (Join-Path $configDir "docker-config.json") -Force
+            if ($latestReleaseTag) {
+                $latestReleaseTag | Set-Content (Join-Path $configDir "image-release-tag.txt") -Force
+            }
             Write-Log "Wrote docker-config.json: domain=$($deployConfig.Domain)"
 
             # Build docker run arguments
