@@ -1771,7 +1771,15 @@ function Main {
         # Docker Desktop mode: clone repo locally and run with docker compose / docker run
         Write-Info "Docker Desktop 模式：在本地部署..."
 
-        $localDeployDir = Join-Path (Get-Location) "openclaw-pro"
+        # 检测当前目录是否已是部署目录（避免嵌套创建 openclaw-pro/openclaw-pro）
+        $currentDir = (Get-Location).Path
+        if ((Test-Path (Join-Path $currentDir "Dockerfile")) -and
+            (Test-Path (Join-Path $currentDir "start-services.sh"))) {
+            $localDeployDir = $currentDir
+            Write-Info "检测到当前目录即为部署目录，直接使用: $localDeployDir"
+        } else {
+            $localDeployDir = Join-Path $currentDir "openclaw-pro"
+        }
         $latestReleaseTag = ""
         $latestReleaseInfo = $null
         try {
@@ -2174,7 +2182,7 @@ function Main {
             $choice = (Read-Host).Trim()
 
             if ($choice -eq '1') {
-                # 保留旧容器，生成新容器名
+                # 保留旧容器，生成新容器名和独立数据目录
                 $idx = 2
                 while ($true) {
                     $candidate = "openclaw-pro-$idx"
@@ -2184,9 +2192,14 @@ function Main {
                         break
                     }
                     $idx++
-                    if ($idx -gt 20) { $containerName = "openclaw-pro-$(Get-Random -Maximum 999)"; break }
+                    if ($idx -gt 20) {
+                        $randId = Get-Random -Maximum 999
+                        $containerName = "openclaw-pro-$randId"
+                        $idx = $randId
+                        break
+                    }
                 }
-                Write-Info "将创建新容器: $containerName"
+                Write-Info "将创建新容器: $containerName（数据目录: home-data-$idx）"
             } else {
                 # 删除所有旧容器
                 foreach ($rc in $runningContainers) {
@@ -2510,8 +2523,16 @@ function Main {
                 Write-OK "端口冲突已处理，已更新端口映射"
             }
 
-            # Create home-data directory and write docker-config.json
-            $homeData = Join-Path $localDeployDir "home-data"
+            # Create home-data directory — 每个容器使用独立的数据目录
+            # openclaw-pro     → home-data
+            # openclaw-pro-2   → home-data-2
+            # openclaw-pro-N   → home-data-N
+            $homeDataName = "home-data"
+            if ($containerName -match '^openclaw-pro-(\d+)$') {
+                $homeDataName = "home-data-$($Matches[1])"
+                Write-Info "新容器 $containerName 使用独立数据目录: $homeDataName"
+            }
+            $homeData = Join-Path $localDeployDir $homeDataName
             if (-not (Test-Path $homeData)) {
                 New-Item -ItemType Directory -Path $homeData -Force | Out-Null
             }
