@@ -910,19 +910,67 @@ function Download-Robust {
     $totalMB = [math]::Round($ExpectedSize / 1MB, 1)
 
     # ── 进度文件：记录已完成的块号（支持跨次续传）──
+    # 格式: 第一行 "SIZE:<ExpectedSize>" 用于校验版本，后续每行一个块号
     $progressFile = "${OutFile}.progress"
     $completedSet = [System.Collections.Concurrent.ConcurrentDictionary[int,byte]]::new()
 
-    if (Test-Path $progressFile) {
-        Get-Content $progressFile -ErrorAction SilentlyContinue | ForEach-Object {
-            if ($_ -match '^\d+$') {
-                $completedSet.TryAdd([int]$_, [byte]1) | Out-Null
+    # ── Step 1: 检查文件是否需要（重新）预分配 ──
+    $needPrealloc = $false
+    if (-not (Test-Path $OutFile)) {
+        $needPrealloc = $true
+    } elseif ((Get-Item $OutFile).Length -ne $ExpectedSize) {
+        $needPrealloc = $true
+    }
+
+    # ── Step 2: 读取进度文件，校验是否匹配当前文件 ──
+    $progressValid = $false
+    if ((Test-Path $progressFile) -and -not $needPrealloc) {
+        $progressLines = Get-Content $progressFile -ErrorAction SilentlyContinue
+        $sizeMatch = $false
+        foreach ($line in $progressLines) {
+            if ($line -match '^SIZE:(\d+)$') {
+                if ([long]$Matches[1] -eq $ExpectedSize) { $sizeMatch = $true }
+                continue
+            }
+            if ($line -match '^\d+$') {
+                $completedSet.TryAdd([int]$line, [byte]1) | Out-Null
             }
         }
-        if ($completedSet.Count -gt 0) {
-            $doneMB = [math]::Round([math]::Min([long]$completedSet.Count * $chunkSize, $ExpectedSize) / 1MB, 1)
-            Write-Info "续传下载，已完成 $($completedSet.Count)/${totalChunks} 块 (${doneMB}MB / ${totalMB}MB)"
+        # 无 SIZE 头的旧进度文件也接受（向后兼容），但要求文件大小正确
+        if ($sizeMatch -or ($completedSet.Count -gt 0 -and -not ($progressLines | Where-Object { $_ -match '^SIZE:' }))) {
+            $progressValid = $true
+        } else {
+            # 进度文件来自不同版本（文件大小不匹配），作废
+            $completedSet.Clear()
         }
+    }
+
+    # ── Step 3: 需要预分配时，清空进度并告知用户 ──
+    if ($needPrealloc) {
+        if ((Test-Path $progressFile) -and $completedSet.Count -eq 0) {
+            # 尝试读取旧进度块数以便提示
+            $oldCount = (Get-Content $progressFile -ErrorAction SilentlyContinue | Where-Object { $_ -match '^\d+$' }).Count
+            if ($oldCount -gt 0) {
+                Write-Warn "目标文件已失效（被删除或版本变更），旧进度 ${oldCount} 块作废，将重新下载"
+            }
+        }
+        $completedSet.Clear()
+        if (Test-Path $progressFile) { Remove-Item $progressFile -Force -ErrorAction SilentlyContinue }
+        Write-Info "预分配 ${totalMB}MB 磁盘空间..."
+        $fs = [IO.File]::Create($OutFile)
+        $fs.SetLength($ExpectedSize)
+        $fs.Close()
+        # 写入 SIZE 头
+        "SIZE:$ExpectedSize" | Set-Content $progressFile -Force
+    } elseif (-not (Test-Path $progressFile)) {
+        # 文件存在且大小正确，但没有进度文件 → 创建带 SIZE 头的新进度文件
+        "SIZE:$ExpectedSize" | Set-Content $progressFile -Force
+    }
+
+    # 显示续传状态
+    if ($completedSet.Count -gt 0) {
+        $doneMB = [math]::Round([math]::Min([long]$completedSet.Count * $chunkSize, $ExpectedSize) / 1MB, 1)
+        Write-Info "续传下载，已完成 $($completedSet.Count)/${totalChunks} 块 (${doneMB}MB / ${totalMB}MB)"
     }
 
     # 全部完成 + 文件大小正确 → 跳过
@@ -932,17 +980,6 @@ function Download-Robust {
             Remove-Item $progressFile -Force -ErrorAction SilentlyContinue
             return $true
         }
-    }
-
-    # ── 预分配文件（允许多线程随机写入）──
-    if (-not (Test-Path $OutFile) -or (Get-Item $OutFile).Length -ne $ExpectedSize) {
-        Write-Info "预分配 ${totalMB}MB 磁盘空间..."
-        $fs = [IO.File]::Create($OutFile)
-        $fs.SetLength($ExpectedSize)
-        $fs.Close()
-        # 预分配时清空进度（文件内容已重置）
-        $completedSet.Clear()
-        if (Test-Path $progressFile) { Remove-Item $progressFile -Force -ErrorAction SilentlyContinue }
     }
 
     # ── 构建待下载块队列 ──
