@@ -8,9 +8,23 @@
 
 # ── DNS 保障：确保容器能解析外部域名 ──
 if ! nslookup github.com > /dev/null 2>&1; then
-    echo "[start-services] DNS resolution failed, adding public DNS fallback"
+    echo "[start-services] DNS resolution failed, trying public DNS..."
     echo "nameserver 8.8.8.8" > /etc/resolv.conf
     echo "nameserver 8.8.4.4" >> /etc/resolv.conf
+
+    # 如果 DNS 仍然不通（UDP 被阻断），写入 hosts 硬编码
+    if ! nslookup github.com > /dev/null 2>&1; then
+        echo "[start-services] DNS still broken, adding GitHub IPs to /etc/hosts"
+        grep -q "raw.githubusercontent.com" /etc/hosts 2>/dev/null || cat >> /etc/hosts << 'DNSEOF'
+# GitHub hosts fallback (DNS unavailable)
+185.199.108.133 raw.githubusercontent.com
+185.199.109.133 raw.githubusercontent.com
+185.199.110.133 raw.githubusercontent.com
+185.199.111.133 raw.githubusercontent.com
+140.82.114.3 github.com
+140.82.114.3 api.github.com
+DNSEOF
+    fi
 fi
 
 CONFIG_FILE="/root/.openclaw/docker-config.json"
