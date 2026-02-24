@@ -2536,6 +2536,7 @@ function Main {
                 Start-Sleep -Seconds 2
                 Write-OK "旧容器已删除"
                 Write-Info "💡 数据目录 (home-data) 不会被删除，原有配置和数据均保留"
+                Write-Info "   如需彻底删除数据，请手动删除目录: $(Join-Path $homeBaseDir $upgradeHomeDataName)"
             } else {
                 # [3] 重新配置 — 原有的删除逻辑
                 if ($runningContainers.Count -eq 1) {
@@ -2578,6 +2579,11 @@ function Main {
                 Start-Sleep -Seconds 2  # 等待端口释放
                 Write-OK "旧容器已删除"
                 Write-Info "💡 数据目录 (home-data) 不会被删除，原有配置和数据均保留"
+                $delHomeDataName = "home-data"
+                if ($containerName -match '^openclaw-pro-(\d+)$') {
+                    $delHomeDataName = "home-data-$($Matches[1])"
+                }
+                Write-Info "   如需彻底删除数据，请手动删除目录: $(Join-Path $homeBaseDir $delHomeDataName)"
             }
         }
 
