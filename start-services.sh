@@ -10,6 +10,42 @@ CONFIG_FILE="/root/.openclaw/docker-config.json"
 LOG_DIR="/root/.openclaw/logs"
 mkdir -p "$LOG_DIR" /root/.openclaw
 
+# ── 首次启动：补全被卷挂载覆盖的默认 shell 配置 ──
+for f in .bashrc .profile .bash_logout; do
+    if [ ! -f "/root/$f" ] && [ -f "/etc/skel/$f" ]; then
+        cp "/etc/skel/$f" "/root/$f"
+        echo "[start-services] Copied default $f to /root/"
+    fi
+done
+
+# ── SSH 持久化：host keys 和 sshd_config 保存到 /root/.openclaw/ssh/ ──
+SSH_PERSIST_DIR="/root/.openclaw/ssh"
+mkdir -p "$SSH_PERSIST_DIR"
+
+if [ -f "$SSH_PERSIST_DIR/sshd_config" ]; then
+    # 恢复持久化的 SSH 配置和 host keys
+    cp "$SSH_PERSIST_DIR"/ssh_host_* /etc/ssh/ 2>/dev/null
+    cp "$SSH_PERSIST_DIR/sshd_config" /etc/ssh/sshd_config
+    echo "[start-services] Restored SSH host keys and config from persistent storage"
+else
+    # 首次：生成 host keys（如未生成），并保存
+    ssh-keygen -A 2>/dev/null
+    cp /etc/ssh/ssh_host_* "$SSH_PERSIST_DIR/" 2>/dev/null
+    # 启用 root 登录，禁用密码（仅允许密钥登录）
+    sed -i 's/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+    cp /etc/ssh/sshd_config "$SSH_PERSIST_DIR/sshd_config"
+    echo "[start-services] Generated and persisted SSH host keys"
+fi
+
+# 启动 sshd
+mkdir -p /run/sshd
+/usr/sbin/sshd 2>/dev/null
+if [ $? -eq 0 ]; then
+    echo "[start-services] sshd started (port 22)"
+else
+    echo "[start-services] sshd failed to start (non-critical, continuing)"
+fi
+
 GATEWAY_PID=""
 BROWSER_ENABLED="false"
 CERT_MODE="letsencrypt"
