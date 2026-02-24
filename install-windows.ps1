@@ -3050,6 +3050,8 @@ function Main {
                 "run", "-d",
                 "--name", $containerName,
                 "--hostname", "openclaw",
+                "--dns", "8.8.8.8",
+                "--dns", "8.8.4.4",
                 "-v", "${homeData}:/root",
                 "-e", "TZ=Asia/Shanghai",
                 "--restart", "unless-stopped"

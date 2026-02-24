@@ -6,6 +6,13 @@
 
 # 不使用 set -e，因为健康检查循环中的命令失败不应该终止容器
 
+# ── DNS 保障：确保容器能解析外部域名 ──
+if ! nslookup github.com > /dev/null 2>&1; then
+    echo "[start-services] DNS resolution failed, adding public DNS fallback"
+    echo "nameserver 8.8.8.8" > /etc/resolv.conf
+    echo "nameserver 8.8.4.4" >> /etc/resolv.conf
+fi
+
 CONFIG_FILE="/root/.openclaw/docker-config.json"
 LOG_DIR="/root/.openclaw/logs"
 mkdir -p "$LOG_DIR" /root/.openclaw
