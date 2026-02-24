@@ -1589,6 +1589,11 @@ function Show-Completion {
         Write-Host "     docker stop openclaw-pro       # 停止服务" -ForegroundColor Gray
         Write-Host "     docker start openclaw-pro      # 启动服务" -ForegroundColor Gray
         Write-Host "     docker exec -it openclaw-pro bash  # 进入容器终端" -ForegroundColor Gray
+        Write-Host ""
+        Write-Host "  🔄 升级到新版本：" -ForegroundColor White
+        Write-Host "     重新运行安装命令即可，脚本会自动检测版本差异：" -ForegroundColor DarkGray
+        Write-Host "     irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1 | iex" -ForegroundColor Cyan
+        Write-Host "     数据目录 (home-data) 不受影响，升级后原有配置和数据保留。" -ForegroundColor DarkGray
     } else {
         Write-Host ""
         Write-Host "  ─────────────────────────────────────────────────" -ForegroundColor DarkGray
