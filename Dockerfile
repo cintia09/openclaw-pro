@@ -53,5 +53,9 @@ COPY start-services.sh /usr/local/bin/
 COPY Caddyfile.template /etc/caddy/
 RUN chmod +x /usr/local/bin/start-services.sh
 
+# 写入构建时版本（由 CI 的 tag 决定）
+ARG BUILD_VERSION=dev
+RUN echo "$BUILD_VERSION" > /etc/openclaw-version
+
 WORKDIR /root
 CMD ["/usr/local/bin/start-services.sh"]

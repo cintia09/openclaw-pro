@@ -31,7 +31,7 @@ jobs:
 
       # 构建镜像
       - name: Build Docker image
-        run: docker build -t openclaw-pro:latest .
+        run: docker build --build-arg BUILD_VERSION=${{ github.ref_name }} -t openclaw-pro:latest .
 
       # 推送到 GHCR (可选，给有条件访问的用户)
       - name: Tag and push to GHCR

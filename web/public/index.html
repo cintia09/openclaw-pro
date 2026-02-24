@@ -32,7 +32,7 @@
       </nav>
 
       <div class="sidebar-footer">
-        <span class="dim">v2</span>
+        <span class="dim" id="sidebar-version">v-</span>
         <span class="dim" id="sidebar-status">●</span>
       </div>
     </aside>
@@ -53,6 +53,23 @@
     <main class="content">
       <!-- Dashboard -->
       <section class="page active" id="page-dashboard" data-title="仪表盘">
+        <!-- Update notification -->
+        <div id="update-banner" class="card" style="grid-column:span 12;background:#1a3a2a;border:1px solid #2d6b45;display:none">
+          <div class="row" style="justify-content:space-between">
+            <div>
+              <span style="font-weight:900">🆕 发现新版本：<span id="update-latest"></span></span>
+              <span class="muted small" style="margin-left:10px">当前版本：<span id="update-current"></span></span>
+            </div>
+            <div class="row">
+              <a class="btn btn-primary" id="update-link" href="#" target="_blank" rel="noopener">查看更新</a>
+              <button class="btn btn-secondary" onclick="this.closest('#update-banner').style.display='none'">关闭</button>
+            </div>
+          </div>
+          <div class="muted small" style="margin-top:6px">
+            Windows 更新命令：<code style="background:#223;padding:2px 6px;border-radius:4px">irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/update-windows.ps1 | iex</code>
+          </div>
+        </div>
+
         <div class="grid">
           <div class="card" style="grid-column: span 12;">
             <div class="row" style="justify-content:space-between">
@@ -483,6 +500,33 @@
             <div class="row">
               <button class="btn btn-primary" id="btn-stt-save">保存 STT 配置</button>
               <button class="btn" id="btn-stt-load">读取当前配置</button>
+            </div>
+          </div>
+
+          <div class="card" style="grid-column: span 12;">
+            <div style="font-weight:900;font-size:16px">🔄 系统更新</div>
+            <div class="sep"></div>
+            <div class="grid">
+              <div style="grid-column: span 4;" class="field">
+                <div class="label"><span>当前版本</span></div>
+                <div class="big" id="settings-current-ver">—</div>
+              </div>
+              <div style="grid-column: span 4;" class="field">
+                <div class="label"><span>最新版本</span></div>
+                <div class="big" id="settings-latest-ver">—</div>
+              </div>
+              <div style="grid-column: span 4;" class="field">
+                <div class="label"><span>状态</span></div>
+                <div class="big" id="settings-update-status">—</div>
+              </div>
+            </div>
+            <div class="row" style="margin-top:12px">
+              <button class="btn btn-primary" id="btn-check-update">检查更新</button>
+              <a class="btn" id="settings-release-link" href="#" target="_blank" rel="noopener" style="display:none">查看 Release 页面</a>
+            </div>
+            <div class="muted small" style="margin-top:10px">
+              <b>Windows 快速更新：</b><br/>
+              <code style="background:#223;padding:4px 8px;border-radius:4px;display:inline-block;margin-top:4px;user-select:all">irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/update-windows.ps1 | iex</code>
             </div>
           </div>
 

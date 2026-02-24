@@ -417,10 +417,65 @@ app.post('/api/password', (req, res) => {
 });
 
 // ============================================================
+// API: update check
+// ============================================================
+const VERSION_FILE = '/etc/openclaw-version';
+const GITHUB_REPO = 'cintia09/openclaw-pro';
+
+function getCurrentVersion() {
+  try { return fs.readFileSync(VERSION_FILE, 'utf8').trim(); } catch { return 'unknown'; }
+}
+
+let updateCache = { data: null, checkedAt: 0 };
+
+app.get('/api/update/check', async (req, res) => {
+  const currentVersion = getCurrentVersion();
+  const force = req.query.force === '1';
+
+  // Cache for 10 minutes unless forced
+  if (!force && updateCache.data && (Date.now() - updateCache.checkedAt < 600000)) {
+    return res.json({ ...updateCache.data, currentVersion, cached: true });
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    const resp = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
+      headers: { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'openclaw-pro' },
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+
+    if (!resp.ok) {
+      return res.json({ currentVersion, latestVersion: null, error: `GitHub API: ${resp.status}` });
+    }
+
+    const release = await resp.json();
+    const latestVersion = release.tag_name || '';
+    const hasUpdate = currentVersion !== 'unknown' && currentVersion !== 'dev'
+      && latestVersion && latestVersion !== currentVersion;
+
+    const result = {
+      currentVersion,
+      latestVersion,
+      hasUpdate,
+      publishedAt: release.published_at,
+      releaseUrl: release.html_url,
+      releaseName: release.name || latestVersion
+    };
+
+    updateCache = { data: { latestVersion, hasUpdate, publishedAt: release.published_at, releaseUrl: release.html_url, releaseName: release.name || latestVersion }, checkedAt: Date.now() };
+    res.json(result);
+  } catch (e) {
+    res.json({ currentVersion, latestVersion: null, error: e.message });
+  }
+});
+
+// ============================================================
 // API: status
 // ============================================================
 app.get('/api/status', (req, res) => {
-  const status = { gateway: false, web: true, caddy: false, uptime: 0, memory: {} };
+  const status = { gateway: false, web: true, caddy: false, uptime: 0, memory: {}, version: getCurrentVersion() };
 
   try {
     execSync('pgrep -f "[o]penclaw.*gateway"', { stdio: 'ignore' });

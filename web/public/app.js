@@ -100,7 +100,7 @@ function setActiveRoute(route){
   if (route === 'plugins') refreshPlugins();
   if (route === 'terminal') terminalConnect();
   if (route === 'browser') loadBrowserFrame();
-  if (route === 'settings') { loadSttConfig(); bindSttVisibility(); loadBrowserSettings(); }
+  if (route === 'settings') { loadSttConfig(); bindSttVisibility(); loadBrowserSettings(); checkForUpdate(); }
   if (route === 'logs') refreshLogs();
 }
 
@@ -197,6 +197,48 @@ async function refreshStatus(){
   $('kpi-uptime').textContent = s.uptime ? `运行：${formatUptime(s.uptime)}` : '—';
 
   $('sidebar-status').textContent = s.gateway ? '● ONLINE' : '● OFFLINE';
+
+  // Update sidebar version
+  if (s.version && s.version !== 'unknown') {
+    $('sidebar-version').textContent = s.version;
+  }
+}
+
+// ------------------------
+// Update check
+// ------------------------
+async function checkForUpdate(force = false) {
+  const u = await api(`/api/update/check${force ? '?force=1' : ''}`);
+  if (u.error && !u.currentVersion) return;
+
+  // Dashboard banner
+  const banner = $('update-banner');
+  if (banner && u.hasUpdate) {
+    $('update-latest').textContent = u.latestVersion;
+    $('update-current').textContent = u.currentVersion;
+    $('update-link').href = u.releaseUrl || '#';
+    banner.style.display = '';
+  }
+
+  // Settings page
+  if ($('settings-current-ver')) {
+    $('settings-current-ver').textContent = u.currentVersion || '—';
+    $('settings-latest-ver').textContent = u.latestVersion || '—';
+    const statusEl = $('settings-update-status');
+    const linkEl = $('settings-release-link');
+    if (u.hasUpdate) {
+      statusEl.innerHTML = '<span style="color:#4ade80">🆕 有新版本</span>';
+      if (linkEl && u.releaseUrl) { linkEl.href = u.releaseUrl; linkEl.style.display = ''; }
+    } else if (u.latestVersion) {
+      statusEl.innerHTML = '<span style="color:#888">✅ 已是最新</span>';
+      if (linkEl) linkEl.style.display = 'none';
+    } else {
+      statusEl.textContent = u.error || '检查失败';
+      if (linkEl) linkEl.style.display = 'none';
+    }
+  }
+
+  return u;
 }
 
 $('btn-refresh-status').addEventListener('click', refreshStatus);
@@ -205,6 +247,16 @@ $('btn-restart-gateway').addEventListener('click', async ()=>{
   toast(r.success ? '已触发重启' : '重启失败', r.output || r.error || '');
   setTimeout(refreshStatus, 2500);
 });
+
+if ($('btn-check-update')) {
+  $('btn-check-update').addEventListener('click', async () => {
+    $('btn-check-update').disabled = true;
+    $('btn-check-update').textContent = '检查中...';
+    await checkForUpdate(true);
+    $('btn-check-update').disabled = false;
+    $('btn-check-update').textContent = '检查更新';
+  });
+}
 
 // ------------------------
 // OpenClaw install/update
@@ -709,3 +761,6 @@ setActiveRoute(getRouteFromHash());
 refreshStatus();
 loadBrowserSettings();
 setInterval(refreshStatus, 30000);
+
+// Auto check for updates on page load (non-blocking)
+setTimeout(() => checkForUpdate(), 3000);
