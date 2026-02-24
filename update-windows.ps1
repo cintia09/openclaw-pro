@@ -26,6 +26,81 @@ Write-Host "  ║     OpenClaw Pro - Quick Updater         ║" -ForegroundColor
 Write-Host "  ╚══════════════════════════════════════════╝" -ForegroundColor Cyan
 Write-Host ""
 
+# ── 0. 选择更新方式 ──
+Write-Host "  请选择更新方式:" -ForegroundColor White
+Write-Host ""
+Write-Host "  [1] ⚡ 热更新（推荐）" -ForegroundColor Yellow
+Write-Host "      只更新 Web 面板、配置模板等文件，无需下载镜像/重启容器" -ForegroundColor DarkGray
+Write-Host "      适合：前端修复、配置变更、小版本更新" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "  [2] 📦 完整更新" -ForegroundColor Cyan
+Write-Host "      下载完整镜像并重建容器（~1GB，需几分钟）" -ForegroundColor DarkGray
+Write-Host "      适合：系统包/Node.js 升级、大版本更新" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "  选择 [1/2，默认1]: " -NoNewline -ForegroundColor White
+$updateChoice = (Read-Host).Trim()
+if (-not $updateChoice) { $updateChoice = "1" }
+
+if ($updateChoice -eq "1") {
+    # ══════════════ 热更新模式 ══════════════
+    Write-Host ""
+    Write-Step "热更新模式：检查容器..."
+    
+    $existingId = (& docker ps -q --filter "name=^${CONTAINER_NAME}$" 2>$null)
+    if (-not $existingId) {
+        Write-Err "容器 '$CONTAINER_NAME' 未在运行"
+        Read-Host "按回车退出"
+        exit 1
+    }
+    Write-OK "容器运行中: $($existingId.Substring(0, 12))"
+
+    Write-Step "触发热更新..."
+    
+    # Call the hotpatch API inside the container
+    $hotpatchResult = & docker exec $CONTAINER_NAME curl -s -X POST http://127.0.0.1:3000/api/update/hotpatch -H "Content-Type: application/json" -d '{"branch":"main"}' 2>$null
+    
+    # Poll for completion
+    Write-Host "  " -NoNewline
+    $done = $false
+    for ($i = 1; $i -le 60; $i++) {
+        Start-Sleep 1
+        try {
+            $statusJson = & docker exec $CONTAINER_NAME curl -s http://127.0.0.1:3000/api/update/hotpatch/status 2>$null
+            $status = $statusJson | ConvertFrom-Json
+            if ($status.status -eq "done" -or $status.status -eq "error") {
+                $done = $true
+                Write-Host ""
+                Write-Host ""
+                
+                # Show log
+                if ($status.log) {
+                    $status.log -split "`n" | ForEach-Object {
+                        if ($_) { Write-Host "    $_" -ForegroundColor DarkGray }
+                    }
+                }
+                Write-Host ""
+                
+                if ($status.status -eq "done") {
+                    $updatedCount = if ($status.updated) { $status.updated.Count } else { 0 }
+                    Write-OK "热更新完成: $updatedCount 个文件已更新"
+                } else {
+                    Write-Err "热更新失败"
+                }
+                break
+            }
+        } catch {}
+        Write-Host "." -NoNewline
+    }
+    
+    if (-not $done) { Write-Err "热更新超时" }
+    
+    Write-Host ""
+    Read-Host "按回车退出"
+    exit 0
+}
+
+# ══════════════ 完整更新模式 (原逻辑) ══════════════
+
 # ── 1. 检查 Docker ──
 Write-Step "检查 Docker..."
 try {

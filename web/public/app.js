@@ -258,6 +258,62 @@ if ($('btn-check-update')) {
   });
 }
 
+if ($('btn-hotpatch')) {
+  $('btn-hotpatch').addEventListener('click', () => doHotPatch());
+}
+
+async function doHotPatch() {
+  const btns = qa('[id^="btn-hotpatch"]');
+  btns.forEach(b => { b.disabled = true; b.textContent = '⏳ 更新中...'; });
+
+  const logBox = $('hotpatch-log');
+  const logPre = logBox ? logBox.querySelector('pre') : null;
+  if (logBox) { logBox.style.display = ''; }
+  if (logPre) logPre.textContent = '正在拉取最新文件...\n';
+
+  try {
+    const r = await api('/api/update/hotpatch', { method: 'POST', body: { branch: 'main' } });
+    if (r.error) {
+      toast('热更新失败', r.error);
+      btns.forEach(b => { b.disabled = false; b.textContent = '⚡ 热更新'; });
+      return;
+    }
+
+    // Poll for completion
+    let done = false;
+    for (let i = 0; i < 60; i++) {
+      await new Promise(r => setTimeout(r, 1000));
+      try {
+        const s = await api('/api/update/hotpatch/status');
+        if (logPre && s.log) logPre.textContent = s.log;
+        if (logPre) logPre.scrollTop = logPre.scrollHeight;
+        if (s.status === 'done' || s.status === 'error') {
+          done = true;
+          if (s.status === 'done') {
+            toast('热更新完成', `${(s.updated||[]).length} 个文件已更新`);
+            if (s.updated && s.updated.length > 0) {
+              // If front-end files were updated, prompt refresh
+              const hasFrontend = s.updated.some(f => f.startsWith('web/public/'));
+              if (hasFrontend) {
+                if (logPre) logPre.textContent += '\n前端文件已更新，3 秒后自动刷新页面...';
+                setTimeout(() => location.reload(), 3000);
+              }
+            }
+          } else {
+            toast('热更新失败', s.log || '');
+          }
+          break;
+        }
+      } catch { /* server might be restarting */ }
+    }
+    if (!done) toast('热更新超时', '请稍后检查状态');
+  } catch (e) {
+    toast('热更新失败', e.message);
+  } finally {
+    btns.forEach(b => { b.disabled = false; b.textContent = '⚡ 热更新（不重启容器）'; });
+  }
+}
+
 // ------------------------
 // OpenClaw install/update
 // ------------------------

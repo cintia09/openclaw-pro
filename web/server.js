@@ -293,6 +293,11 @@ function requireAuthApi(req, res, next) {
   if (req.path === '/login') return next();
   if (req.path === '/bootstrap/status') return next();
   if (req.path === '/bootstrap/setup') return next();
+  // Allow hotpatch from localhost (docker exec)
+  if (req.path.startsWith('/update/hotpatch')) {
+    const ip = req.ip || req.connection?.remoteAddress || '';
+    if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') return next();
+  }
   if (!isAuthenticated(req)) return res.status(401).json({ error: 'unauthorized' });
   next();
 }
@@ -468,6 +473,141 @@ app.get('/api/update/check', async (req, res) => {
     res.json(result);
   } catch (e) {
     res.json({ currentVersion, latestVersion: null, error: e.message });
+  }
+});
+
+// ============================================================
+// API: hot patch (update files without rebuilding image)
+// ============================================================
+const HOTPATCH_FILES = [
+  // [GitHub path, local path]
+  ['web/public/app.js', '/opt/openclaw-web/public/app.js'],
+  ['web/public/index.html', '/opt/openclaw-web/public/index.html'],
+  ['web/public/login.html', '/opt/openclaw-web/public/login.html'],
+  ['web/public/login.js', '/opt/openclaw-web/public/login.js'],
+  ['web/public/style.css', '/opt/openclaw-web/public/style.css'],
+  ['web/server.js', '/opt/openclaw-web/server.js'],
+  ['start-services.sh', '/usr/local/bin/start-services.sh'],
+  ['Caddyfile.template', '/etc/caddy/Caddyfile.template'],
+];
+
+const GITHUB_RAW_BASE = `https://raw.githubusercontent.com/${GITHUB_REPO}`;
+
+let hotpatchState = { status: 'idle', log: '', startedAt: 0 };
+
+app.get('/api/update/hotpatch/status', (req, res) => {
+  res.json(hotpatchState);
+});
+
+app.post('/api/update/hotpatch', async (req, res) => {
+  if (hotpatchState.status === 'running') {
+    return res.status(409).json({ error: '热更新正在进行中' });
+  }
+
+  const branch = (req.body && req.body.branch) || 'main';
+  hotpatchState = { status: 'running', log: '', startedAt: Date.now(), updated: [], failed: [] };
+  res.json({ success: true, message: '热更新已开始' });
+
+  const log = (msg) => { hotpatchState.log += msg + '\n'; console.log('[hotpatch] ' + msg); };
+
+  try {
+    log(`从 GitHub (${branch}) 拉取最新文件...`);
+    let needCaddyRestart = false;
+    let needWebRestart = false;
+
+    for (const [ghPath, localPath] of HOTPATCH_FILES) {
+      try {
+        const url = `${GITHUB_RAW_BASE}/${branch}/${ghPath}`;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000);
+        const resp = await fetch(url, {
+          headers: { 'User-Agent': 'openclaw-pro' },
+          signal: controller.signal
+        });
+        clearTimeout(timeout);
+
+        if (!resp.ok) {
+          log(`  ⚠ ${ghPath}: HTTP ${resp.status}, 跳过`);
+          hotpatchState.failed.push(ghPath);
+          continue;
+        }
+
+        const content = await resp.text();
+
+        // Compare with existing file
+        let existingContent = '';
+        try { existingContent = fs.readFileSync(localPath, 'utf8'); } catch {}
+
+        if (content === existingContent) {
+          log(`  ✓ ${ghPath}: 无变化`);
+          continue;
+        }
+
+        // Write new file
+        const dir = path.dirname(localPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(localPath, content);
+
+        // Preserve executable permission for shell scripts
+        if (localPath.endsWith('.sh')) {
+          try { fs.chmodSync(localPath, 0o755); } catch {}
+        }
+
+        log(`  ✅ ${ghPath}: 已更新`);
+        hotpatchState.updated.push(ghPath);
+
+        if (ghPath === 'Caddyfile.template') needCaddyRestart = true;
+        if (ghPath === 'web/server.js') needWebRestart = true;
+      } catch (e) {
+        log(`  ❌ ${ghPath}: ${e.message}`);
+        hotpatchState.failed.push(ghPath);
+      }
+    }
+
+    // Update version file
+    try {
+      const versionResp = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
+        headers: { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'openclaw-pro' }
+      });
+      if (versionResp.ok) {
+        const rel = await versionResp.json();
+        if (rel.tag_name) {
+          fs.writeFileSync(VERSION_FILE, rel.tag_name + '\n');
+          log(`版本号更新为: ${rel.tag_name}`);
+        }
+      }
+    } catch {}
+
+    // Regenerate Caddyfile and restart Caddy if template changed
+    if (needCaddyRestart) {
+      log('Caddyfile 模板已更新，重新生成配置并重启 Caddy...');
+      try {
+        execSync('bash -c "source /usr/local/bin/start-services.sh 2>/dev/null; envsubst < /etc/caddy/Caddyfile.template > /tmp/Caddyfile" 2>/dev/null || true');
+        execSync('pkill -USR1 caddy 2>/dev/null || true');
+        log('Caddy 已通知重载配置');
+      } catch (e) {
+        log(`Caddy 重载失败 (非致命): ${e.message}`);
+      }
+    }
+
+    // Clear update cache
+    updateCache = { data: null, checkedAt: 0 };
+
+    const summary = `热更新完成: ${hotpatchState.updated.length} 个文件已更新, ${hotpatchState.failed.length} 个失败`;
+    log(summary);
+    hotpatchState.status = 'done';
+
+    // If server.js was updated, schedule a self-restart
+    if (needWebRestart && hotpatchState.updated.includes('web/server.js')) {
+      log('server.js 已更新，2 秒后自动重启 Web 面板...');
+      setTimeout(() => {
+        try { execSync('pkill -f "node server.js" 2>/dev/null || true'); } catch {}
+        // The health check in start-services.sh will auto-restart the web panel
+      }, 2000);
+    }
+  } catch (e) {
+    log(`热更新失败: ${e.message}`);
+    hotpatchState.status = 'error';
   }
 });
 

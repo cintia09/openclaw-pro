@@ -61,6 +61,7 @@
               <span class="muted small" style="margin-left:10px">当前版本：<span id="update-current"></span></span>
             </div>
             <div class="row">
+              <button class="btn btn-warning" id="btn-hotpatch-banner" onclick="doHotPatch()" title="无需下载镜像，直接更新文件">⚡ 热更新</button>
               <a class="btn btn-primary" id="update-link" href="#" target="_blank" rel="noopener">查看更新</a>
               <button class="btn btn-secondary" onclick="this.closest('#update-banner').style.display='none'">关闭</button>
             </div>
@@ -522,10 +523,15 @@
             </div>
             <div class="row" style="margin-top:12px">
               <button class="btn btn-primary" id="btn-check-update">检查更新</button>
+              <button class="btn btn-warning" id="btn-hotpatch">⚡ 热更新（不重启容器）</button>
               <a class="btn" id="settings-release-link" href="#" target="_blank" rel="noopener" style="display:none">查看 Release 页面</a>
             </div>
+            <div id="hotpatch-log" style="display:none;margin-top:10px">
+              <pre class="terminal" style="height:200px;overflow-y:auto;font-size:12px"></pre>
+            </div>
             <div class="muted small" style="margin-top:10px">
-              <b>Windows 快速更新：</b><br/>
+              <b>热更新</b>：直接从 GitHub 拉取最新的 Web 前端、配置模板等文件，无需下载镜像/重建容器。<br/>
+              <b>完整更新</b>：如需更新系统包、Node.js 等底层依赖，请使用以下命令：<br/>
               <code style="background:#223;padding:4px 8px;border-radius:4px;display:inline-block;margin-top:4px;user-select:all">irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/update-windows.ps1 | iex</code>
             </div>
           </div>
