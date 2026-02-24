@@ -433,7 +433,18 @@
                 <option value="UTC">UTC</option>
               </select>
             </div>
-            <div class="row"><button class="btn btn-primary" id="btn-settings-save">保存</button></div>
+            <div class="field">
+              <div class="label"><span>容器浏览器功能</span></div>
+              <select class="input" id="settings-browser-enabled">
+                <option value="false">关闭（推荐）</option>
+                <option value="true">开启（启用 noVNC + Chromium）</option>
+              </select>
+              <div class="muted small" style="margin-top:6px">保存后需重启容器生效。</div>
+            </div>
+            <div class="row">
+              <button class="btn btn-primary" id="btn-settings-save">保存时区</button>
+              <button class="btn" id="btn-browser-save">保存浏览器设置</button>
+            </div>
           </div>
 
           <div class="card" style="grid-column: span 6;">

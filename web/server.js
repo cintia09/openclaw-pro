@@ -88,10 +88,24 @@ function deepMerge(target, source) {
 // Docker config
 // ============================================================
 function readDockerConfig() {
-  return readJson(DOCKER_CONFIG_PATH, {});
+  const cfg = readJson(DOCKER_CONFIG_PATH, {});
+  if (typeof cfg.browserEnabled !== 'boolean') cfg.browserEnabled = false;
+  return cfg;
 }
 function writeDockerConfig(cfg) {
+  if (typeof cfg.browserEnabled !== 'boolean') cfg.browserEnabled = false;
   writeJson(DOCKER_CONFIG_PATH, cfg);
+}
+
+function restartGatewayForeground(callback) {
+  const cmd = [
+    'pkill -f "[o]penclaw.*gateway" >/dev/null 2>&1 || true',
+    'nohup openclaw gateway run --allow-unconfigured >> /root/.openclaw/logs/gateway.log 2>&1 &',
+    'sleep 1',
+    'pgrep -f "[o]penclaw.*gateway" >/dev/null 2>&1',
+  ].join(' && ');
+
+  exec(`bash -lc '${cmd}'`, callback);
 }
 
 // ============================================================
@@ -434,8 +448,39 @@ app.get('/api/status', (req, res) => {
   dockerConfig = readDockerConfig();
   status.domain = dockerConfig.domain || '';
   status.port = dockerConfig.port || 18789;
+  status.browserEnabled = !!dockerConfig.browserEnabled;
+
+  if (status.browserEnabled) {
+    try {
+      execSync('pgrep -f "websockify.*6080"', { stdio: 'ignore' });
+      status.browser = true;
+    } catch {
+      status.browser = false;
+    }
+  } else {
+    status.browser = false;
+  }
 
   res.json(status);
+});
+
+app.get('/api/docker-config', (req, res) => {
+  const cfg = readDockerConfig();
+  res.json({ browserEnabled: !!cfg.browserEnabled });
+});
+
+app.post('/api/docker-config', (req, res) => {
+  try {
+    const cfg = readDockerConfig();
+    const updates = req.body || {};
+    if (typeof updates.browserEnabled === 'boolean') {
+      cfg.browserEnabled = updates.browserEnabled;
+    }
+    writeDockerConfig(cfg);
+    res.json({ success: true, browserEnabled: !!cfg.browserEnabled, restartRequired: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ============================================================
@@ -469,7 +514,7 @@ app.post('/api/config', (req, res) => {
 // ============================================================
 app.post('/api/restart', (req, res) => {
   try {
-    exec('openclaw gateway restart', (err, stdout, stderr) => {
+    restartGatewayForeground((err, stdout, stderr) => {
       res.json({ success: !err, output: stdout || stderr });
     });
   } catch (e) {
@@ -539,9 +584,7 @@ app.post('/api/openclaw/update', (req, res) => {
 });
 
 app.post('/api/openclaw/start', (req, res) => {
-  dockerConfig = readDockerConfig();
-  const port = dockerConfig.port || 18789;
-  exec(`openclaw gateway start`, (err, stdout, stderr) => {
+  restartGatewayForeground((err, stdout, stderr) => {
     res.json({ success: !err, output: stdout || stderr });
   });
 });

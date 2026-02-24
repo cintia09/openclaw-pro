@@ -2145,6 +2145,7 @@ function Main {
                 http_port  = $deployConfig.HttpPort
                 https_port = $deployConfig.HttpsPort
                 domain     = $deployConfig.Domain
+                browserEnabled = $false
                 timezone   = "Asia/Shanghai"
                 created    = (Get-Date -Format "o")
             } | ConvertTo-Json -Depth 2

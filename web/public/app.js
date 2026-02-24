@@ -67,6 +67,7 @@ const ROUTES = [
   { id: 'messaging', title: '消息平台' },
   { id: 'trading', title: '交易系统' },
   { id: 'plugins', title: '插件市场' },
+  { id: 'browser', title: '浏览器' },
   { id: 'terminal', title: '终端' },
   { id: 'settings', title: '系统设置' },
   { id: 'logs', title: '日志' },
@@ -98,8 +99,23 @@ function setActiveRoute(route){
   if (route === 'trading') refreshTrading();
   if (route === 'plugins') refreshPlugins();
   if (route === 'terminal') terminalConnect();
-  if (route === 'settings') { loadSttConfig(); bindSttVisibility(); }
+  if (route === 'settings') { loadSttConfig(); bindSttVisibility(); loadBrowserSettings(); }
   if (route === 'logs') refreshLogs();
+}
+
+function setBrowserNavVisible(visible){
+  const link = q('#nav a[data-route="browser"]');
+  if (!link) return;
+  link.style.display = visible ? '' : 'none';
+}
+
+async function loadBrowserSettings(){
+  const d = await api('/api/docker-config');
+  if (!d || d.error) return;
+  if ($('settings-browser-enabled')) {
+    $('settings-browser-enabled').value = String(!!d.browserEnabled);
+  }
+  setBrowserNavVisible(!!d.browserEnabled);
 }
 
 window.addEventListener('hashchange', ()=> setActiveRoute(getRouteFromHash()));
@@ -611,11 +627,22 @@ $('btn-password').addEventListener('click', async ()=>{
 
 // Settings — timezone save
 $('btn-settings-save').addEventListener('click', async ()=> {
-  const tz = $('settings-timezone') ? $('settings-timezone').value : '';
+  const tz = $('settings-tz') ? $('settings-tz').value : '';
   try {
     const r = await api('/api/config', { method: 'POST', body: { timezone: tz } });
     toast(r.success ? '已保存' : '保存失败', r.error || '');
   } catch(e) { toast('保存失败', e.message); }
+});
+
+$('btn-browser-save').addEventListener('click', async ()=> {
+  const browserEnabled = $('settings-browser-enabled')?.value === 'true';
+  const r = await api('/api/docker-config', { method: 'POST', body: { browserEnabled } });
+  if (r.success) {
+    setBrowserNavVisible(browserEnabled);
+    toast('浏览器设置已保存', '重启容器后生效（docker restart openclaw-pro）');
+  } else {
+    toast('保存失败', r.error || '');
+  }
 });
 
 // ------------------------
@@ -670,4 +697,5 @@ $('btn-logout').addEventListener('click', async ()=>{
 // ------------------------
 setActiveRoute(getRouteFromHash());
 refreshStatus();
+loadBrowserSettings();
 setInterval(refreshStatus, 30000);
