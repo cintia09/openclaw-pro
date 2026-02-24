@@ -26,7 +26,7 @@ function setSetupMode(on) {
   $('login-username').disabled = true;
   $('login-submit').textContent = setupMode ? '设置密码' : '登录';
   $('login-password').setAttribute('autocomplete', setupMode ? 'new-password' : 'current-password');
-  setHint(setupMode ? '首次使用：请先设置管理密码（至少8位）' : '', setupMode ? '' : '');
+  setHint(setupMode ? '首次使用：请设置管理密码（至少8位，含大小写字母、数字和特殊字符）' : '', setupMode ? '' : '');
 }
 
 async function refreshBootstrapStatus() {
@@ -52,6 +52,10 @@ async function doSubmit() {
     if (!password2) return setHint('请再次输入密码', 'error');
     if (password !== password2) return setHint('两次输入的密码不一致', 'error');
     if (String(password).length < 8) return setHint('密码至少8位', 'error');
+    if (!/[A-Z]/.test(password)) return setHint('密码需包含至少一个大写字母', 'error');
+    if (!/[a-z]/.test(password)) return setHint('密码需包含至少一个小写字母', 'error');
+    if (!/[0-9]/.test(password)) return setHint('密码需包含至少一个数字', 'error');
+    if (!/[^A-Za-z0-9]/.test(password)) return setHint('密码需包含至少一个特殊字符', 'error');
   }
 
   const btn = $('login-submit');

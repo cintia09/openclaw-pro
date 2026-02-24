@@ -99,8 +99,18 @@ function setActiveRoute(route){
   if (route === 'trading') refreshTrading();
   if (route === 'plugins') refreshPlugins();
   if (route === 'terminal') terminalConnect();
+  if (route === 'browser') loadBrowserFrame();
   if (route === 'settings') { loadSttConfig(); bindSttVisibility(); loadBrowserSettings(); }
   if (route === 'logs') refreshLogs();
+}
+
+function loadBrowserFrame(){
+  const frame = $('browser-frame');
+  if (!frame) return;
+  const vncSrc = frame.dataset.vncSrc;
+  if (vncSrc && frame.src !== location.origin + vncSrc) {
+    frame.src = vncSrc;
+  }
 }
 
 function setBrowserNavVisible(visible){

@@ -329,6 +329,9 @@ app.post('/api/bootstrap/setup', (req, res) => {
   if (!password || typeof password !== 'string' || password.length < 8) {
     return res.status(400).json({ error: '请设置至少8位的管理密码' });
   }
+  if (!/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/[0-9]/.test(password) || !/[^A-Za-z0-9]/.test(password)) {
+    return res.status(400).json({ error: '密码需包含大写字母、小写字母、数字和特殊字符' });
+  }
 
   dockerConfig.webAuth = dockerConfig.webAuth || {};
   dockerConfig.webAuth.users = dockerConfig.webAuth.users || {};
