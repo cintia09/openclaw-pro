@@ -1572,10 +1572,14 @@ function Show-Completion {
 
         if ($Domain -and $CertMode -eq "internal") {
             Write-Host ""
-            Write-Host "  🪪 Windows 客户端信任证书（Caddy Internal）：" -ForegroundColor White
-            Write-Host "     在提供服务的机器上执行（管理员 PowerShell）：" -ForegroundColor DarkGray
+            Write-Host "  🪪 关于 HTTPS 证书提示:" -ForegroundColor White
+            Write-Host "     首次打开页面时，浏览器会显示「不安全」或「证书错误」—— 这是正常的。" -ForegroundColor DarkGray
+            Write-Host "     因为证书是本机自动生成的，不是公网机构签发的。" -ForegroundColor DarkGray
+            Write-Host "     点击「高级」→「继续前往」即可正常使用，不影响数据安全。" -ForegroundColor DarkGray
+            Write-Host ""
+            Write-Host "     如果想永久消除提示，可在管理员 PowerShell 中执行：" -ForegroundColor DarkGray
             Write-Host "     docker cp openclaw-pro:/data/caddy/pki/authorities/local/root.crt `$env:TEMP\openclaw-caddy-root.crt; certutil -addstore -f Root `$env:TEMP\openclaw-caddy-root.crt" -ForegroundColor White
-            Write-Host "     其他 Windows 设备导入同一 root.crt 后，可消除浏览器证书告警" -ForegroundColor DarkGray
+            Write-Host "     局域网内其他电脑也导入这个 root.crt 文件后，同样不会再提示。" -ForegroundColor DarkGray
         }
         Write-Host ""
 
@@ -1584,6 +1588,7 @@ function Show-Completion {
         Write-Host "     docker logs openclaw-pro       # 查看日志" -ForegroundColor Gray
         Write-Host "     docker stop openclaw-pro       # 停止服务" -ForegroundColor Gray
         Write-Host "     docker start openclaw-pro      # 启动服务" -ForegroundColor Gray
+        Write-Host "     docker exec -it openclaw-pro bash  # 进入容器终端" -ForegroundColor Gray
     } else {
         Write-Host ""
         Write-Host "  ─────────────────────────────────────────────────" -ForegroundColor DarkGray
