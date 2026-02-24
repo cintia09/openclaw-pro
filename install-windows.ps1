@@ -1857,6 +1857,10 @@ function Main {
             $releaseApi = "https://api.github.com/repos/$GITHUB_REPO/releases/latest"
             $latestReleaseInfo = Invoke-RestMethod -Uri $releaseApi -TimeoutSec 10 -ErrorAction Stop
             $latestReleaseTag = ($latestReleaseInfo.tag_name | ForEach-Object { "$_" }).Trim()
+            $latestReleaseCommit = ""
+            if ($latestReleaseInfo.target_commitish) {
+                $latestReleaseCommit = $latestReleaseInfo.target_commitish
+            }
             if ($latestReleaseTag) {
                 Write-Info "远端最新 Release: $latestReleaseTag"
                 $latestVer = $latestReleaseTag.TrimStart('v','V')
@@ -1871,9 +1875,11 @@ function Main {
         $needDeployPackageDownload = -not (Test-Path "$localDeployDir\Dockerfile")
         if (-not $needDeployPackageDownload) {
             $localDeployVersion = ""
+            $localDeployCommitHash = ""
             if (Test-Path "$localDeployDir\.git") {
                 try {
                     $localDeployVersion = (& git -C $localDeployDir describe --tags --abbrev=0 2>$null | Select-Object -First 1)
+                    $localDeployCommitHash = (& git -C $localDeployDir rev-parse HEAD 2>$null | Select-Object -First 1)
                 } catch { }
             }
             if (-not $localDeployVersion -and (Test-Path "$localDeployDir\.release-version")) {
@@ -1881,13 +1887,31 @@ function Main {
                     $localDeployVersion = (Get-Content "$localDeployDir\.release-version" -ErrorAction SilentlyContinue | Select-Object -First 1)
                 } catch { }
             }
+            if (-not $localDeployCommitHash -and (Test-Path "$localDeployDir\.release-commit")) {
+                try {
+                    $localDeployCommitHash = (Get-Content "$localDeployDir\.release-commit" -ErrorAction SilentlyContinue | Select-Object -First 1)
+                } catch { }
+            }
 
             Write-OK "检测到本地部署包"
             if ($localDeployVersion) {
                 Write-Info "本地部署包版本: $localDeployVersion"
             }
+            if ($localDeployCommitHash) {
+                Write-Info "本地 commit: $($localDeployCommitHash.Substring(0, [Math]::Min(12, $localDeployCommitHash.Length)))"
+            }
 
-            if ($latestReleaseTag -and $localDeployVersion -and $localDeployVersion -eq $latestReleaseTag) {
+            # 版本比较：tag + commit hash 双校验
+            $deployTagMatch = ($latestReleaseTag -and $localDeployVersion -and $localDeployVersion -eq $latestReleaseTag)
+            $deployCommitMatch = $true  # 默认为 true（无法获取远端 commit 时不影响判断）
+            if ($latestReleaseCommit -and $localDeployCommitHash) {
+                $deployCommitMatch = ($localDeployCommitHash.StartsWith($latestReleaseCommit) -or $latestReleaseCommit.StartsWith($localDeployCommitHash))
+                if (-not $deployCommitMatch) {
+                    Write-Warn "commit hash 不一致 (本地: $($localDeployCommitHash.Substring(0,7)) vs 远端: $($latestReleaseCommit.Substring(0,7)))，可能本地文件已被修改"
+                }
+            }
+
+            if ($deployTagMatch -and $deployCommitMatch) {
                 Write-Host "" 
                 Write-Host "  本地部署包与远端版本一致 ($latestReleaseTag)" -ForegroundColor Green
                 Write-Host "  请选择部署包策略:" -ForegroundColor Cyan
@@ -1945,6 +1969,13 @@ function Main {
                         if ($latestTag) {
                             $latestTag | Set-Content (Join-Path $localDeployDir ".release-version") -Force
                         }
+                        # 保存 commit hash 用于完整性校验
+                        try {
+                            $commitHash = (& git rev-parse HEAD 2>$null | Select-Object -First 1)
+                            if ($commitHash) {
+                                $commitHash | Set-Content (Join-Path $localDeployDir ".release-commit") -Force
+                            }
+                        } catch { }
                         Pop-Location
                     } catch {
                         Write-Warn "git 仓库更新失败，尝试 ZIP 下载..."
@@ -1972,6 +2003,13 @@ function Main {
                             } else {
                                 Write-OK "仓库克隆完成 (main 分支)"
                             }
+                            # 保存 commit hash 用于完整性校验
+                            try {
+                                $commitHash = (& git rev-parse HEAD 2>$null | Select-Object -First 1)
+                                if ($commitHash) {
+                                    $commitHash | Set-Content (Join-Path $localDeployDir ".release-commit") -Force
+                                }
+                            } catch { }
                             Pop-Location
                         } catch {
                             Write-OK "仓库克隆完成 (main 分支)"
@@ -2172,6 +2210,9 @@ function Main {
                         if ($latestReleaseTag) {
                             $latestReleaseTag | Set-Content (Join-Path $localDeployDir ".release-version") -Force
                         }
+                        if ($latestReleaseCommit) {
+                            $latestReleaseCommit | Set-Content (Join-Path $localDeployDir ".release-commit") -Force
+                        }
                     } else {
                         throw "解压后未找到部署目录"
                     }
@@ -2342,6 +2383,23 @@ function Main {
                     }
                 }
 
+                # 读取保存的镜像 digest，并与当前实际镜像 ID 对比
+                $localImageDigest = ""
+                $imageDigestFile = Join-Path $homeBaseDir "$tagHomeDataName\.openclaw\image-digest.txt"
+                if (Test-Path $imageDigestFile) {
+                    $localImageDigest = (Get-Content $imageDigestFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+                }
+                $currentImageId = (& docker image inspect openclaw-pro --format '{{.Id}}' 2>$null)
+                if ($currentImageId -and $localImageDigest) {
+                    if ($currentImageId -eq $localImageDigest) {
+                        Write-Info "镜像 digest 校验通过"
+                    } else {
+                        Write-Warn "镜像 digest 不一致 — 本地镜像可能已被修改或重建"
+                    }
+                } elseif ($currentImageId) {
+                    Write-Info "镜像 ID: $($currentImageId.Substring(0, [Math]::Min(19, $currentImageId.Length)))"
+                }
+
                 $effectiveLatestTag = $latestReleaseTag
                 if (-not $effectiveLatestTag) {
                     try {
@@ -2354,7 +2412,12 @@ function Main {
                 Write-Host ""
                 Write-Host "  请选择镜像策略:" -ForegroundColor Cyan
                 if ($effectiveLatestTag -and $localImageReleaseTag -and $effectiveLatestTag -eq $localImageReleaseTag) {
-                    Write-Host "     当前本地镜像与远端最新版本一致 ($effectiveLatestTag)" -ForegroundColor Green
+                    $digestOK = (-not $localImageDigest) -or ($currentImageId -eq $localImageDigest)
+                    if ($digestOK) {
+                        Write-Host "     当前本地镜像与远端最新版本一致 ($effectiveLatestTag)" -ForegroundColor Green
+                    } else {
+                        Write-Host "     版本标记一致 ($effectiveLatestTag)，但镜像 digest 已变更" -ForegroundColor Yellow
+                    }
                     Write-Host "     [1] 使用本地镜像（默认，最快）" -ForegroundColor White
                     Write-Host "     [2] 仍然强制下载最新镜像" -ForegroundColor White
                 } elseif ($effectiveLatestTag) {
@@ -2462,6 +2525,13 @@ function Main {
                             $totalSec = [math]::Floor($loadTimer.Elapsed.TotalSeconds)
                             $imageReady = $true
                             Write-OK "预构建镜像加载完成 (耗时 ${totalSec} 秒)"
+                            # 保存镜像 digest 用于完整性校验
+                            try {
+                                $newImageId = (& docker image inspect openclaw-pro --format '{{.Id}}' 2>$null)
+                                if ($newImageId) {
+                                    $script:loadedImageDigest = $newImageId
+                                }
+                            } catch { }
                         } else {
                             Write-Warn "docker load 失败，将尝试本地构建"
                         }
@@ -2520,6 +2590,13 @@ function Main {
                     throw "镜像获取失败 — 下载和本地构建均不可用"
                 }
                 $imageReady = $true
+                # 保存本地构建的镜像 digest
+                try {
+                    $builtImageId = (& docker image inspect openclaw-pro --format '{{.Id}}' 2>$null)
+                    if ($builtImageId) {
+                        $script:loadedImageDigest = $builtImageId
+                    }
+                } catch { }
             }
             Write-OK "镜像准备完成"
 
@@ -2678,6 +2755,18 @@ function Main {
             $dockerConfigJson | Set-Content (Join-Path $configDir "docker-config.json") -Force
             if ($latestReleaseTag) {
                 $latestReleaseTag | Set-Content (Join-Path $configDir "image-release-tag.txt") -Force
+            }
+            # 保存镜像 digest 用于下次完整性校验
+            if ($script:loadedImageDigest) {
+                $script:loadedImageDigest | Set-Content (Join-Path $configDir "image-digest.txt") -Force
+            } else {
+                # 复用本地镜像时，保存当前镜像 ID
+                try {
+                    $curId = (& docker image inspect openclaw-pro --format '{{.Id}}' 2>$null)
+                    if ($curId) {
+                        $curId | Set-Content (Join-Path $configDir "image-digest.txt") -Force
+                    }
+                } catch { }
             }
             Write-Log "Wrote docker-config.json: domain=$($deployConfig.Domain)"
 
