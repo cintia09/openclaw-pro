@@ -14,6 +14,48 @@ const path = require('path');
 const http = require('http');
 const { execSync, exec } = require('child_process');
 const crypto = require('crypto');
+const dns = require('dns');
+
+// ── DNS-over-HTTPS 回退：当容器 DNS 不可用时（如 V2RayN TUN 模式），
+//    通过 Cloudflare DoH 解析域名并注入 /etc/hosts ──
+const DOH_CACHE = new Map();
+
+async function dohResolve(hostname) {
+  if (DOH_CACHE.has(hostname)) return DOH_CACHE.get(hostname);
+  try {
+    const resp = await fetch(`https://1.1.1.1/dns-query?name=${encodeURIComponent(hostname)}&type=A`, {
+      headers: { 'accept': 'application/dns-json' },
+      signal: AbortSignal.timeout(5000)
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const aRecord = (data.Answer || []).find(a => a.type === 1);
+    if (aRecord && aRecord.data) {
+      DOH_CACHE.set(hostname, aRecord.data);
+      // Also add to /etc/hosts for other processes (curl, etc.)
+      try {
+        const hosts = fs.readFileSync('/etc/hosts', 'utf8');
+        if (!hosts.includes(hostname)) {
+          fs.appendFileSync('/etc/hosts', `${aRecord.data} ${hostname}\n`);
+          console.log(`[DoH] Resolved ${hostname} -> ${aRecord.data} (added to /etc/hosts)`);
+        }
+      } catch {}
+      return aRecord.data;
+    }
+  } catch {}
+  return null;
+}
+
+// Test DNS on startup; if broken, pre-resolve GitHub domains via DoH
+(async () => {
+  try {
+    await dns.promises.resolve4('github.com');
+  } catch {
+    console.log('[DNS] Traditional DNS failed, using DNS-over-HTTPS fallback...');
+    const domains = ['github.com', 'api.github.com', 'raw.githubusercontent.com', 'objects.githubusercontent.com'];
+    for (const d of domains) await dohResolve(d);
+  }
+})();
 
 let WebSocketServer = null;
 try {

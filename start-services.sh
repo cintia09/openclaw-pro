@@ -7,23 +7,58 @@
 # 不使用 set -e，因为健康检查循环中的命令失败不应该终止容器
 
 # ── DNS 保障：确保容器能解析外部域名 ──
+# DNS-over-HTTPS 解析函数：通过 HTTPS 查询 Cloudflare DoH（绕过传统 DNS）
+doh_resolve() {
+    local domain="$1"
+    local ip
+    ip=$(curl -sf --connect-timeout 5 -H 'accept: application/dns-json' \
+        "https://1.1.1.1/dns-query?name=${domain}&type=A" 2>/dev/null \
+        | sed -n 's/.*"data":"\([0-9.]*\)".*/\1/p' | head -1)
+    [ -n "$ip" ] && echo "$ip"
+}
+
+# 向 /etc/hosts 添加域名解析（如果尚未存在）
+add_host_entry() {
+    local ip="$1" domain="$2"
+    if [ -n "$ip" ] && ! grep -q "$domain" /etc/hosts 2>/dev/null; then
+        echo "$ip $domain" >> /etc/hosts
+        echo "[start-services] DNS-over-HTTPS: $domain -> $ip"
+    fi
+}
+
 if ! nslookup github.com > /dev/null 2>&1; then
     echo "[start-services] DNS resolution failed, trying public DNS..."
     echo "nameserver 8.8.8.8" > /etc/resolv.conf
     echo "nameserver 8.8.4.4" >> /etc/resolv.conf
 
-    # 如果 DNS 仍然不通（UDP 被阻断），写入 hosts 硬编码
+    # 如果 DNS 仍然不通（UDP/TCP 均被阻断，常见于 V2RayN TUN 模式），
+    # 通过 DNS-over-HTTPS 解析并写入 /etc/hosts
     if ! nslookup github.com > /dev/null 2>&1; then
-        echo "[start-services] DNS still broken, adding GitHub IPs to /etc/hosts"
-        grep -q "raw.githubusercontent.com" /etc/hosts 2>/dev/null || cat >> /etc/hosts << 'DNSEOF'
-# GitHub hosts fallback (DNS unavailable)
+        echo "[start-services] DNS still broken (port 53 blocked), using DNS-over-HTTPS fallback..."
+
+        # 需要解析的域名列表（GitHub 相关 + 常用服务）
+        DOH_DOMAINS="github.com api.github.com raw.githubusercontent.com objects.githubusercontent.com ghcr.io registry-1.docker.io production.cloudflare.docker.com"
+
+        for domain in $DOH_DOMAINS; do
+            resolved_ip=$(doh_resolve "$domain")
+            add_host_entry "$resolved_ip" "$domain"
+        done
+
+        # 统计结果
+        resolved_count=$(grep -c "DNS-over-HTTPS" /etc/hosts 2>/dev/null || echo 0)
+        echo "[start-services] DoH resolved $resolved_count domains"
+
+        # 如果 DoH 也失败了（完全无外网），使用 GitHub 的静态 IP 兜底
+        if ! grep -q "raw.githubusercontent.com" /etc/hosts 2>/dev/null; then
+            echo "[start-services] DoH failed, using static GitHub IPs as last resort"
+            cat >> /etc/hosts << 'DNSEOF'
+# GitHub hosts fallback (static IPs)
 185.199.108.133 raw.githubusercontent.com
 185.199.109.133 raw.githubusercontent.com
-185.199.110.133 raw.githubusercontent.com
-185.199.111.133 raw.githubusercontent.com
 140.82.114.3 github.com
 140.82.114.3 api.github.com
 DNSEOF
+        fi
     fi
 fi
 
