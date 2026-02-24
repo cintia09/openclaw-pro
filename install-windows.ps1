@@ -1321,17 +1321,27 @@ function Show-Completion {
         # Windows 防火墙提醒（仅实际对外暴露的端口）
         $portList = @()
         if ($Domain) {
-            # HTTPS 模式: Gateway/Web 绑定 127.0.0.1，只需开放 HTTP/HTTPS
-            if ($HttpPort -and $HttpPort -gt 0) { $portList += $HttpPort }
-            if ($HttpsPort -and $HttpsPort -gt 0) { $portList += $HttpsPort }
+            if ($CertMode -eq "internal") {
+                # 自签证书 + 非公网DNS场景：不自动开放 80/443
+                $portList = @()
+            } else {
+                # HTTPS 模式: Gateway/Web 绑定 127.0.0.1，只需开放 HTTP/HTTPS
+                if ($HttpPort -and $HttpPort -gt 0) { $portList += $HttpPort }
+                if ($HttpsPort -and $HttpsPort -gt 0) { $portList += $HttpsPort }
+            }
         } else {
             # HTTP 模式: Gateway/Web 直接对外
             $portList += $GatewayPort
             $portList += $PanelPort
         }
-        $ports = ($portList | Sort-Object -Unique) -join ','
-        Write-Host "  🔒 防火墙端口已自动开放 (${ports})，如需重新设置:" -ForegroundColor Yellow
-        Write-Host "     netsh advfirewall firewall add rule name=`"OpenClaw`" dir=in action=allow protocol=tcp localport=${ports}" -ForegroundColor White
+        if ($portList.Count -gt 0) {
+            $ports = ($portList | Sort-Object -Unique) -join ','
+            Write-Host "  🔒 防火墙端口已自动开放 (${ports})，如需重新设置:" -ForegroundColor Yellow
+            Write-Host "     netsh advfirewall firewall add rule name=`"OpenClaw`" dir=in action=allow protocol=tcp localport=${ports}" -ForegroundColor White
+        } else {
+            Write-Host "  🔒 当前模式未自动开放防火墙端口（自签证书/局域网模式）" -ForegroundColor Yellow
+            Write-Host "     如需局域网其他设备访问，请手动开放 80/443" -ForegroundColor DarkGray
+        }
         Write-Host ""
 
         Write-Host "  📋 管理命令：" -ForegroundColor White
@@ -2411,29 +2421,36 @@ function Main {
                 try {
                     $fwPortList = @()
                     if ($deployConfig.HttpsEnabled) {
-                        if ($deployConfig.HttpPort -and $deployConfig.HttpPort -gt 0) {
-                            $fwPortList += $deployConfig.HttpPort
-                        }
-                        if ($deployConfig.HttpsPort -and $deployConfig.HttpsPort -gt 0) {
-                            $fwPortList += $deployConfig.HttpsPort
+                        if ($deployConfig.CertMode -ne "internal") {
+                            if ($deployConfig.HttpPort -and $deployConfig.HttpPort -gt 0) {
+                                $fwPortList += $deployConfig.HttpPort
+                            }
+                            if ($deployConfig.HttpsPort -and $deployConfig.HttpsPort -gt 0) {
+                                $fwPortList += $deployConfig.HttpsPort
+                            }
                         }
                     } else {
                         $fwPortList += $deployConfig.GatewayPort
                         $fwPortList += $deployConfig.WebPort
                     }
-                    $fwPorts = ($fwPortList | Sort-Object -Unique) -join ','
 
-                    # 先删除旧规则（忽略错误）
-                    & netsh advfirewall firewall delete rule name="OpenClaw" 2>$null | Out-Null
-                    & netsh advfirewall firewall delete rule name="OpenClaw-$containerName" 2>$null | Out-Null
-                    # 添加新规则（以容器名标识）
-                    $fwRuleName = if ($containerName -eq 'openclaw-pro') { 'OpenClaw' } else { "OpenClaw-$containerName" }
-                    & netsh advfirewall firewall add rule name=$fwRuleName dir=in action=allow protocol=tcp localport=$fwPorts 2>&1 | Out-Null
-                    if ($LASTEXITCODE -eq 0) {
-                        Write-OK "防火墙端口已自动开放 ($fwPorts)"
+                    if ($fwPortList.Count -gt 0) {
+                        $fwPorts = ($fwPortList | Sort-Object -Unique) -join ','
+
+                        # 先删除旧规则（忽略错误）
+                        & netsh advfirewall firewall delete rule name="OpenClaw" 2>$null | Out-Null
+                        & netsh advfirewall firewall delete rule name="OpenClaw-$containerName" 2>$null | Out-Null
+                        # 添加新规则（以容器名标识）
+                        $fwRuleName = if ($containerName -eq 'openclaw-pro') { 'OpenClaw' } else { "OpenClaw-$containerName" }
+                        & netsh advfirewall firewall add rule name=$fwRuleName dir=in action=allow protocol=tcp localport=$fwPorts 2>&1 | Out-Null
+                        if ($LASTEXITCODE -eq 0) {
+                            Write-OK "防火墙端口已自动开放 ($fwPorts)"
+                        } else {
+                            Write-Warn "防火墙设置需要管理员权限，请手动执行:"
+                            Write-Host "     netsh advfirewall firewall add rule name=`"$fwRuleName`" dir=in action=allow protocol=tcp localport=$fwPorts" -ForegroundColor White
+                        }
                     } else {
-                        Write-Warn "防火墙设置需要管理员权限，请手动执行:"
-                        Write-Host "     netsh advfirewall firewall add rule name=`"$fwRuleName`" dir=in action=allow protocol=tcp localport=$fwPorts" -ForegroundColor White
+                        Write-Info "当前证书模式为自签证书（局域网），未自动开放 80/443 防火墙端口"
                     }
                 } catch {
                     Write-Log "Firewall auto-open failed: $_"
