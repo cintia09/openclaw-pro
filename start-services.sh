@@ -10,6 +10,19 @@ CONFIG_FILE="/root/.openclaw/docker-config.json"
 LOG_DIR="/root/.openclaw/logs"
 mkdir -p "$LOG_DIR" /root/.openclaw
 
+# ── 用户自定义启动脚本（持久化在 home-data 中，升级后自动执行） ──
+CUSTOM_SETUP="/root/custom-setup.sh"
+if [ -f "$CUSTOM_SETUP" ]; then
+    echo "[start-services] Found custom-setup.sh, executing..."
+    chmod +x "$CUSTOM_SETUP"
+    bash "$CUSTOM_SETUP" >> "$LOG_DIR/custom-setup.log" 2>&1
+    if [ $? -eq 0 ]; then
+        echo "[start-services] custom-setup.sh completed successfully"
+    else
+        echo "[start-services] custom-setup.sh exited with errors (see logs/custom-setup.log)"
+    fi
+fi
+
 GATEWAY_PID=""
 BROWSER_ENABLED="false"
 CERT_MODE="letsencrypt"
