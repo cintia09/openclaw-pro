@@ -1132,11 +1132,13 @@ function Get-DeployConfig {
         CertMode     = "letsencrypt"
         Domain       = ""
         PortArgs     = @()
+        AutoOpenFirewall = $true
         HttpsEnabled = $false
     }
 
     # 1. Gateway 端口
     $gwPort = Find-AvailablePort -PreferredPort ([int]$OPENCLAW_PORT)
+
     Write-Host "  Gateway 端口 [默认 ${gwPort}]: " -NoNewline -ForegroundColor White
     $customGw = Read-Host
     if ($customGw -match '^\d+$' -and [int]$customGw -ge 1 -and [int]$customGw -le 65535) {
@@ -1246,6 +1248,32 @@ function Get-DeployConfig {
     Write-Host "  ─────────────────────────────────────────────────" -ForegroundColor DarkGray
     Write-Host ""
 
+    # 统一防火墙策略（由用户选择是否自动开放）
+    $fwPortList = @()
+    if ($config.HttpsEnabled) {
+        if ($config.HttpPort -and $config.HttpPort -gt 0) { $fwPortList += $config.HttpPort }
+        if ($config.HttpsPort -and $config.HttpsPort -gt 0) { $fwPortList += $config.HttpsPort }
+    } else {
+        if ($config.GatewayPort -and $config.GatewayPort -gt 0) { $fwPortList += $config.GatewayPort }
+        if ($config.WebPort -and $config.WebPort -gt 0) { $fwPortList += $config.WebPort }
+    }
+    $fwPortsText = ($fwPortList | Sort-Object -Unique) -join ','
+    $defaultAutoOpen = if ($config.HttpsEnabled -and $config.CertMode -eq "internal") { "N" } else { "Y" }
+    $defaultHint = if ($defaultAutoOpen -eq "Y") { "Y/n" } else { "y/N" }
+    Write-Host "  🔒 防火墙设置（目标端口: ${fwPortsText}）" -ForegroundColor White
+    Write-Host "     是否自动开放上述端口？[${defaultHint}] : " -NoNewline -ForegroundColor White
+    $fwChoice = (Read-Host).Trim().ToLower()
+    if (-not $fwChoice) {
+        $config.AutoOpenFirewall = ($defaultAutoOpen -eq "Y")
+    } else {
+        $config.AutoOpenFirewall = ($fwChoice -eq "y" -or $fwChoice -eq "yes")
+    }
+    if ($config.AutoOpenFirewall) {
+        Write-Info "已选择自动开放防火墙端口 (${fwPortsText})"
+    } else {
+        Write-Info "已选择不自动开放防火墙端口，可在完成页复制手动命令"
+    }
+
     return $config
 }
 
@@ -1259,7 +1287,8 @@ function Show-Completion {
         [string]$Domain = "",
         [string]$CertMode = "letsencrypt",
         [int]$HttpPort = 0,
-        [int]$HttpsPort = 0
+        [int]$HttpsPort = 0,
+        [bool]$AutoOpenFirewall = $true
     )
 
     Write-Host ""
@@ -1321,26 +1350,34 @@ function Show-Completion {
         # Windows 防火墙提醒（仅实际对外暴露的端口）
         $portList = @()
         if ($Domain) {
-            if ($CertMode -eq "internal") {
-                # 自签证书 + 非公网DNS场景：不自动开放 80/443
-                $portList = @()
-            } else {
-                # HTTPS 模式: Gateway/Web 绑定 127.0.0.1，只需开放 HTTP/HTTPS
-                if ($HttpPort -and $HttpPort -gt 0) { $portList += $HttpPort }
-                if ($HttpsPort -and $HttpsPort -gt 0) { $portList += $HttpsPort }
-            }
+            # HTTPS 模式: Gateway/Web 绑定 127.0.0.1，只需开放 HTTP/HTTPS
+            if ($HttpPort -and $HttpPort -gt 0) { $portList += $HttpPort }
+            if ($HttpsPort -and $HttpsPort -gt 0) { $portList += $HttpsPort }
         } else {
             # HTTP 模式: Gateway/Web 直接对外
             $portList += $GatewayPort
             $portList += $PanelPort
         }
-        if ($portList.Count -gt 0) {
+        if ($portList.Count -gt 0 -and $AutoOpenFirewall) {
             $ports = ($portList | Sort-Object -Unique) -join ','
             Write-Host "  🔒 防火墙端口已自动开放 (${ports})，如需重新设置:" -ForegroundColor Yellow
             Write-Host "     netsh advfirewall firewall add rule name=`"OpenClaw`" dir=in action=allow protocol=tcp localport=${ports}" -ForegroundColor White
         } else {
-            Write-Host "  🔒 当前模式未自动开放防火墙端口（自签证书/局域网模式）" -ForegroundColor Yellow
-            Write-Host "     如需局域网其他设备访问，请手动开放 80/443" -ForegroundColor DarkGray
+            $ports = ($portList | Sort-Object -Unique) -join ','
+            Write-Host "  🔒 已跳过自动开放防火墙端口" -ForegroundColor Yellow
+            Write-Host "     本机访问（同一台机器）通常不需要额外放行" -ForegroundColor DarkGray
+            if ($ports) {
+                Write-Host "     如需其他设备访问，请手动开放端口：${ports}" -ForegroundColor DarkGray
+                Write-Host "     netsh advfirewall firewall add rule name=`"OpenClaw-Manual`" dir=in action=allow protocol=tcp localport=${ports}" -ForegroundColor White
+            }
+        }
+
+        if ($Domain -and $CertMode -eq "internal") {
+            Write-Host ""
+            Write-Host "  🪪 Windows 客户端信任证书（Caddy Internal）：" -ForegroundColor White
+            Write-Host "     在提供服务的机器上执行（管理员 PowerShell）：" -ForegroundColor DarkGray
+            Write-Host "     docker cp openclaw-pro:/data/caddy/pki/authorities/local/root.crt `$env:TEMP\openclaw-caddy-root.crt; certutil -addstore -f Root `$env:TEMP\openclaw-caddy-root.crt" -ForegroundColor White
+            Write-Host "     其他 Windows 设备导入同一 root.crt 后，可消除浏览器证书告警" -ForegroundColor DarkGray
         }
         Write-Host ""
 
@@ -2126,6 +2163,7 @@ function Main {
         $script:certMode          = $deployConfig.CertMode
         $script:httpPort          = $deployConfig.HttpPort
         $script:httpsPort         = $deployConfig.HttpsPort
+        $script:autoOpenFirewall  = $deployConfig.AutoOpenFirewall
 
         Write-Info "正在准备镜像..."
         try {
@@ -2415,26 +2453,22 @@ function Main {
                     Write-Host "     查看证书日志: docker logs $containerName | findstr /I caddy cert acme tls" -ForegroundColor DarkGray
                 }
 
-                # 自动打开 Windows 防火墙端口（仅实际对外暴露的端口）
-                # HTTPS 模式: 只开 HTTP/HTTPS 端口（Gateway/Web 绑定 127.0.0.1 不需要）
-                # HTTP 模式: 只开 Gateway/Web 端口
+                # Windows 防火墙端口处理（按用户选择）
                 try {
                     $fwPortList = @()
                     if ($deployConfig.HttpsEnabled) {
-                        if ($deployConfig.CertMode -ne "internal") {
-                            if ($deployConfig.HttpPort -and $deployConfig.HttpPort -gt 0) {
-                                $fwPortList += $deployConfig.HttpPort
-                            }
-                            if ($deployConfig.HttpsPort -and $deployConfig.HttpsPort -gt 0) {
-                                $fwPortList += $deployConfig.HttpsPort
-                            }
+                        if ($deployConfig.HttpPort -and $deployConfig.HttpPort -gt 0) {
+                            $fwPortList += $deployConfig.HttpPort
+                        }
+                        if ($deployConfig.HttpsPort -and $deployConfig.HttpsPort -gt 0) {
+                            $fwPortList += $deployConfig.HttpsPort
                         }
                     } else {
                         $fwPortList += $deployConfig.GatewayPort
                         $fwPortList += $deployConfig.WebPort
                     }
 
-                    if ($fwPortList.Count -gt 0) {
+                    if ($fwPortList.Count -gt 0 -and $deployConfig.AutoOpenFirewall) {
                         $fwPorts = ($fwPortList | Sort-Object -Unique) -join ','
 
                         # 先删除旧规则（忽略错误）
@@ -2450,7 +2484,12 @@ function Main {
                             Write-Host "     netsh advfirewall firewall add rule name=`"$fwRuleName`" dir=in action=allow protocol=tcp localport=$fwPorts" -ForegroundColor White
                         }
                     } else {
-                        Write-Info "当前证书模式为自签证书（局域网），未自动开放 80/443 防火墙端口"
+                        $fwPorts = ($fwPortList | Sort-Object -Unique) -join ','
+                        Write-Info "已跳过自动开放防火墙端口"
+                        if ($fwPorts) {
+                            Write-Host "     本机访问通常不需要放行；如需其他设备访问，请手动执行:" -ForegroundColor DarkGray
+                            Write-Host "     netsh advfirewall firewall add rule name=`"OpenClaw-Manual`" dir=in action=allow protocol=tcp localport=$fwPorts" -ForegroundColor White
+                        }
                     }
                 } catch {
                     Write-Log "Firewall auto-open failed: $_"
@@ -2537,7 +2576,8 @@ function Main {
     $cmode  = if ($script:certMode) { $script:certMode } else { "letsencrypt" }
     $hPort  = if ($script:httpPort) { $script:httpPort } else { 0 }
     $hsPort = if ($script:httpsPort) { $script:httpsPort } else { 0 }
-    Show-Completion -DeployLaunched $launched -IsDockerDesktop $dockerDesktopMode -GatewayPort $gwPort -PanelPort $wpPort -Domain $dom -CertMode $cmode -HttpPort $hPort -HttpsPort $hsPort
+    $autoFw = if ($null -ne $script:autoOpenFirewall) { [bool]$script:autoOpenFirewall } else { $true }
+    Show-Completion -DeployLaunched $launched -IsDockerDesktop $dockerDesktopMode -GatewayPort $gwPort -PanelPort $wpPort -Domain $dom -CertMode $cmode -HttpPort $hPort -HttpsPort $hsPort -AutoOpenFirewall $autoFw
 
     Read-Host "按回车关闭此窗口"
 }
