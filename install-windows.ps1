@@ -2212,7 +2212,7 @@ function Main {
                 $runOutput = $runArgs -join ' '
                 if ($runOutput -match "port is already allocated" -or $dockerErr -match "port is already allocated") {
                     Write-Err "端口被占用，请关闭占用端口的程序后重试"
-                    Write-Host "  💡 查看端口占用: netstat -ano | findstr `:$($deployConfig.GatewayPort)`" -ForegroundColor Cyan
+                    Write-Host "  💡 查看端口占用: netstat -ano | findstr :$($deployConfig.GatewayPort)" -ForegroundColor Cyan
                 } else {
                     Write-Err "docker run 失败"
                 }
@@ -2227,7 +2227,7 @@ function Main {
                 Write-Err "端口 ${conflictPort} 已被占用"
                 Write-Host "" 
                 Write-Host "  💡 解决方法:" -ForegroundColor Cyan
-                Write-Host "     1. 查看占用: netstat -ano | findstr `:${conflictPort}`" -ForegroundColor White
+                Write-Host "     1. 查看占用: netstat -ano | findstr :${conflictPort}" -ForegroundColor White
                 Write-Host "     2. 或者重新运行安装脚本，选择其他端口" -ForegroundColor White
                 Write-Host "" 
             } else {
