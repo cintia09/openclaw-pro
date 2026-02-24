@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
     htop procps tmux screen tree less file unzip tar gzip \
     git jq python3 python3-pip python3-venv \
     sudo cron rsync ca-certificates gnupg gettext-base \
+    dnsmasq \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js 22

@@ -6,6 +6,44 @@
 
 # 不使用 set -e，因为健康检查循环中的命令失败不应该终止容器
 
+# ── dnsmasq 本地 DNS 缓存：让容器拥有独立的 DNS 解析能力 ──
+echo "[start-services] Setting up dnsmasq local DNS cache..."
+
+# 1) 从当前 resolv.conf 提取原始上游 DNS（Docker 分配的 nameserver）
+ORIG_NS=$(grep '^nameserver' /etc/resolv.conf 2>/dev/null | awk '{print $2}' | head -3)
+
+# 2) 写 dnsmasq 配置
+cat > /etc/dnsmasq.conf << 'DNSMASQ_CONF'
+# OpenClaw dnsmasq config — 本地 DNS 缓存 + 多上游
+listen-address=127.0.0.1
+bind-interfaces
+no-resolv
+cache-size=2000
+no-negcache
+dns-forward-max=150
+min-cache-ttl=300
+DNSMASQ_CONF
+
+# 添加原始上游 DNS（通常是 Docker Desktop 的 192.168.65.7）
+for ns in $ORIG_NS; do
+    echo "server=$ns" >> /etc/dnsmasq.conf
+done
+# 添加公共 DNS 作为后备
+echo "server=8.8.8.8" >> /etc/dnsmasq.conf
+echo "server=8.8.4.4" >> /etc/dnsmasq.conf
+echo "server=1.1.1.1" >> /etc/dnsmasq.conf
+
+# 3) 启动 dnsmasq
+dnsmasq --test 2>/dev/null && {
+    dnsmasq
+    echo "[start-services] dnsmasq started on 127.0.0.1:53"
+} || {
+    echo "[start-services] dnsmasq config error, skipping"
+}
+
+# 4) 将 resolv.conf 指向本地 dnsmasq
+echo "nameserver 127.0.0.1" > /etc/resolv.conf
+
 # ── DNS 保障：确保容器能解析外部域名 ──
 # DNS-over-HTTPS 解析函数：通过 HTTPS 查询 Cloudflare DoH（绕过传统 DNS）
 doh_resolve() {
@@ -58,10 +96,11 @@ else
     echo "[start-services] Pre-resolved $prewrite_ok domains"
 fi
 
-# DNS nameserver 保障
-if ! nslookup google.com > /dev/null 2>&1; then
-    echo "[start-services] DNS nameserver broken, adding public DNS fallback"
-    echo "nameserver 8.8.8.8" > /etc/resolv.conf
+# DNS nameserver 保障（通过 dnsmasq 测试，如果 dnsmasq 也不行则直连公共 DNS）
+if ! nslookup google.com 127.0.0.1 > /dev/null 2>&1; then
+    echo "[start-services] dnsmasq upstream unreachable, adding direct public DNS as fallback"
+    # 在 dnsmasq 后面追加直连 DNS，作为最后兜底
+    echo "nameserver 8.8.8.8" >> /etc/resolv.conf
     echo "nameserver 8.8.4.4" >> /etc/resolv.conf
 fi
 
