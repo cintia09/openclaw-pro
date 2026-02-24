@@ -22,44 +22,47 @@ add_host_entry() {
     local ip="$1" domain="$2"
     if [ -n "$ip" ] && ! grep -q "$domain" /etc/hosts 2>/dev/null; then
         echo "$ip $domain" >> /etc/hosts
-        echo "[start-services] DNS-over-HTTPS: $domain -> $ip"
+        echo "[start-services] DNS: $domain -> $ip"
     fi
 }
 
-if ! nslookup github.com > /dev/null 2>&1; then
-    echo "[start-services] DNS resolution failed, trying public DNS..."
-    echo "nameserver 8.8.8.8" > /etc/resolv.conf
-    echo "nameserver 8.8.4.4" >> /etc/resolv.conf
+# 始终预写 GitHub 域名到 /etc/hosts（避免 V2RayN TUN 延迟接管导致 Node.js fetch 失败）
+echo "[start-services] Pre-resolving GitHub domains to /etc/hosts..."
+PREWRITE_DOMAINS="github.com api.github.com raw.githubusercontent.com objects.githubusercontent.com"
+prewrite_ok=0
 
-    # 如果 DNS 仍然不通（UDP/TCP 均被阻断，常见于 V2RayN TUN 模式），
-    # 通过 DNS-over-HTTPS 解析并写入 /etc/hosts
-    if ! nslookup github.com > /dev/null 2>&1; then
-        echo "[start-services] DNS still broken (port 53 blocked), using DNS-over-HTTPS fallback..."
+for domain in $PREWRITE_DOMAINS; do
+    # 优先用 nslookup（如果 DNS 当前可用）
+    resolved_ip=$(nslookup "$domain" 2>/dev/null | awk '/^Address: / && !/#/ {print $2; exit}')
+    # 降级用 DoH
+    if [ -z "$resolved_ip" ]; then
+        resolved_ip=$(doh_resolve "$domain")
+    fi
+    if [ -n "$resolved_ip" ]; then
+        add_host_entry "$resolved_ip" "$domain"
+        prewrite_ok=$((prewrite_ok + 1))
+    fi
+done
 
-        # 需要解析的域名列表（GitHub 相关 + 常用服务）
-        DOH_DOMAINS="github.com api.github.com raw.githubusercontent.com objects.githubusercontent.com ghcr.io registry-1.docker.io production.cloudflare.docker.com"
-
-        for domain in $DOH_DOMAINS; do
-            resolved_ip=$(doh_resolve "$domain")
-            add_host_entry "$resolved_ip" "$domain"
-        done
-
-        # 统计结果
-        resolved_count=$(grep -c "DNS-over-HTTPS" /etc/hosts 2>/dev/null || echo 0)
-        echo "[start-services] DoH resolved $resolved_count domains"
-
-        # 如果 DoH 也失败了（完全无外网），使用 GitHub 的静态 IP 兜底
-        if ! grep -q "raw.githubusercontent.com" /etc/hosts 2>/dev/null; then
-            echo "[start-services] DoH failed, using static GitHub IPs as last resort"
-            cat >> /etc/hosts << 'DNSEOF'
+# 如果都没解析到，用静态 IP 兜底
+if [ $prewrite_ok -eq 0 ]; then
+    echo "[start-services] All DNS methods failed, using static GitHub IPs"
+    grep -q "raw.githubusercontent.com" /etc/hosts 2>/dev/null || cat >> /etc/hosts << 'DNSEOF'
 # GitHub hosts fallback (static IPs)
 185.199.108.133 raw.githubusercontent.com
 185.199.109.133 raw.githubusercontent.com
 140.82.114.3 github.com
 140.82.114.3 api.github.com
 DNSEOF
-        fi
-    fi
+else
+    echo "[start-services] Pre-resolved $prewrite_ok domains"
+fi
+
+# DNS nameserver 保障
+if ! nslookup google.com > /dev/null 2>&1; then
+    echo "[start-services] DNS nameserver broken, adding public DNS fallback"
+    echo "nameserver 8.8.8.8" > /etc/resolv.conf
+    echo "nameserver 8.8.4.4" >> /etc/resolv.conf
 fi
 
 CONFIG_FILE="/root/.openclaw/docker-config.json"
