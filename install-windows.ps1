@@ -1806,9 +1806,13 @@ function Main {
         if ((Test-Path (Join-Path $currentDir "Dockerfile")) -and
             (Test-Path (Join-Path $currentDir "start-services.sh"))) {
             $localDeployDir = $currentDir
+            # 当前目录就是 openclaw-pro，home-data 放到父目录下（与 openclaw-pro 平级）
+            $homeBaseDir = Split-Path $currentDir -Parent
             Write-Info "检测到当前目录即为部署目录，直接使用: $localDeployDir"
         } else {
             $localDeployDir = Join-Path $currentDir "openclaw-pro"
+            # home-data 放在 currentDir 下（与 openclaw-pro 平级）
+            $homeBaseDir = $currentDir
         }
         $latestReleaseTag = ""
         $latestReleaseInfo = $null
@@ -2289,7 +2293,7 @@ function Main {
             if ($LASTEXITCODE -eq 0) {
                 Write-OK "检测到本地镜像 openclaw-pro"
                 $localImageReleaseTag = ""
-                $imageTagFile = Join-Path $currentDir "home-data\.openclaw\image-release-tag.txt"
+                $imageTagFile = Join-Path $homeBaseDir "home-data\.openclaw\image-release-tag.txt"
                 if (Test-Path $imageTagFile) {
                     $localImageReleaseTag = (Get-Content $imageTagFile -ErrorAction SilentlyContinue | Select-Object -First 1)
                     if ($localImageReleaseTag) {
@@ -2583,7 +2587,7 @@ function Main {
             if ($containerName -match '^openclaw-pro-(\d+)$') {
                 $homeDataName = "home-data-$($Matches[1])"
             }
-            $defaultHomeData = Join-Path $currentDir $homeDataName
+            $defaultHomeData = Join-Path $homeBaseDir $homeDataName
 
             Write-Host ""
             Write-Host "  📂 容器数据挂载目录 (映射为容器内 /root):" -ForegroundColor Cyan
