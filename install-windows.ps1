@@ -1805,10 +1805,28 @@ function Main {
         $currentDir = (Get-Location).Path
         if ((Test-Path (Join-Path $currentDir "Dockerfile")) -and
             (Test-Path (Join-Path $currentDir "start-services.sh"))) {
-            $localDeployDir = $currentDir
-            # 当前目录就是 openclaw-pro，home-data 放到父目录下（与 openclaw-pro 平级）
-            $homeBaseDir = Split-Path $currentDir -Parent
-            Write-Info "检测到当前目录即为部署目录，直接使用: $localDeployDir"
+            $parentDir = Split-Path $currentDir -Parent
+            Write-Host ""
+            Write-Host "  ⚠️  检测到当前目录已是 OpenClaw 部署目录:" -ForegroundColor Yellow
+            Write-Host "     $currentDir" -ForegroundColor DarkGray
+            Write-Host ""
+            Write-Host "     [1] 在当前目录运行（数据目录将在上级: $parentDir）" -ForegroundColor White
+            Write-Host "     [2] 切换到上级目录运行（推荐，数据目录与代码目录平级）" -ForegroundColor White
+            Write-Host ""
+            Write-Host "  输入选择 [1/2，默认2]: " -NoNewline -ForegroundColor White
+            $dirChoice = (Read-Host).Trim()
+
+            if ($dirChoice -eq '1') {
+                $localDeployDir = $currentDir
+                $homeBaseDir = $parentDir
+                Write-Info "在当前目录运行: $localDeployDir"
+            } else {
+                Set-Location $parentDir
+                $currentDir = $parentDir
+                $localDeployDir = Join-Path $currentDir "openclaw-pro"
+                $homeBaseDir = $currentDir
+                Write-Info "已切换到上级目录: $currentDir"
+            }
         } else {
             $localDeployDir = Join-Path $currentDir "openclaw-pro"
             # home-data 放在 currentDir 下（与 openclaw-pro 平级）
