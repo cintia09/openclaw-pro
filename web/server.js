@@ -485,8 +485,15 @@ app.get('/api/update/check', async (req, res) => {
           const remoteDockerfile = await dfResp.text();
           const remoteHash = crypto.createHash('sha256').update(remoteDockerfile).digest('hex');
           const localHash = getLocalDockerfileHash();
-          result.hotUpdateOnly = localHash && remoteHash === localHash;
-          result.dockerfileChanged = !result.hotUpdateOnly;
+          if (localHash) {
+            // Hash file exists: compare to determine update type
+            result.hotUpdateOnly = remoteHash === localHash;
+            result.dockerfileChanged = remoteHash !== localHash;
+          } else {
+            // Old image without hash file: default to allowing hot update
+            result.hotUpdateOnly = true;
+            result.dockerfileChanged = false;
+          }
         }
       } catch {}
     }
