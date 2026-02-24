@@ -1180,12 +1180,11 @@ function Get-DeployConfig {
         }
         $config.HttpsPort = $httpsPort
 
-        # HTTPS 模式: Caddy 对外，Gateway/Web 仅本机
+        # HTTPS 模式: 仅暴露 Caddy 端口到宿主机
+        # Gateway/Web 走容器内回环访问，不占用宿主机 18789/3000
         $config.PortArgs = @(
             "-p", "$($config.HttpPort):80",
-            "-p", "$($config.HttpsPort):443",
-            "-p", "127.0.0.1:$($config.GatewayPort):18789",
-            "-p", "127.0.0.1:$($config.WebPort):3000"
+            "-p", "$($config.HttpsPort):443"
         )
     } elseif ($domain) {
         Write-Warn "域名格式无效，将使用 HTTP 直连模式"
@@ -1213,7 +1212,7 @@ function Get-DeployConfig {
     if ($config.HttpsEnabled) {
         Write-Host "     HTTP   $($config.HttpPort) → 容器 80  (证书验证+跳转)" -ForegroundColor Gray
         Write-Host "     HTTPS  $($config.HttpsPort) → 容器 443 (主入口)" -ForegroundColor Gray
-        Write-Host "     Gateway 127.0.0.1:$($config.GatewayPort) (仅内部)" -ForegroundColor Gray
+        Write-Host "     Gateway/Web 面板: 仅容器内部访问（不占宿主机端口）" -ForegroundColor Gray
         Write-Host "     域名: $($config.Domain)" -ForegroundColor Cyan
     } else {
         Write-Host "     Gateway $($config.GatewayPort) → 容器 18789" -ForegroundColor Gray
@@ -1266,7 +1265,7 @@ function Show-Completion {
             Write-Host "  📋 端口映射:" -ForegroundColor White
             Write-Host "     HTTP   ${HttpPort} → 证书验证 + 跳转HTTPS" -ForegroundColor Gray
             Write-Host "     HTTPS  ${HttpsPort} → 主入口（Caddy 反代）" -ForegroundColor Gray
-            Write-Host "     Gateway 127.0.0.1:${GatewayPort} → 内部（不对外）" -ForegroundColor Gray
+            Write-Host "     Gateway/Web 面板 → 仅容器内部（不占宿主机端口）" -ForegroundColor Gray
             Write-Host ""
             Write-Host "  🌐 访问地址:" -ForegroundColor White
             $httpsUrl = if ($HttpsPort -eq 443) { "https://${Domain}" } else { "https://${Domain}:${HttpsPort}" }
@@ -2206,11 +2205,16 @@ function Main {
                 }
             } else {
                 # 检查是否是端口冲突
-                $dockerErr = & docker logs openclaw-pro 2>&1 | Out-String
+                $dockerErr = & docker logs $containerName 2>&1 | Out-String
                 $runOutput = $runArgs -join ' '
+                $conflictPort = if ($dockerErr -match 'Bind for.*:(\d+)') { $Matches[1] } else { "" }
                 if ($runOutput -match "port is already allocated" -or $dockerErr -match "port is already allocated") {
-                    Write-Err "端口被占用，请关闭占用端口的程序后重试"
-                    Write-Host "  💡 查看端口占用: netstat -ano | findstr :$($deployConfig.GatewayPort)" -ForegroundColor Cyan
+                    if ($conflictPort) {
+                        Write-Err "端口 ${conflictPort} 被占用，请关闭占用端口的程序后重试"
+                        Write-Host "  💡 查看端口占用: netstat -ano | findstr :${conflictPort}" -ForegroundColor Cyan
+                    } else {
+                        Write-Err "端口被占用，请关闭占用端口的程序后重试"
+                    }
                 } else {
                     Write-Err "docker run 失败"
                 }
