@@ -1829,8 +1829,25 @@ function Main {
             }
         } else {
             $localDeployDir = Join-Path $currentDir "openclaw-pro"
-            # home-data 放在 currentDir 下（与 openclaw-pro 平级）
             $homeBaseDir = $currentDir
+
+            Write-Host ""
+            Write-Host "  📁 安装目录确认:" -ForegroundColor Cyan
+            Write-Host "     代码目录: $localDeployDir" -ForegroundColor White
+            Write-Host "     数据目录: $(Join-Path $homeBaseDir 'home-data')" -ForegroundColor White
+            Write-Host ""
+            Write-Host "     按回车确认，或输入新路径: " -NoNewline -ForegroundColor White
+            $customBaseDir = (Read-Host).Trim()
+            if ($customBaseDir) {
+                if (-not (Test-Path $customBaseDir)) {
+                    New-Item -ItemType Directory -Path $customBaseDir -Force | Out-Null
+                }
+                Set-Location $customBaseDir
+                $currentDir = $customBaseDir
+                $localDeployDir = Join-Path $currentDir "openclaw-pro"
+                $homeBaseDir = $currentDir
+                Write-Info "已切换安装目录: $currentDir"
+            }
         }
         $latestReleaseTag = ""
         $latestReleaseInfo = $null
