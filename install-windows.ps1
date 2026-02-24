@@ -1591,12 +1591,7 @@ function Show-Completion {
         Write-Host "     docker start openclaw-pro      # 启动服务" -ForegroundColor Gray
         Write-Host "     docker exec -it openclaw-pro bash  # 进入容器终端" -ForegroundColor Gray
         Write-Host ""
-        Write-Host "  � 持久化自定义软件（升级后自动恢复）：" -ForegroundColor White
-        Write-Host "     将需要的安装命令写入 ~/custom-setup.sh，容器启动时自动执行。" -ForegroundColor DarkGray
-        Write-Host "     示例：docker exec -it openclaw-pro bash" -ForegroundColor DarkGray
-        Write-Host "           echo 'apt-get update && apt-get install -y htop' >> ~/custom-setup.sh" -ForegroundColor Cyan
-        Write-Host ""
-        Write-Host "  �🔄 升级到新版本：" -ForegroundColor White
+        Write-Host "  🔄 升级到新版本：" -ForegroundColor White
         Write-Host "     重新运行安装命令即可，脚本会自动检测版本差异：" -ForegroundColor DarkGray
         Write-Host "     irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1 | iex" -ForegroundColor Cyan
         Write-Host "     数据目录 (home-data) 不受影响，升级后原有配置和数据保留。" -ForegroundColor DarkGray
@@ -2541,7 +2536,6 @@ function Main {
                 Start-Sleep -Seconds 2
                 Write-OK "旧容器已删除"
                 Write-Info "💡 数据目录 (home-data) 不会被删除，原有配置和数据均保留"
-                Write-Info "💡 如有自定义安装的软件，请写入 ~/custom-setup.sh 以便容器启动时自动恢复"
                 Write-Info "   如需彻底删除数据，请手动删除目录: $(Join-Path $homeBaseDir $upgradeHomeDataName)"
             } else {
                 # [3] 重新配置 — 原有的删除逻辑
