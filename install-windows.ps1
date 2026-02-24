@@ -2074,15 +2074,8 @@ function Main {
                         exit 1
                     }
 
-                    # Extract ZIP（保留已有 home-data）
+                    # Extract ZIP（home-data 已独立于部署目录，无需备份）
                     Write-Info "正在解压..."
-                    $backupHomeData = Join-Path $env:TEMP "openclaw-home-data-backup"
-                    if (Test-Path $backupHomeData) {
-                        Remove-Item $backupHomeData -Recurse -Force -ErrorAction SilentlyContinue
-                    }
-                    if (Test-Path "$localDeployDir\home-data") {
-                        Move-Item "$localDeployDir\home-data" $backupHomeData -Force
-                    }
                     if (Test-Path $localDeployDir) {
                         Remove-Item $localDeployDir -Recurse -Force
                     }
@@ -2108,9 +2101,6 @@ function Main {
                         Move-Item $extractedDir $localDeployDir -Force
                         if ($latestReleaseTag) {
                             $latestReleaseTag | Set-Content (Join-Path $localDeployDir ".release-version") -Force
-                        }
-                        if (Test-Path $backupHomeData) {
-                            Move-Item $backupHomeData (Join-Path $localDeployDir "home-data") -Force
                         }
                     } else {
                         throw "解压后未找到部署目录"
@@ -2199,7 +2189,7 @@ function Main {
                         break
                     }
                 }
-                Write-Info "将创建新容器: $containerName（数据目录: home-data-$idx）"
+                Write-Info "将创建新容器: $containerName（数据目录: home-data-$idx，与代码目录平级）"
             } else {
                 # 删除所有旧容器
                 foreach ($rc in $runningContainers) {
@@ -2237,7 +2227,7 @@ function Main {
             if ($LASTEXITCODE -eq 0) {
                 Write-OK "检测到本地镜像 openclaw-pro"
                 $localImageReleaseTag = ""
-                $imageTagFile = Join-Path $localDeployDir "home-data\.openclaw\image-release-tag.txt"
+                $imageTagFile = Join-Path $currentDir "home-data\.openclaw\image-release-tag.txt"
                 if (Test-Path $imageTagFile) {
                     $localImageReleaseTag = (Get-Content $imageTagFile -ErrorAction SilentlyContinue | Select-Object -First 1)
                     if ($localImageReleaseTag) {
@@ -2523,16 +2513,41 @@ function Main {
                 Write-OK "端口冲突已处理，已更新端口映射"
             }
 
-            # Create home-data directory — 每个容器使用独立的数据目录
+            # Create home-data directory — 数据目录放在用户运行脚本的目录下（与 openclaw-pro 代码目录平级）
             # openclaw-pro     → home-data
             # openclaw-pro-2   → home-data-2
             # openclaw-pro-N   → home-data-N
             $homeDataName = "home-data"
             if ($containerName -match '^openclaw-pro-(\d+)$') {
                 $homeDataName = "home-data-$($Matches[1])"
-                Write-Info "新容器 $containerName 使用独立数据目录: $homeDataName"
             }
-            $homeData = Join-Path $localDeployDir $homeDataName
+            $defaultHomeData = Join-Path $currentDir $homeDataName
+
+            Write-Host ""
+            Write-Host "  📂 容器数据挂载目录 (映射为容器内 /root):" -ForegroundColor Cyan
+            Write-Host "     默认路径: $defaultHomeData" -ForegroundColor White
+            Write-Host ""
+            Write-Host "     [1] 使用默认路径（推荐）" -ForegroundColor White
+            Write-Host "     [2] 自定义路径" -ForegroundColor White
+            Write-Host ""
+            Write-Host "  输入选择 [1/2，默认1]: " -NoNewline -ForegroundColor White
+            $homeDataChoice = (Read-Host).Trim()
+
+            if ($homeDataChoice -eq '2') {
+                Write-Host "  请输入数据目录完整路径: " -NoNewline -ForegroundColor White
+                $customPath = (Read-Host).Trim()
+                if ($customPath) {
+                    $homeData = $customPath
+                    Write-Info "使用自定义数据目录: $homeData"
+                } else {
+                    $homeData = $defaultHomeData
+                    Write-Info "输入为空，使用默认路径: $homeData"
+                }
+            } else {
+                $homeData = $defaultHomeData
+            }
+
+            Write-OK "数据目录: $homeData"
             if (-not (Test-Path $homeData)) {
                 New-Item -ItemType Directory -Path $homeData -Force | Out-Null
             }
