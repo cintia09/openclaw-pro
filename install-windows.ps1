@@ -1834,7 +1834,8 @@ function Main {
             Write-Host ""
             Write-Host "  📁 安装目录确认:" -ForegroundColor Cyan
             Write-Host "     代码目录: $localDeployDir" -ForegroundColor White
-            Write-Host "     数据目录: $(Join-Path $homeBaseDir 'home-data')" -ForegroundColor White
+            Write-Host "     数据目录: $(Join-Path $homeBaseDir 'home-data[-N]')" -ForegroundColor White
+            Write-Host "     （首个实例为 home-data，多实例时为 home-data-2, home-data-3 ...）" -ForegroundColor DarkGray
             Write-Host ""
             Write-Host "     按回车确认，或输入新路径: " -NoNewline -ForegroundColor White
             $customBaseDir = (Read-Host).Trim()
