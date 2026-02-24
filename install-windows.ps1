@@ -1381,6 +1381,28 @@ function Get-DeployConfig {
                 }
             }
         }
+
+        # IP HTTPS 模式也需要配置端口和 PortArgs
+        if ($config.HttpsEnabled) {
+            $httpPort = [int]$DEFAULT_HTTP_PORT
+            if (-not (Test-PortAvailable $httpPort)) {
+                $httpPort = Find-AvailablePort -PreferredPort 8080 -RangeStart 8080 -RangeEnd 8099
+                Write-Warn "端口 80 已被占用，HTTP 使用端口 $httpPort"
+            }
+            $config.HttpPort = $httpPort
+
+            $httpsPort = [int]$DEFAULT_HTTPS_PORT
+            if (-not (Test-PortAvailable $httpsPort)) {
+                $httpsPort = Find-AvailablePort -PreferredPort 8443 -RangeStart 8443 -RangeEnd 8499
+                Write-Warn "端口 443 已被占用，HTTPS 使用端口 $httpsPort"
+            }
+            $config.HttpsPort = $httpsPort
+
+            $config.PortArgs = @(
+                "-p", "$($config.HttpPort):80",
+                "-p", "$($config.HttpsPort):443"
+            )
+        }
     }
 
     if (-not $config.HttpsEnabled) {
