@@ -1129,6 +1129,7 @@ function Get-DeployConfig {
         WebPort      = [int]$WEB_PANEL_PORT
         HttpPort     = 0
         HttpsPort    = 0
+        CertMode     = "letsencrypt"
         Domain       = ""
         PortArgs     = @()
         HttpsEnabled = $false
@@ -1163,12 +1164,31 @@ function Get-DeployConfig {
         $config.Domain = $domain
         $config.HttpsEnabled = $true
 
+        Write-Host ""
+        Write-Host "  🔐 证书模式:" -ForegroundColor White
+        Write-Host "     [1] Let's Encrypt 公网证书（默认，需公网DNS+80/443可达）" -ForegroundColor Gray
+        Write-Host "     [2] 自签证书（Caddy Internal，适合局域网测试）" -ForegroundColor Gray
+        Write-Host ""
+        Write-Host "  请选择证书模式 [1/2，默认1]: " -NoNewline -ForegroundColor White
+        $certChoice = (Read-Host).Trim()
+        if ($certChoice -eq '2') {
+            $config.CertMode = "internal"
+            Write-Info "已选择自签证书模式（Caddy Internal）"
+        } else {
+            $config.CertMode = "letsencrypt"
+            Write-Info "已选择 Let's Encrypt 公网证书模式"
+        }
+
         # HTTP 端口 (ACME 验证 + 跳转HTTPS)
         $httpPort = [int]$DEFAULT_HTTP_PORT
         if (-not (Test-PortAvailable $httpPort)) {
             $httpPort = Find-AvailablePort -PreferredPort 8080 -RangeStart 8080 -RangeEnd 8099
             Write-Warn "端口 80 已被占用，HTTP 使用端口 $httpPort"
-            Write-Warn "⚠️ Let's Encrypt 需要 80 端口，非标准端口可能导致证书申请失败"
+            if ($config.CertMode -eq "letsencrypt") {
+                Write-Warn "⚠️ Let's Encrypt 需要 80 端口，非标准端口可能导致证书申请失败"
+            } else {
+                Write-Info "自签证书模式不依赖公网 ACME 验证，可继续"
+            }
         }
         $config.HttpPort = $httpPort
 
@@ -1212,6 +1232,11 @@ function Get-DeployConfig {
     if ($config.HttpsEnabled) {
         Write-Host "     HTTP   $($config.HttpPort) → 容器 80  (证书验证+跳转)" -ForegroundColor Gray
         Write-Host "     HTTPS  $($config.HttpsPort) → 容器 443 (主入口)" -ForegroundColor Gray
+        if ($config.CertMode -eq "internal") {
+            Write-Host "     证书: 自签证书（Caddy Internal）" -ForegroundColor Yellow
+        } else {
+            Write-Host "     证书: Let's Encrypt 公网证书" -ForegroundColor Gray
+        }
         Write-Host "     Gateway/Web 面板: 仅容器内部访问（不占宿主机端口）" -ForegroundColor Gray
         Write-Host "     域名: $($config.Domain)" -ForegroundColor Cyan
     } else {
@@ -1232,6 +1257,7 @@ function Show-Completion {
         [int]$GatewayPort = 18789,
         [int]$PanelPort = 3000,
         [string]$Domain = "",
+        [string]$CertMode = "letsencrypt",
         [int]$HttpPort = 0,
         [int]$HttpsPort = 0
     )
@@ -1265,6 +1291,12 @@ function Show-Completion {
             Write-Host "  📋 端口映射:" -ForegroundColor White
             Write-Host "     HTTP   ${HttpPort} → 证书验证 + 跳转HTTPS" -ForegroundColor Gray
             Write-Host "     HTTPS  ${HttpsPort} → 主入口（Caddy 反代）" -ForegroundColor Gray
+            if ($CertMode -eq "internal") {
+                Write-Host "     证书模式: 自签证书（局域网测试）" -ForegroundColor Yellow
+                Write-Host "     ⚠️ 首次访问可能提示不受信任，需在客户端信任证书" -ForegroundColor Yellow
+            } else {
+                Write-Host "     证书模式: Let's Encrypt 公网证书" -ForegroundColor Gray
+            }
             Write-Host "     Gateway/Web 面板 → 仅容器内部（不占宿主机端口）" -ForegroundColor Gray
             Write-Host ""
             Write-Host "  🌐 访问地址:" -ForegroundColor White
@@ -2081,6 +2113,7 @@ function Main {
         $script:actualGatewayPort = $deployConfig.GatewayPort
         $script:actualPanelPort   = $deployConfig.WebPort
         $script:deployDomain      = $deployConfig.Domain
+        $script:certMode          = $deployConfig.CertMode
         $script:httpPort          = $deployConfig.HttpPort
         $script:httpsPort         = $deployConfig.HttpsPort
 
@@ -2309,6 +2342,7 @@ function Main {
                 web_port   = $deployConfig.WebPort
                 http_port  = $deployConfig.HttpPort
                 https_port = $deployConfig.HttpsPort
+                cert_mode  = $deployConfig.CertMode
                 domain     = $deployConfig.Domain
                 browserEnabled = $false
                 timezone   = "Asia/Shanghai"
@@ -2338,6 +2372,38 @@ function Main {
             if ($LASTEXITCODE -eq 0) {
                 Write-OK "容器已启动"
                 $launched = $true
+
+                if ($deployConfig.HttpsEnabled) {
+                    $certModeText = if ($deployConfig.CertMode -eq "internal") { "自签证书" } else { "Let's Encrypt" }
+                    Write-Info "正在初始化 HTTPS 证书（${certModeText}）..."
+                    $spinner = @('⠁','⠃','⠇','⠏','⠟','⠿','⡿','⣿','⣾','⣼','⣸','⣰','⣠','⣀','⢀','⠀')
+                    $si = 0
+                    $tlsReady = $false
+                    for ($i = 1; $i -le 30; $i++) {
+                        $spinChar = $spinner[$si % $spinner.Count]
+                        Write-Host "`r  $spinChar 证书处理中... ${i}s/30s" -NoNewline -ForegroundColor Cyan
+                        $si++
+                        try {
+                            $tcp = New-Object System.Net.Sockets.TcpClient
+                            $iar = $tcp.BeginConnect("127.0.0.1", [int]$deployConfig.HttpsPort, $null, $null)
+                            $ok = $iar.AsyncWaitHandle.WaitOne(500)
+                            if ($ok -and $tcp.Connected) {
+                                $tlsReady = $true
+                                $tcp.Close()
+                                break
+                            }
+                            $tcp.Close()
+                        } catch { }
+                        Start-Sleep -Seconds 1
+                    }
+                    Write-Host ""
+                    if ($tlsReady) {
+                        Write-OK "HTTPS 端口已就绪，证书流程已启动"
+                    } else {
+                        Write-Warn "证书流程仍在后台进行，可继续等待"
+                    }
+                    Write-Host "     查看证书日志: docker logs $containerName | findstr /I caddy cert acme tls" -ForegroundColor DarkGray
+                }
 
                 # 自动打开 Windows 防火墙端口（仅实际对外暴露的端口）
                 # HTTPS 模式: 只开 HTTP/HTTPS 端口（Gateway/Web 绑定 127.0.0.1 不需要）
@@ -2451,9 +2517,10 @@ function Main {
     $gwPort = if ($script:actualGatewayPort) { $script:actualGatewayPort } else { [int]$OPENCLAW_PORT }
     $wpPort = if ($script:actualPanelPort) { $script:actualPanelPort } else { [int]$WEB_PANEL_PORT }
     $dom    = if ($script:deployDomain) { $script:deployDomain } else { "" }
+    $cmode  = if ($script:certMode) { $script:certMode } else { "letsencrypt" }
     $hPort  = if ($script:httpPort) { $script:httpPort } else { 0 }
     $hsPort = if ($script:httpsPort) { $script:httpsPort } else { 0 }
-    Show-Completion -DeployLaunched $launched -IsDockerDesktop $dockerDesktopMode -GatewayPort $gwPort -PanelPort $wpPort -Domain $dom -HttpPort $hPort -HttpsPort $hsPort
+    Show-Completion -DeployLaunched $launched -IsDockerDesktop $dockerDesktopMode -GatewayPort $gwPort -PanelPort $wpPort -Domain $dom -CertMode $cmode -HttpPort $hPort -HttpsPort $hsPort
 
     Read-Host "按回车关闭此窗口"
 }

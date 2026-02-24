@@ -12,6 +12,7 @@ mkdir -p "$LOG_DIR" /root/.openclaw
 
 GATEWAY_PID=""
 BROWSER_ENABLED="false"
+CERT_MODE="letsencrypt"
 NOVNC_PID=""
 CHROME_PID=""
 CADDY_PID=""
@@ -38,8 +39,12 @@ gateway_is_healthy() {
 
 if [ -f "$CONFIG_FILE" ]; then
     raw_browser_enabled=$(jq -r '.browserEnabled // "false"' "$CONFIG_FILE" 2>/dev/null)
+    raw_cert_mode=$(jq -r '.cert_mode // "letsencrypt"' "$CONFIG_FILE" 2>/dev/null)
     if [ "$raw_browser_enabled" = "true" ]; then
         BROWSER_ENABLED="true"
+    fi
+    if [ "$raw_cert_mode" = "internal" ]; then
+        CERT_MODE="internal"
     fi
 fi
 
@@ -95,7 +100,17 @@ if [ -f "$CONFIG_FILE" ]; then
 
     if [ -n "$DOMAIN" ]; then
         echo "[start-services] HTTPS domain configured: $DOMAIN"
+        echo "[start-services] Certificate mode: $CERT_MODE"
         export DOMAIN
+        if [ "$CERT_MODE" = "internal" ]; then
+            TLS_BLOCK="tls internal"
+            export TLS_BLOCK
+            echo "[start-services] Using self-signed certificate (Caddy Internal CA)"
+        else
+            TLS_BLOCK=""
+            export TLS_BLOCK
+            echo "[start-services] Using Let's Encrypt certificate"
+        fi
         envsubst < /etc/caddy/Caddyfile.template > /tmp/Caddyfile
         caddy run --config /tmp/Caddyfile >> "$LOG_DIR/caddy.log" 2>&1 &
         CADDY_PID=$!

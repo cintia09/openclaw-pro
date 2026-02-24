@@ -1,4 +1,6 @@
 ${DOMAIN} {
+    ${TLS_BLOCK}
+
     # 浏览器（noVNC）— 需要WebSocket支持
     handle_path /browser/* {
         reverse_proxy localhost:6080
