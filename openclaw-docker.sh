@@ -59,14 +59,134 @@ ensure_docker() {
     success "Docker 安装完成"
 }
 
-# 构建镜像
+# GitHub Release 配置
+GITHUB_REPO="cintia09/openclaw-pro"
+GHCR_IMAGE="ghcr.io/${GITHUB_REPO}"
+IMAGE_TARBALL="openclaw-pro-image.tar.gz"
+
+# 获取远端最新 Release tag
+get_latest_release_tag() {
+    local api_url="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
+    curl -sL "$api_url" 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"\([^"]*\)".*/\1/' || true
+}
+
+# 读取本地镜像版本标记
+get_local_image_tag() {
+    local tag_file="$HOME_DIR/.openclaw/image-release-tag.txt"
+    if [ -f "$tag_file" ]; then
+        cat "$tag_file" 2>/dev/null
+    fi
+}
+
+# 保存镜像版本标记
+save_image_tag() {
+    local tag="$1"
+    mkdir -p "$HOME_DIR/.openclaw"
+    echo "$tag" > "$HOME_DIR/.openclaw/image-release-tag.txt"
+}
+
+# 获取镜像（优先下载预构建，回退到本地构建）
 ensure_image() {
     if docker image inspect "$IMAGE_NAME" &>/dev/null; then
+        # 镜像已存在，检查是否有新版本
+        local local_tag remote_tag
+        local_tag=$(get_local_image_tag)
+        remote_tag=$(get_latest_release_tag)
+
+        if [ -n "$remote_tag" ] && [ -n "$local_tag" ] && [ "$remote_tag" != "$local_tag" ]; then
+            warn "发现新版本镜像: 远端 $remote_tag，本地 $local_tag"
+            echo -e "  ${CYAN}[1]${NC} 使用本地镜像（默认）"
+            echo -e "  ${CYAN}[2]${NC} 下载最新镜像"
+            local img_choice=""
+            read -t 10 -p "请选择 [1/2，默认1，10秒超时自动选择1]: " img_choice 2>/dev/null || true
+            echo ""
+            if [ "$img_choice" = "2" ]; then
+                info "将下载最新镜像..."
+                docker rmi "$IMAGE_NAME" 2>/dev/null || true
+            else
+                return 0
+            fi
+        elif [ -n "$remote_tag" ] && [ -z "$local_tag" ]; then
+            info "本地镜像版本未知，远端最新: $remote_tag"
+            return 0
+        else
+            return 0
+        fi
+    fi
+
+    # 方式1: 本地已有导出的 tar.gz（手动下载或 install.sh 已下载）
+    if [ -f "$SCRIPT_DIR/$IMAGE_TARBALL" ]; then
+        info "发现本地镜像包 $IMAGE_TARBALL，正在导入..."
+        if docker load < "$SCRIPT_DIR/$IMAGE_TARBALL"; then
+            success "镜像导入完成"
+            return 0
+        fi
+        warn "镜像导入失败，尝试其他方式..."
+    fi
+
+    # 方式2: 从 GHCR 拉取
+    info "尝试从 GHCR 拉取镜像..."
+    if docker pull "$GHCR_IMAGE:latest" 2>/dev/null; then
+        docker tag "$GHCR_IMAGE:latest" "$IMAGE_NAME:latest" 2>/dev/null
+        success "镜像拉取完成 (GHCR)"
         return 0
     fi
+    warn "GHCR 拉取失败，尝试从 GitHub Release 下载..."
+
+    # 方式3: 从 GitHub Release 下载 tar.gz
+    if download_release_image; then
+        return 0
+    fi
+
+    # 方式4: 本地构建（最后手段）
+    warn "预构建镜像获取失败，将从 Dockerfile 本地构建（需要较长时间）..."
     info "构建 Docker 镜像..."
     docker build -t "$IMAGE_NAME" "$SCRIPT_DIR"
     success "镜像构建完成"
+}
+
+# 从 GitHub Release 下载镜像 tar.gz
+download_release_image() {
+    local api_url="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
+    local download_url=""
+
+    # 获取下载链接
+    if command -v curl &>/dev/null; then
+        download_url=$(curl -sL "$api_url" 2>/dev/null | \
+            grep -o '"browser_download_url":\s*"[^"]*openclaw-pro-image\.tar\.gz"' | \
+            head -1 | sed 's/.*"\(http[^"]*\)"/\1/')
+    fi
+
+    if [ -z "$download_url" ]; then
+        warn "无法获取 Release 下载链接"
+        return 1
+    fi
+
+    local target="$SCRIPT_DIR/$IMAGE_TARBALL"
+    info "正在从 GitHub Release 下载镜像 (~1.6GB)..."
+    info "下载地址: $download_url"
+
+    if curl -fL -C - --retry 5 --retry-delay 3 --progress-bar -o "$target" "$download_url"; then
+        info "下载完成，正在导入镜像..."
+        if docker load < "$target"; then
+            # 记录镜像版本标记
+            local release_tag
+            release_tag=$(get_latest_release_tag)
+            if [ -n "$release_tag" ]; then
+                save_image_tag "$release_tag"
+            fi
+            success "镜像导入完成 (GitHub Release)"
+            # 保留 tar.gz 以便后续离线使用，用户可手动删除
+            return 0
+        fi
+        warn "镜像导入失败"
+        rm -f "$target"
+        return 1
+    fi
+
+    warn "下载失败"
+    rm -f "$target"
+    return 1
 }
 
 # 确保home目录存在
@@ -249,12 +369,30 @@ first_time_setup() {
     # HTTPS（可选）
     read -p "HTTPS域名（可选，留空=不启用HTTPS）: " DOMAIN
 
+    CERT_MODE="letsencrypt"  # 默认证书模式
+
     if [ -n "$DOMAIN" ]; then
         pick_port 80 8080 "HTTP"
         HTTP_PORT="$PICKED_PORT"
 
         pick_port 8443 8444 "HTTPS"
         HTTPS_PORT="$PICKED_PORT"
+
+        # 证书模式选择（参考 Windows Get-DeployConfig）
+        echo ""
+        echo -e "${BOLD}━━━ HTTPS 证书模式 ━━━${NC}"
+        echo -e "  ${CYAN}[1]${NC} Let's Encrypt 自动证书（推荐，需域名解析到本机）"
+        echo -e "  ${CYAN}[2]${NC} 内置自签证书（内网/测试用，浏览器会提示不安全）"
+        local cert_choice=""
+        read -t 15 -p "请选择 [1/2，默认1，15秒超时自动选择1]: " cert_choice 2>/dev/null || true
+        echo ""
+        if [ "$cert_choice" = "2" ]; then
+            CERT_MODE="internal"
+            info "将使用内置自签证书"
+        else
+            CERT_MODE="letsencrypt"
+            info "将使用 Let's Encrypt 自动证书"
+        fi
 
         # HTTPS 模式：80/443 对外；Gateway/Web 仅本机（通过 Caddy 反代访问）
         PORT_ARGS="-p ${HTTP_PORT}:80 -p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000"
@@ -274,19 +412,35 @@ first_time_setup() {
     "http_port": $HTTP_PORT,
     "https_port": $HTTPS_PORT,
     "domain": "${DOMAIN}",
+    "cert_mode": "${CERT_MODE}",
     "timezone": "${TZ_VAL}",
     "created": "$(date -Iseconds)"
 }
 EOF
     chmod 600 "$CONFIG_FILE"
 
-    # 安全加固（默认开启）
+    # 安全加固（用户确认后开启）
     echo ""
     echo -e "${BOLD}━━━ 宿主机安全加固 ━━━${NC}"
 
     if [ "$(id -u)" != "0" ]; then
         warn "未以 root 运行，跳过宿主机 ufw/fail2ban 自动配置（不影响容器运行）。"
     else
+        local do_firewall="n"
+        echo -e "  是否自动配置防火墙和 fail2ban？"
+        echo -e "  ${CYAN}[1]${NC} 是，自动开启 ufw + fail2ban（推荐公网服务器）"
+        echo -e "  ${CYAN}[2]${NC} 否，跳过（内网/已有防火墙策略）"
+        local fw_choice=""
+        read -t 15 -p "请选择 [1/2，默认1，15秒超时自动选择1]: " fw_choice 2>/dev/null || true
+        echo ""
+        if [ "$fw_choice" = "2" ]; then
+            do_firewall="n"
+            info "跳过防火墙配置"
+        else
+            do_firewall="y"
+        fi
+
+      if [ "$do_firewall" = "y" ]; then
         # ufw 防火墙
         if ! command -v ufw &>/dev/null; then
             info "安装 ufw..."
@@ -334,6 +488,7 @@ F2B
         else
             warn "fail2ban 安装失败或不可用，跳过"
         fi
+      fi  # do_firewall
     fi
 
     # 创建容器
@@ -352,6 +507,8 @@ F2B
         -v "$HOME_DIR:/root" \
         $PORT_ARGS \
         -e "TZ=$TZ_VAL" \
+        -e "CERT_MODE=$CERT_MODE" \
+        -e "DOMAIN=$DOMAIN" \
         --restart unless-stopped \
         "$IMAGE_NAME"
 
@@ -434,6 +591,37 @@ cmd_run() {
             docker exec -it "$CONTAINER_NAME" bash -l
         fi
     else
+        # 检查是否有同名前缀的已停止容器残留
+        local stopped_containers
+        stopped_containers=$(docker ps -a --filter "name=openclaw" --format '{{.Names}}|{{.Status}}' 2>/dev/null || true)
+        if [ -n "$stopped_containers" ]; then
+            echo -e "${YELLOW}发现已停止的 OpenClaw 容器：${NC}"
+            echo "$stopped_containers" | while IFS='|' read -r name status; do
+                echo -e "  ${CYAN}$name${NC} ($status)"
+            done
+            echo ""
+            echo -e "  ${CYAN}[1]${NC} 清除旧容器，重新配置（默认）"
+            echo -e "  ${CYAN}[2]${NC} 启动已有容器"
+            local choice=""
+            read -t 10 -p "请选择 [1/2，默认1，10秒超时自动选择1]: " choice 2>/dev/null || true
+            echo ""
+            if [ "$choice" = "2" ]; then
+                local first_container
+                first_container=$(echo "$stopped_containers" | head -1 | cut -d'|' -f1)
+                info "启动容器 $first_container ..."
+                docker start "$first_container"
+                success "容器已启动"
+                sleep 2
+                docker exec -it "$first_container" bash -l
+                return
+            else
+                # 清理旧容器
+                echo "$stopped_containers" | while IFS='|' read -r name status; do
+                    info "删除旧容器: $name"
+                    docker rm -f "$name" 2>/dev/null || true
+                done
+            fi
+        fi
         # 首次运行
         first_time_setup
     fi
@@ -517,7 +705,8 @@ cmd_rebuild() {
     warn "重建容器（数据不会丢失）..."
     docker stop "$CONTAINER_NAME" 2>/dev/null || true
     docker rm "$CONTAINER_NAME" 2>/dev/null || true
-    docker build -t "$IMAGE_NAME" "$SCRIPT_DIR"
+    docker rmi "$IMAGE_NAME" 2>/dev/null || true
+    ensure_image
     success "镜像重建完成，请运行: $0 run"
 }
 
