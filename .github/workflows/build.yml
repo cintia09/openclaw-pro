@@ -69,7 +69,16 @@ jobs:
             ### 手动安装
             1. 下载 `openclaw-pro-image.tar.gz`
             2. `docker load < openclaw-pro-image.tar.gz`
-            3. `docker run -d --name openclaw-pro -p 18789:18789 -p 3000:3000 -v ./home-data:/root --restart unless-stopped openclaw-pro:latest`
+            3. HTTP 直连模式：
+               `docker run -d --name openclaw-pro -p 18789:18789 -p 3000:3000 -v ./home-data:/root --restart unless-stopped openclaw-pro:latest`
+
+            4. HTTPS 反代模式（推荐，需域名解析到本机）：
+               - 创建 `./home-data/.openclaw/docker-config.json`：
+                 `{"domain":"your.domain.com","http_port":80,"https_port":443,"browserEnabled":false}`
+               - 运行容器：
+                 `docker run -d --name openclaw-pro -p 80:80 -p 443:443 -v ./home-data:/root --restart unless-stopped openclaw-pro:latest`
+
+            5. 浏览器功能默认关闭，可在 Web 面板「系统设置」里开启（保存后重启容器生效）。
           files: |
             openclaw-pro-image.tar.gz
             openclaw-pro-image.tar.gz.sha256
