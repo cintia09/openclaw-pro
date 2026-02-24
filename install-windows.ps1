@@ -2411,8 +2411,8 @@ function Main {
             Write-Host ""
             Write-Host "  请选择操作:" -ForegroundColor White
             Write-Host "     [1] 保留旧容器，新建一个实例（使用不同端口）" -ForegroundColor Gray
-            Write-Host "     [2] 升级/替换旧容器（保留原有配置和数据）" -ForegroundColor Gray
-            Write-Host "     [3] 停止旧容器，重新配置（全部重新设置）" -ForegroundColor Gray
+            Write-Host "     [2] 升级旧容器（沿用端口/域名配置，数据保留）" -ForegroundColor Gray
+            Write-Host "     [3] 删除旧容器，全部重新配置（数据保留，端口/域名重新设置）" -ForegroundColor Gray
             Write-Host ""
             Write-Host "  输入选择 [2]: " -NoNewline -ForegroundColor White
             $choice = (Read-Host).Trim()
