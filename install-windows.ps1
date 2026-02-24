@@ -841,6 +841,15 @@ function Test-PortAvailable {
     } catch {
         return $false
     }
+    # Check 1b: TcpListener on loopback (127.0.0.1)
+    # 某些 Windows/Docker 场景下，0.0.0.0 可绑定但 127.0.0.1 已被占用
+    try {
+        $listenerLoop = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, $Port)
+        $listenerLoop.Start()
+        $listenerLoop.Stop()
+    } catch {
+        return $false
+    }
     # Check 2: Also check Docker container port mappings
     try {
         $dockerPorts = & docker ps --format "{{.Ports}}" 2>$null
@@ -2374,6 +2383,96 @@ function Main {
                 Start-Sleep -Seconds 1
             }
 
+            # 启动前最终端口校验：避免“前面检测通过，docker run 时冲突”
+            $requiredMappings = @()
+            if ($deployConfig.HttpsEnabled) {
+                $requiredMappings += @{ HostPort = [int]$deployConfig.HttpPort; ContainerPort = 80 }
+                $requiredMappings += @{ HostPort = [int]$deployConfig.HttpsPort; ContainerPort = 443 }
+            } else {
+                $requiredMappings += @{ HostPort = [int]$deployConfig.GatewayPort; ContainerPort = 18789 }
+                $requiredMappings += @{ HostPort = [int]$deployConfig.WebPort; ContainerPort = 3000 }
+            }
+
+            $conflicts = @()
+            foreach ($m in $requiredMappings) {
+                if (-not (Test-PortAvailable $m.HostPort)) {
+                    $conflicts += $m
+                }
+            }
+
+            if ($conflicts.Count -gt 0) {
+                Write-Host ""
+                Write-Warn "检测到端口冲突（启动前复检）:"
+                foreach ($c in $conflicts) {
+                    Write-Host "     宿主机端口 $($c.HostPort) -> 容器 $($c.ContainerPort)" -ForegroundColor DarkGray
+                }
+                Write-Host ""
+                Write-Host "  请选择处理方式:" -ForegroundColor White
+                Write-Host "     [1] 自动分配可用端口（默认）" -ForegroundColor Gray
+                Write-Host "     [2] 手动输入新端口" -ForegroundColor Gray
+                Write-Host "     [3] 退出并手动处理" -ForegroundColor Gray
+                Write-Host ""
+                Write-Host "  输入选择 [1/2/3，默认1]: " -NoNewline -ForegroundColor White
+                $fixChoice = (Read-Host).Trim()
+                if (-not $fixChoice) { $fixChoice = '1' }
+
+                if ($fixChoice -eq '3') {
+                    throw "port conflict detected before docker run"
+                }
+
+                foreach ($c in $conflicts) {
+                    $newPort = 0
+                    if ($fixChoice -eq '2') {
+                        while ($true) {
+                            Write-Host "  请输入容器 $($c.ContainerPort) 对应的新宿主机端口 [默认 $($c.HostPort)]: " -NoNewline -ForegroundColor White
+                            $pIn = (Read-Host).Trim()
+                            if (-not $pIn) { $pIn = "$($c.HostPort)" }
+                            if ($pIn -notmatch '^\d+$') {
+                                Write-Warn "端口必须是数字"
+                                continue
+                            }
+                            $tryPort = [int]$pIn
+                            if ($tryPort -lt 1 -or $tryPort -gt 65535) {
+                                Write-Warn "端口范围应为 1-65535"
+                                continue
+                            }
+                            if (-not (Test-PortAvailable $tryPort)) {
+                                Write-Warn "端口 $tryPort 仍被占用，请换一个"
+                                continue
+                            }
+                            $newPort = $tryPort
+                            break
+                        }
+                    } else {
+                        $newPort = Find-AvailablePort -PreferredPort ($c.HostPort + 1) -RangeStart ($c.HostPort + 1) -RangeEnd ($c.HostPort + 200)
+                    }
+
+                    if ($c.ContainerPort -eq 18789) { $deployConfig.GatewayPort = $newPort }
+                    elseif ($c.ContainerPort -eq 3000) { $deployConfig.WebPort = $newPort }
+                    elseif ($c.ContainerPort -eq 80) { $deployConfig.HttpPort = $newPort }
+                    elseif ($c.ContainerPort -eq 443) { $deployConfig.HttpsPort = $newPort }
+                }
+
+                if ($deployConfig.HttpsEnabled) {
+                    $deployConfig.PortArgs = @(
+                        "-p", "$($deployConfig.HttpPort):80",
+                        "-p", "$($deployConfig.HttpsPort):443"
+                    )
+                } else {
+                    $deployConfig.PortArgs = @(
+                        "-p", "$($deployConfig.GatewayPort):18789",
+                        "-p", "$($deployConfig.WebPort):3000"
+                    )
+                }
+
+                $script:actualGatewayPort = $deployConfig.GatewayPort
+                $script:actualPanelPort   = $deployConfig.WebPort
+                $script:httpPort          = $deployConfig.HttpPort
+                $script:httpsPort         = $deployConfig.HttpsPort
+
+                Write-OK "端口冲突已处理，已更新端口映射"
+            }
+
             # Create home-data directory and write docker-config.json
             $homeData = Join-Path $localDeployDir "home-data"
             if (-not (Test-Path $homeData)) {
@@ -2415,7 +2514,44 @@ function Main {
             $runArgs += "openclaw-pro"
 
             Write-Log "docker run args: $($runArgs -join ' ')"
-            & docker @runArgs 2>&1
+            $runResult = & docker @runArgs 2>&1
+            $runOutputText = $runResult | Out-String
+
+            # Docker Desktop/Windows 偶发端口竞争：自动改端口并重试一次
+            if ($LASTEXITCODE -ne 0 -and $runOutputText -match "port is already allocated" -and $runOutputText -match 'Bind for .*:(\d+)') {
+                $conflictPort = [int]$Matches[1]
+                Write-Warn "检测到端口冲突: $conflictPort，正在自动分配新端口并重试..."
+
+                $newPort = Find-AvailablePort -PreferredPort ($conflictPort + 1) -RangeStart ($conflictPort + 1) -RangeEnd ($conflictPort + 200)
+                Write-Info "端口 $conflictPort → $newPort"
+
+                for ($i = 0; $i -lt $runArgs.Count; $i++) {
+                    if ($runArgs[$i] -ne '-p') { continue }
+                    if ($i + 1 -ge $runArgs.Count) { continue }
+
+                    $mapping = "$($runArgs[$i + 1])"
+                    if ($mapping -match '^(?<ip>[^:]+:)?(?<host>\d+):(?<container>\d+)$') {
+                        $hostPort = [int]$Matches['host']
+                        if ($hostPort -eq $conflictPort) {
+                            $ipPrefix = $Matches['ip']
+                            $containerPort = [int]$Matches['container']
+
+                            if ($containerPort -eq 18789) { $deployConfig.GatewayPort = $newPort }
+                            if ($containerPort -eq 3000)  { $deployConfig.WebPort = $newPort }
+                            if ($containerPort -eq 80)    { $deployConfig.HttpPort = $newPort }
+                            if ($containerPort -eq 443)   { $deployConfig.HttpsPort = $newPort }
+
+                            $runArgs[$i + 1] = "${ipPrefix}${newPort}:${containerPort}"
+                        }
+                    }
+                }
+
+                # 清理可能残留的同名容器并重试
+                & docker rm -f $containerName 2>$null | Out-Null
+                Write-Log "docker run retry args: $($runArgs -join ' ')"
+                $runResult = & docker @runArgs 2>&1
+                $runOutputText = $runResult | Out-String
+            }
 
             if ($LASTEXITCODE -eq 0) {
                 Write-OK "容器已启动"
@@ -2497,7 +2633,7 @@ function Main {
             } else {
                 # 检查是否是端口冲突
                 $dockerErr = & docker logs $containerName 2>&1 | Out-String
-                $runOutput = $runArgs -join ' '
+                $runOutput = $runOutputText
                 $conflictPort = if ($dockerErr -match 'Bind for.*:(\d+)') { $Matches[1] } else { "" }
                 if ($runOutput -match "port is already allocated" -or $dockerErr -match "port is already allocated") {
                     if ($conflictPort) {
