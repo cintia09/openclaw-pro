@@ -2221,11 +2221,43 @@ function Main {
                 }
                 Write-Info "将创建新容器: $containerName（数据目录: home-data-$idx，与代码目录平级）"
             } else {
-                # 删除所有旧容器
-                foreach ($rc in $runningContainers) {
-                    $rcName = ($rc -split '\|')[0]
+                # 删除旧容器 — 让用户选择删除哪些
+                if ($runningContainers.Count -eq 1) {
+                    # 只有一个，直接删除
+                    $rcName = ($runningContainers[0] -split '\|')[0]
                     Write-Info "停止并删除: $rcName"
                     & docker rm -f $rcName 2>&1 | Out-Null
+                    $containerName = $rcName   # 复用原容器名
+                } else {
+                    # 多个容器，列出让用户选择
+                    Write-Host ""
+                    Write-Host "  请选择要删除的容器:" -ForegroundColor Cyan
+                    for ($i = 0; $i -lt $runningContainers.Count; $i++) {
+                        $parts = $runningContainers[$i] -split '\|'
+                        Write-Host "     [$($i + 1)] $($parts[0])  (状态: $($parts[1])  端口: $($parts[2]))" -ForegroundColor White
+                    }
+                    Write-Host "     [A] 全部删除" -ForegroundColor White
+                    Write-Host ""
+                    Write-Host "  输入选择 [编号/A，默认A]: " -NoNewline -ForegroundColor White
+                    $delChoice = (Read-Host).Trim().ToUpper()
+
+                    if ($delChoice -match '^\d+$' -and [int]$delChoice -ge 1 -and [int]$delChoice -le $runningContainers.Count) {
+                        # 删除指定容器
+                        $selIdx = [int]$delChoice - 1
+                        $rcName = ($runningContainers[$selIdx] -split '\|')[0]
+                        Write-Info "停止并删除: $rcName"
+                        & docker rm -f $rcName 2>&1 | Out-Null
+                        $containerName = $rcName   # 复用被删除容器的名字
+                    } else {
+                        # 全部删除
+                        foreach ($rc in $runningContainers) {
+                            $rcName = ($rc -split '\|')[0]
+                            Write-Info "停止并删除: $rcName"
+                            & docker rm -f $rcName 2>&1 | Out-Null
+                        }
+                        # 复用默认容器名 openclaw-pro
+                        $containerName = "openclaw-pro"
+                    }
                 }
                 Start-Sleep -Seconds 2  # 等待端口释放
                 Write-OK "旧容器已删除"
