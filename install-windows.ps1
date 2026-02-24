@@ -860,6 +860,36 @@ function Test-PortAvailable {
     return $true
 }
 
+function Get-PortProcess {
+    param([int]$Port)
+    # 查找占用指定端口的进程名和 PID
+    try {
+        # 方式 1: netstat
+        $netstat = netstat -ano 2>$null | Where-Object { $_ -match ":${Port}\s" -and $_ -match "LISTENING" }
+        if ($netstat) {
+            $pid_ = ($netstat -split '\s+' | Select-Object -Last 1)
+            if ($pid_ -match '^\d+$') {
+                $proc = Get-Process -Id ([int]$pid_) -ErrorAction SilentlyContinue
+                if ($proc) {
+                    return "$($proc.ProcessName) (PID: $pid_)"
+                }
+                return "PID: $pid_"
+            }
+        }
+        # 方式 2: Docker 容器端口映射
+        $dockerPorts = & docker ps --format "{{.Names}}|{{.Ports}}" 2>$null
+        if ($dockerPorts) {
+            foreach ($line in $dockerPorts) {
+                if ($line -match ":${Port}->") {
+                    $cName = ($line -split '\|')[0]
+                    return "Docker 容器: $cName"
+                }
+            }
+        }
+    } catch {}
+    return $null
+}
+
 function Find-AvailablePort {
     param([int]$PreferredPort, [int]$RangeStart = 18000, [int]$RangeEnd = 19000)
 
