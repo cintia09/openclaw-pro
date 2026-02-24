@@ -1320,11 +1320,12 @@ function Get-DeployConfig {
                 $virtualKeywords = @('vEthernet', 'WSL', 'Docker', 'Hyper-V', 'VirtualBox', 'VMware', 'Loopback', 'Bluetooth')
                 $allAdapters = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' }
                 if (-not $allAdapters) {
-                    # -Physical 不可用时回退
-                    $allAdapters = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object {
-                        $_.Status -eq 'Up' -and
-                        ($n = $_.Name + ' ' + $_.InterfaceDescription;
-                         -not ($virtualKeywords | Where-Object { $n -match $_ }))
+                    # -Physical 不可用时回退：按名称排除虚拟网卡
+                    $allAdapters = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' } | Where-Object {
+                        $n = $_.Name + ' ' + $_.InterfaceDescription
+                        $isVirtual = $false
+                        foreach ($kw in $virtualKeywords) { if ($n -match $kw) { $isVirtual = $true; break } }
+                        -not $isVirtual
                     }
                 }
                 if ($allAdapters) {
