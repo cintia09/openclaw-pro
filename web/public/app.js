@@ -218,6 +218,11 @@ async function checkForUpdate(force = false) {
     $('update-current').textContent = u.currentVersion;
     $('update-link').href = u.releaseUrl || '#';
     banner.style.display = '';
+    // Show/hide hot update button based on update type
+    const hotBtn = $('btn-hotpatch-banner');
+    const fullHint = $('update-full-hint');
+    if (hotBtn) hotBtn.style.display = u.dockerfileChanged ? 'none' : '';
+    if (fullHint) fullHint.style.display = u.dockerfileChanged ? '' : 'none';
   }
 
   // Sidebar red dot
@@ -231,8 +236,17 @@ async function checkForUpdate(force = false) {
     const statusEl = $('settings-update-status');
     const linkEl = $('settings-release-link');
     if (u.hasUpdate) {
-      statusEl.innerHTML = '<span style="color:#4ade80">🆕 有新版本</span>';
+      if (u.dockerfileChanged) {
+        statusEl.innerHTML = '<span style="color:#f59e0b">📦 需要完整更新</span>';
+      } else {
+        statusEl.innerHTML = '<span style="color:#4ade80">⚡ 可热更新</span>';
+      }
       if (linkEl && u.releaseUrl) { linkEl.href = u.releaseUrl; linkEl.style.display = ''; }
+      // Show/hide hot update & full update hints on settings page
+      const hpBtn = $('btn-hotpatch');
+      const fullNote = $('settings-full-update-note');
+      if (hpBtn) hpBtn.style.display = u.dockerfileChanged ? 'none' : '';
+      if (fullNote) fullNote.style.display = u.dockerfileChanged ? '' : 'none';
     } else if (u.latestVersion) {
       statusEl.innerHTML = '<span style="color:#888">✅ 已是最新</span>';
       if (linkEl) linkEl.style.display = 'none';

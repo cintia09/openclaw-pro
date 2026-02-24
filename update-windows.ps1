@@ -26,20 +26,47 @@ Write-Host "  ║     OpenClaw Pro - Quick Updater         ║" -ForegroundColor
 Write-Host "  ╚══════════════════════════════════════════╝" -ForegroundColor Cyan
 Write-Host ""
 
-# ── 0. 选择更新方式 ──
+# ── 0. 智能检测更新类型 ──
+$recommendFull = $false
+$recommendMsg = ""
+try {
+    $existingId = (& docker ps -q --filter "name=^${CONTAINER_NAME}$" 2>$null)
+    if ($existingId) {
+        $checkResult = & docker exec $CONTAINER_NAME curl -s http://127.0.0.1:3000/api/update/check?force=1 2>$null | ConvertFrom-Json
+        if ($checkResult.dockerfileChanged) {
+            $recommendFull = $true
+            $recommendMsg = "  ⚠️  检测到 Dockerfile 已变更，建议完整更新"
+        }
+    }
+} catch {}
+
 Write-Host "  请选择更新方式:" -ForegroundColor White
+if ($recommendMsg) {
+    Write-Host ""
+    Write-Host $recommendMsg -ForegroundColor Yellow
+}
 Write-Host ""
-Write-Host "  [1] ⚡ 热更新（推荐）" -ForegroundColor Yellow
-Write-Host "      只更新 Web 面板、配置模板等文件，无需下载镜像/重启容器" -ForegroundColor DarkGray
-Write-Host "      适合：前端修复、配置变更、小版本更新" -ForegroundColor DarkGray
+if ($recommendFull) {
+    Write-Host "  [1] ⚡ 热更新" -ForegroundColor DarkGray
+    Write-Host "      只更新 Web 面板、配置模板等文件，无需下载镜像/重启容器" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "  [2] 📦 完整更新（推荐）" -ForegroundColor Yellow
+    Write-Host "      下载完整镜像并重建容器（~1GB，需几分钟）" -ForegroundColor DarkGray
+    Write-Host "      适合：系统包/Node.js 升级、大版本更新" -ForegroundColor DarkGray
+} else {
+    Write-Host "  [1] ⚡ 热更新（推荐）" -ForegroundColor Yellow
+    Write-Host "      只更新 Web 面板、配置模板等文件，无需下载镜像/重启容器" -ForegroundColor DarkGray
+    Write-Host "      适合：前端修复、配置变更、小版本更新" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "  [2] 📦 完整更新" -ForegroundColor Cyan
+    Write-Host "      下载完整镜像并重建容器（~1GB，需几分钟）" -ForegroundColor DarkGray
+    Write-Host "      适合：系统包/Node.js 升级、大版本更新" -ForegroundColor DarkGray
+}
 Write-Host ""
-Write-Host "  [2] 📦 完整更新" -ForegroundColor Cyan
-Write-Host "      下载完整镜像并重建容器（~1GB，需几分钟）" -ForegroundColor DarkGray
-Write-Host "      适合：系统包/Node.js 升级、大版本更新" -ForegroundColor DarkGray
-Write-Host ""
-Write-Host "  选择 [1/2，默认1]: " -NoNewline -ForegroundColor White
+$defaultChoice = if ($recommendFull) { "2" } else { "1" }
+Write-Host "  选择 [1/2，默认${defaultChoice}]: " -NoNewline -ForegroundColor White
 $updateChoice = (Read-Host).Trim()
-if (-not $updateChoice) { $updateChoice = "1" }
+if (-not $updateChoice) { $updateChoice = $defaultChoice }
 
 if ($updateChoice -eq "1") {
     # ══════════════ 热更新模式 ══════════════

@@ -425,10 +425,15 @@ app.post('/api/password', (req, res) => {
 // API: update check
 // ============================================================
 const VERSION_FILE = '/etc/openclaw-version';
+const DOCKERFILE_HASH_FILE = '/etc/openclaw-dockerfile-hash';
 const GITHUB_REPO = 'cintia09/openclaw-pro';
 
 function getCurrentVersion() {
   try { return fs.readFileSync(VERSION_FILE, 'utf8').trim(); } catch { return 'unknown'; }
+}
+
+function getLocalDockerfileHash() {
+  try { return fs.readFileSync(DOCKERFILE_HASH_FILE, 'utf8').trim(); } catch { return ''; }
 }
 
 let updateCache = { data: null, checkedAt: 0 };
@@ -466,10 +471,27 @@ app.get('/api/update/check', async (req, res) => {
       hasUpdate,
       publishedAt: release.published_at,
       releaseUrl: release.html_url,
-      releaseName: release.name || latestVersion
+      releaseName: release.name || latestVersion,
+      hotUpdateOnly: false
     };
 
-    updateCache = { data: { latestVersion, hasUpdate, publishedAt: release.published_at, releaseUrl: release.html_url, releaseName: release.name || latestVersion }, checkedAt: Date.now() };
+    // Check if Dockerfile changed (determines hot vs full update)
+    if (hasUpdate) {
+      try {
+        const dfResp = await fetch(`${GITHUB_RAW_BASE}/main/Dockerfile`, {
+          headers: { 'User-Agent': 'openclaw-pro' }
+        });
+        if (dfResp.ok) {
+          const remoteDockerfile = await dfResp.text();
+          const remoteHash = crypto.createHash('sha256').update(remoteDockerfile).digest('hex');
+          const localHash = getLocalDockerfileHash();
+          result.hotUpdateOnly = localHash && remoteHash === localHash;
+          result.dockerfileChanged = !result.hotUpdateOnly;
+        }
+      } catch {}
+    }
+
+    updateCache = { data: { latestVersion, hasUpdate, publishedAt: release.published_at, releaseUrl: release.html_url, releaseName: release.name || latestVersion, hotUpdateOnly: result.hotUpdateOnly, dockerfileChanged: result.dockerfileChanged }, checkedAt: Date.now() };
     res.json(result);
   } catch (e) {
     res.json({ currentVersion, latestVersion: null, error: e.message });

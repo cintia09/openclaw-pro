@@ -57,5 +57,9 @@ RUN chmod +x /usr/local/bin/start-services.sh
 ARG BUILD_VERSION=dev
 RUN echo "$BUILD_VERSION" > /etc/openclaw-version
 
+# 写入 Dockerfile hash（用于检测是否需要完整更新）
+COPY Dockerfile /tmp/Dockerfile.build
+RUN sha256sum /tmp/Dockerfile.build | cut -d' ' -f1 > /etc/openclaw-dockerfile-hash && rm /tmp/Dockerfile.build
+
 WORKDIR /root
 CMD ["/usr/local/bin/start-services.sh"]
