@@ -220,6 +220,10 @@ async function checkForUpdate(force = false) {
     banner.style.display = '';
   }
 
+  // Sidebar red dot
+  const dot = $('update-dot');
+  if (dot) { dot.style.display = u.hasUpdate ? '' : 'none'; }
+
   // Settings page
   if ($('settings-current-ver')) {
     $('settings-current-ver').textContent = u.currentVersion || '—';
@@ -820,3 +824,6 @@ setInterval(refreshStatus, 30000);
 
 // Auto check for updates on page load (non-blocking)
 setTimeout(() => checkForUpdate(), 3000);
+
+// Periodic update check every 30 minutes
+setInterval(() => checkForUpdate(), 30 * 60 * 1000);
