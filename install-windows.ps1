@@ -1333,12 +1333,10 @@ function Show-Completion {
         Write-Host "     https://github.com/$GITHUB_REPO/releases/download/v1.0.0/openclaw-pro-image.tar.gz" -ForegroundColor Cyan
         Write-Host ""
         Write-Host "     方式2: aria2c 多线程下载（推荐，需先安装 aria2）" -ForegroundColor Yellow
-        Write-Host "     aria2c -x 8 -s 8 -k 2M --continue=true --retry-wait=3 --max-tries=0 ``" -ForegroundColor White
-        Write-Host "       `"https://github.com/$GITHUB_REPO/releases/download/v1.0.0/openclaw-pro-image.tar.gz`"" -ForegroundColor White
+        Write-Host "     aria2c -x 8 -s 8 -k 2M --continue=true --retry-wait=3 --max-tries=0 https://github.com/$GITHUB_REPO/releases/download/v1.0.0/openclaw-pro-image.tar.gz" -ForegroundColor White
         Write-Host ""
         Write-Host "     方式3: curl 命令行（网络不稳定时可能失败）" -ForegroundColor Yellow
-        Write-Host "     curl.exe -L -C - --retry 200 --retry-all-errors --retry-delay 3 -o openclaw-pro-image.tar.gz ``" -ForegroundColor White
-        Write-Host "       `"https://github.com/$GITHUB_REPO/releases/download/v1.0.0/openclaw-pro-image.tar.gz`"" -ForegroundColor White
+        Write-Host "     curl.exe -L -C - --retry 200 --retry-all-errors --retry-delay 3 -o openclaw-pro-image.tar.gz https://github.com/$GITHUB_REPO/releases/download/v1.0.0/openclaw-pro-image.tar.gz" -ForegroundColor White
         Write-Host ""
         Write-Host "     下载完成后执行:" -ForegroundColor Yellow
         Write-Host "     docker load -i openclaw-pro-image.tar.gz" -ForegroundColor White
