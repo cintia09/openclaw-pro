@@ -16,6 +16,16 @@ const { execSync, exec } = require('child_process');
 const crypto = require('crypto');
 const dns = require('dns');
 
+// ── 关键修复：让 Node.js 的 fetch() 使用 dns.lookup（读 /etc/hosts），
+//    而非 dns.resolve（只走 DNS 服务器，无法读 /etc/hosts）──
+try {
+  const { Agent, setGlobalDispatcher } = require('undici');
+  setGlobalDispatcher(new Agent({ connect: { lookup: dns.lookup } }));
+  console.log('[DNS] Configured fetch() to use dns.lookup (/etc/hosts aware)');
+} catch (e) {
+  console.log('[DNS] Could not configure undici agent:', e.message);
+}
+
 // ── DNS-over-HTTPS 回退：当容器 DNS 不可用时（如 V2RayN TUN 模式），
 //    通过 Cloudflare DoH 解析域名并注入 /etc/hosts ──
 const DOH_CACHE = new Map();
