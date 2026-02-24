@@ -2329,7 +2329,12 @@ function Main {
             if ($LASTEXITCODE -eq 0) {
                 Write-OK "检测到本地镜像 openclaw-pro"
                 $localImageReleaseTag = ""
-                $imageTagFile = Join-Path $homeBaseDir "home-data\.openclaw\image-release-tag.txt"
+                # 根据容器名确定对应的数据目录（openclaw-pro → home-data, openclaw-pro-2 → home-data-2）
+                $tagHomeDataName = "home-data"
+                if ($containerName -match '^openclaw-pro-(\d+)$') {
+                    $tagHomeDataName = "home-data-$($Matches[1])"
+                }
+                $imageTagFile = Join-Path $homeBaseDir "$tagHomeDataName\.openclaw\image-release-tag.txt"
                 if (Test-Path $imageTagFile) {
                     $localImageReleaseTag = (Get-Content $imageTagFile -ErrorAction SilentlyContinue | Select-Object -First 1)
                     if ($localImageReleaseTag) {
