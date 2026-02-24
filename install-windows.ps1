@@ -1314,14 +1314,46 @@ function Get-DeployConfig {
         Write-Host "  输入选择 [1/2，默认1]: " -NoNewline -ForegroundColor White
         $ipHttpsChoice = (Read-Host).Trim()
         if ($ipHttpsChoice -eq '2') {
-            # 获取本机 IP
+            # 获取本机局域网 IP（排除虚拟网卡：WSL, Docker, Hyper-V, VPN 等）
             $localIp = ""
             try {
-                $localIp = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.PrefixOrigin -ne 'WellKnown' -and $_.IPAddress -ne '127.0.0.1' } | Select-Object -First 1).IPAddress
+                $virtualKeywords = @('vEthernet', 'WSL', 'Docker', 'Hyper-V', 'VirtualBox', 'VMware', 'Loopback', 'Bluetooth')
+                $allAdapters = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' }
+                if (-not $allAdapters) {
+                    # -Physical 不可用时回退
+                    $allAdapters = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object {
+                        $_.Status -eq 'Up' -and
+                        ($n = $_.Name + ' ' + $_.InterfaceDescription;
+                         -not ($virtualKeywords | Where-Object { $n -match $_ }))
+                    }
+                }
+                if ($allAdapters) {
+                    $localIp = ($allAdapters | ForEach-Object {
+                        Get-NetIPAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
+                    } | Where-Object {
+                        $_.IPAddress -ne '127.0.0.1' -and
+                        $_.IPAddress -notmatch '^169\.254\.' -and   # APIPA
+                        $_.PrefixOrigin -ne 'WellKnown'
+                    } | Select-Object -First 1).IPAddress
+                }
             } catch { }
+            # 回退方案：排除常见虚拟网段
             if (-not $localIp) {
                 try {
-                    $localIp = ([System.Net.Dns]::GetHostAddresses([System.Net.Dns]::GetHostName()) | Where-Object { $_.AddressFamily -eq 'InterNetwork' -and $_.ToString() -ne '127.0.0.1' } | Select-Object -First 1).ToString()
+                    $localIp = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {
+                        $_.IPAddress -ne '127.0.0.1' -and
+                        $_.IPAddress -notmatch '^169\.254\.' -and
+                        $_.IPAddress -notmatch '^172\.(1[6-9]|2\d|3[01])\.' -and  # Docker/WSL 常用网段
+                        $_.PrefixOrigin -ne 'WellKnown'
+                    } | Select-Object -First 1).IPAddress
+                } catch { }
+            }
+            # 最终回退
+            if (-not $localIp) {
+                try {
+                    $localIp = ([System.Net.Dns]::GetHostAddresses([System.Net.Dns]::GetHostName()) | Where-Object {
+                        $_.AddressFamily -eq 'InterNetwork' -and $_.ToString() -ne '127.0.0.1' -and $_.ToString() -notmatch '^172\.(1[6-9]|2\d|3[01])\.'
+                    } | Select-Object -First 1).ToString()
                 } catch { }
             }
             if ($localIp) {
