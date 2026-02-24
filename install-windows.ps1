@@ -1205,6 +1205,7 @@ function Get-DeployConfig {
         WebPort      = [int]$WEB_PANEL_PORT
         HttpPort     = 0
         HttpsPort    = 0
+        SshPort      = 2222
         CertMode     = "letsencrypt"
         Domain       = ""
         PortArgs     = @()
@@ -1419,6 +1420,15 @@ function Get-DeployConfig {
         )
     }
 
+    # SSH 端口（所有模式通用）
+    $sshPort = 2222
+    if (-not (Test-PortAvailable $sshPort)) {
+        $sshPort = Find-AvailablePort -PreferredPort 2223 -RangeStart 2223 -RangeEnd 2299
+        Write-Warn "端口 2222 已被占用，SSH 使用端口 $sshPort"
+    }
+    $config.SshPort = $sshPort
+    $config.PortArgs += @("-p", "$($config.SshPort):22")
+
     # 显示配置摘要
     Write-Host ""
     Write-Host "  ─────────────────────────────────────────────────" -ForegroundColor DarkGray
@@ -1426,6 +1436,7 @@ function Get-DeployConfig {
     if ($config.HttpsEnabled) {
         Write-Host "     HTTP   $($config.HttpPort) → 容器 80  (证书验证+跳转)" -ForegroundColor Gray
         Write-Host "     HTTPS  $($config.HttpsPort) → 容器 443 (主入口)" -ForegroundColor Gray
+        Write-Host "     SSH    $($config.SshPort) → 容器 22  (远程登录)" -ForegroundColor Gray
         if ($config.CertMode -eq "internal") {
             Write-Host "     证书: 自签证书（Caddy Internal）" -ForegroundColor Yellow
         } else {
@@ -1442,6 +1453,7 @@ function Get-DeployConfig {
     } else {
         Write-Host "     Gateway $($config.GatewayPort) → 容器 18789" -ForegroundColor Gray
         Write-Host "     Web面板 $($config.WebPort) → 容器 3000" -ForegroundColor Gray
+        Write-Host "     SSH    $($config.SshPort) → 容器 22  (远程登录)" -ForegroundColor Gray
     }
     Write-Host "  ─────────────────────────────────────────────────" -ForegroundColor DarkGray
     Write-Host ""
@@ -1455,6 +1467,7 @@ function Get-DeployConfig {
         if ($config.GatewayPort -and $config.GatewayPort -gt 0) { $fwPortList += $config.GatewayPort }
         if ($config.WebPort -and $config.WebPort -gt 0) { $fwPortList += $config.WebPort }
     }
+    if ($config.SshPort -and $config.SshPort -gt 0) { $fwPortList += $config.SshPort }
     $fwPortsText = ($fwPortList | Sort-Object -Unique) -join ','
     $defaultAutoOpen = if ($config.HttpsEnabled -and $config.CertMode -eq "internal") { "N" } else { "Y" }
     $defaultHint = if ($defaultAutoOpen -eq "Y") { "Y/n" } else { "y/N" }
@@ -1486,6 +1499,7 @@ function Show-Completion {
         [string]$CertMode = "letsencrypt",
         [int]$HttpPort = 0,
         [int]$HttpsPort = 0,
+        [int]$SshPort = 2222,
         [bool]$AutoOpenFirewall = $true
     )
 
@@ -1519,6 +1533,7 @@ function Show-Completion {
             Write-Host "  📋 端口映射:" -ForegroundColor White
             Write-Host "     HTTP   ${HttpPort} → 证书验证 + 跳转HTTPS" -ForegroundColor Gray
             Write-Host "     HTTPS  ${HttpsPort} → 主入口（Caddy 反代）" -ForegroundColor Gray
+            Write-Host "     SSH    ${SshPort} → 远程登录（密钥认证）" -ForegroundColor Gray
             if ($CertMode -eq "internal") {
                 Write-Host "     证书模式: 自签证书（局域网测试）" -ForegroundColor Yellow
                 Write-Host "     ⚠️ 首次访问浏览器会提示「不安全」，点击「继续访问」/「高级」即可" -ForegroundColor Yellow
@@ -1536,6 +1551,7 @@ function Show-Completion {
             Write-Host "  📋 端口映射:" -ForegroundColor White
             Write-Host "     Gateway ${GatewayPort} → 容器 18789 (API入口)" -ForegroundColor Gray
             Write-Host "     Web面板 ${PanelPort} → 容器 3000  (管理面板)" -ForegroundColor Gray
+            Write-Host "     SSH    ${SshPort} → 容器 22    (远程登录)" -ForegroundColor Gray
             Write-Host ""
             Write-Host "  🌐 访问地址:" -ForegroundColor White
             Write-Host "     Gateway:  http://localhost:${GatewayPort}" -ForegroundColor Cyan
@@ -1557,6 +1573,7 @@ function Show-Completion {
             $portList += $GatewayPort
             $portList += $PanelPort
         }
+        if ($SshPort -and $SshPort -gt 0) { $portList += $SshPort }
         if ($portList.Count -gt 0 -and $AutoOpenFirewall) {
             $ports = ($portList | Sort-Object -Unique) -join ','
             Write-Host "  🔒 防火墙端口已自动开放 (${ports})，如需重新设置:" -ForegroundColor Yellow
@@ -1590,6 +1607,7 @@ function Show-Completion {
         Write-Host "     docker stop openclaw-pro       # 停止服务" -ForegroundColor Gray
         Write-Host "     docker start openclaw-pro      # 启动服务" -ForegroundColor Gray
         Write-Host "     docker exec -it openclaw-pro bash  # 进入容器终端" -ForegroundColor Gray
+        Write-Host "     ssh root@localhost -p ${SshPort}    # SSH 远程登录" -ForegroundColor Gray
         Write-Host ""
         Write-Host "  🔄 升级到新版本：" -ForegroundColor White
         Write-Host "     重新运行安装命令即可，脚本会自动检测版本差异：" -ForegroundColor DarkGray
@@ -2494,6 +2512,8 @@ function Main {
                         Write-Host "     Web面板端口: $($upgradeConfig.web_port)" -ForegroundColor White
                     }
                     Write-Host "     数据目录: $(Join-Path $homeBaseDir $upgradeHomeDataName)" -ForegroundColor White
+                    $upgradeSshPort = if ($upgradeConfig.ssh_port) { $upgradeConfig.ssh_port } else { 2222 }
+                    Write-Host "     SSH 端口: $upgradeSshPort" -ForegroundColor White
                     Write-Host ""
 
                     # 构建 $deployConfig 复用旧配置
@@ -2503,6 +2523,7 @@ function Main {
                         WebPort      = if ($upgradeConfig.web_port) { [int]$upgradeConfig.web_port } else { [int]$WEB_PANEL_PORT }
                         HttpPort     = if ($upgradeConfig.http_port) { [int]$upgradeConfig.http_port } else { 0 }
                         HttpsPort    = if ($upgradeConfig.https_port) { [int]$upgradeConfig.https_port } else { 0 }
+                        SshPort      = [int]$upgradeSshPort
                         CertMode     = if ($upgradeConfig.cert_mode) { $upgradeConfig.cert_mode } else { "letsencrypt" }
                         Domain       = if ($upgradeConfig.domain) { $upgradeConfig.domain } else { "" }
                         PortArgs     = @()
@@ -2520,6 +2541,7 @@ function Main {
                             "-p", "$($deployConfig.WebPort):3000"
                         )
                     }
+                    $deployConfig.PortArgs += @("-p", "$($deployConfig.SshPort):22")
 
                     $script:actualGatewayPort = $deployConfig.GatewayPort
                     $script:actualPanelPort   = $deployConfig.WebPort
@@ -2527,6 +2549,7 @@ function Main {
                     $script:certMode          = $deployConfig.CertMode
                     $script:httpPort          = $deployConfig.HttpPort
                     $script:httpsPort         = $deployConfig.HttpsPort
+                    $script:sshPort           = $deployConfig.SshPort
                     $script:autoOpenFirewall  = $deployConfig.AutoOpenFirewall
                 }
 
@@ -2600,6 +2623,7 @@ function Main {
             $script:certMode          = $deployConfig.CertMode
             $script:httpPort          = $deployConfig.HttpPort
             $script:httpsPort         = $deployConfig.HttpsPort
+            $script:sshPort           = $deployConfig.SshPort
             $script:autoOpenFirewall  = $deployConfig.AutoOpenFirewall
         }
 
@@ -2862,6 +2886,7 @@ function Main {
                 $requiredMappings += @{ HostPort = [int]$deployConfig.GatewayPort; ContainerPort = 18789 }
                 $requiredMappings += @{ HostPort = [int]$deployConfig.WebPort; ContainerPort = 3000 }
             }
+            $requiredMappings += @{ HostPort = [int]$deployConfig.SshPort; ContainerPort = 22 }
 
             $conflicts = @()
             foreach ($m in $requiredMappings) {
@@ -2921,6 +2946,7 @@ function Main {
                     elseif ($c.ContainerPort -eq 3000) { $deployConfig.WebPort = $newPort }
                     elseif ($c.ContainerPort -eq 80) { $deployConfig.HttpPort = $newPort }
                     elseif ($c.ContainerPort -eq 443) { $deployConfig.HttpsPort = $newPort }
+                    elseif ($c.ContainerPort -eq 22) { $deployConfig.SshPort = $newPort }
                 }
 
                 if ($deployConfig.HttpsEnabled) {
@@ -2934,11 +2960,13 @@ function Main {
                         "-p", "$($deployConfig.WebPort):3000"
                     )
                 }
+                $deployConfig.PortArgs += @("-p", "$($deployConfig.SshPort):22")
 
                 $script:actualGatewayPort = $deployConfig.GatewayPort
                 $script:actualPanelPort   = $deployConfig.WebPort
                 $script:httpPort          = $deployConfig.HttpPort
                 $script:httpsPort         = $deployConfig.HttpsPort
+                $script:sshPort           = $deployConfig.SshPort
 
                 Write-OK "端口冲突已处理，已更新端口映射"
             }
@@ -2992,6 +3020,7 @@ function Main {
                 web_port   = $deployConfig.WebPort
                 http_port  = $deployConfig.HttpPort
                 https_port = $deployConfig.HttpsPort
+                ssh_port   = $deployConfig.SshPort
                 cert_mode  = $deployConfig.CertMode
                 domain     = $deployConfig.Domain
                 browserEnabled = $false
@@ -3227,8 +3256,9 @@ function Main {
     $cmode  = if ($script:certMode) { $script:certMode } else { "letsencrypt" }
     $hPort  = if ($script:httpPort) { $script:httpPort } else { 0 }
     $hsPort = if ($script:httpsPort) { $script:httpsPort } else { 0 }
+    $sPort  = if ($script:sshPort) { $script:sshPort } else { 2222 }
     $autoFw = if ($null -ne $script:autoOpenFirewall) { [bool]$script:autoOpenFirewall } else { $true }
-    Show-Completion -DeployLaunched $launched -IsDockerDesktop $dockerDesktopMode -GatewayPort $gwPort -PanelPort $wpPort -Domain $dom -CertMode $cmode -HttpPort $hPort -HttpsPort $hsPort -AutoOpenFirewall $autoFw
+    Show-Completion -DeployLaunched $launched -IsDockerDesktop $dockerDesktopMode -GatewayPort $gwPort -PanelPort $wpPort -Domain $dom -CertMode $cmode -HttpPort $hPort -HttpsPort $hsPort -SshPort $sPort -AutoOpenFirewall $autoFw
 
     Read-Host "按回车关闭此窗口"
 }
