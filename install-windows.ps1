@@ -1977,12 +1977,30 @@ function Main {
 
             # 策略: 检查本地已有镜像 → 下载预构建 → 本地构建
             $imageReady = $false
+            $forceRefreshImage = $false
 
             # ── 尝试 0: 检查镜像是否已存在 ──
             $existingImage = & docker image inspect openclaw-pro 2>$null
             if ($LASTEXITCODE -eq 0) {
-                Write-OK "镜像 openclaw-pro 已存在，跳过下载/构建"
-                $imageReady = $true
+                Write-OK "检测到本地镜像 openclaw-pro"
+                Write-Host ""
+                Write-Host "  请选择镜像策略:" -ForegroundColor Cyan
+                Write-Host "     [1] 使用本地镜像（默认，最快）" -ForegroundColor White
+                Write-Host "     [2] 强制下载最新镜像（覆盖更新）" -ForegroundColor White
+                Write-Host ""
+                Write-Host "  请输入选择 [1/2，默认1]: " -NoNewline -ForegroundColor White
+                $imageChoice = (Read-Host).Trim()
+
+                if ($imageChoice -eq '2') {
+                    $forceRefreshImage = $true
+                    Write-Info "已选择强制下载最新镜像"
+                    # 删除本地旧镜像，确保 docker load 后使用最新版本
+                    & docker rmi -f openclaw-pro 2>&1 | Out-Null
+                    Start-Sleep -Milliseconds 500
+                } else {
+                    Write-OK "已选择使用本地镜像，跳过下载/构建"
+                    $imageReady = $true
+                }
             }
 
             # ── 尝试 1: 下载预构建镜像（分块断点续传） ──
