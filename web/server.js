@@ -18,13 +18,56 @@ const dns = require('dns');
 
 // ── 关键修复：让 Node.js 的 fetch() 使用 dns.lookup（读 /etc/hosts），
 //    而非 dns.resolve（只走 DNS 服务器，无法读 /etc/hosts）──
-try {
-  const { Agent, setGlobalDispatcher } = require('undici');
-  setGlobalDispatcher(new Agent({ connect: { lookup: dns.lookup } }));
-  console.log('[DNS] Configured fetch() to use dns.lookup (/etc/hosts aware)');
-} catch (e) {
-  console.log('[DNS] Could not configure undici agent:', e.message);
+// Node.js 22 内置 fetch 基于 undici，但 undici 模块不直接暴露给 require。
+// 解决方案：设置 dns.setDefaultResultOrder('verbatim') 并 patch dns 模块
+// 让 Node.js 的默认 DNS 解析优先使用系统 resolver（读 /etc/hosts）
+dns.setDefaultResultOrder('verbatim');
+
+// 对于 Node.js >= 20，可以通过设置环境变量来让 fetch 走 lookup
+// 实际生效方式：我们用 http.Agent/https.Agent 的 lookup 来覆盖，
+// 但 fetch 不支持这些 agent。所以改为：在 DoH 阶段直接写 /etc/hosts，
+// 并通过子进程调用 curl 来发起外部请求作为 fetch 的降级方案。
+
+/**
+ * 当 Node.js fetch() 因 DNS 无法解析而失败时，
+ * 降级使用子进程 curl（curl 读 /etc/hosts）
+ */
+async function fetchWithFallback(url, options = {}) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), options.timeout || 15000);
+    const resp = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(timeout);
+    return resp;
+  } catch (fetchErr) {
+    // fetch failed (likely DNS), fallback to curl
+    const curlArgs = ['-sf', '--connect-timeout', '10', '-L'];
+    if (options.headers) {
+      for (const [k, v] of Object.entries(options.headers)) {
+        curlArgs.push('-H', `${k}: ${v}`);
+      }
+    }
+    if (options.method === 'POST') {
+      curlArgs.push('-X', 'POST');
+      if (options.body) curlArgs.push('-d', typeof options.body === 'string' ? options.body : JSON.stringify(options.body));
+    }
+    curlArgs.push(url);
+
+    return new Promise((resolve, reject) => {
+      exec(`curl ${curlArgs.map(a => `'${a}'`).join(' ')}`, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+        if (err) return reject(new Error(`curl fallback failed: ${stderr || err.message}`));
+        // Wrap curl output to look like a fetch Response
+        resolve({
+          ok: true,
+          status: 200,
+          text: async () => stdout,
+          json: async () => JSON.parse(stdout),
+        });
+      });
+    });
+  }
 }
+console.log('[DNS] fetchWithFallback configured (curl fallback for DNS issues)');
 
 // ── DNS-over-HTTPS 回退：当容器 DNS 不可用时（如 V2RayN TUN 模式），
 //    通过 Cloudflare DoH 解析域名并注入 /etc/hosts ──
@@ -500,13 +543,10 @@ app.get('/api/update/check', async (req, res) => {
   }
 
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
-    const resp = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
+    const resp = await fetchWithFallback(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
       headers: { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'openclaw-pro' },
-      signal: controller.signal
+      timeout: 10000
     });
-    clearTimeout(timeout);
 
     if (!resp.ok) {
       return res.json({ currentVersion, latestVersion: null, error: `GitHub API: ${resp.status}` });
@@ -530,8 +570,9 @@ app.get('/api/update/check', async (req, res) => {
     // Check if Dockerfile changed (determines hot vs full update)
     if (hasUpdate) {
       try {
-        const dfResp = await fetch(`${GITHUB_RAW_BASE}/main/Dockerfile`, {
-          headers: { 'User-Agent': 'openclaw-pro' }
+        const dfResp = await fetchWithFallback(`${GITHUB_RAW_BASE}/main/Dockerfile`, {
+          headers: { 'User-Agent': 'openclaw-pro' },
+          timeout: 10000
         });
         if (dfResp.ok) {
           const remoteDockerfile = await dfResp.text();
@@ -599,13 +640,10 @@ app.post('/api/update/hotpatch', async (req, res) => {
     for (const [ghPath, localPath] of HOTPATCH_FILES) {
       try {
         const url = `${GITHUB_RAW_BASE}/${branch}/${ghPath}`;
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 15000);
-        const resp = await fetch(url, {
+        const resp = await fetchWithFallback(url, {
           headers: { 'User-Agent': 'openclaw-pro' },
-          signal: controller.signal
+          timeout: 15000
         });
-        clearTimeout(timeout);
 
         if (!resp.ok) {
           log(`  ⚠ ${ghPath}: HTTP ${resp.status}, 跳过`);
@@ -647,8 +685,9 @@ app.post('/api/update/hotpatch', async (req, res) => {
 
     // Update version file
     try {
-      const versionResp = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
-        headers: { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'openclaw-pro' }
+      const versionResp = await fetchWithFallback(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
+        headers: { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'openclaw-pro' },
+        timeout: 10000
       });
       if (versionResp.ok) {
         const rel = await versionResp.json();
