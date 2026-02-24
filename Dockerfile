@@ -11,11 +11,13 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js 22
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+RUN curl -fsSL --retry 3 --retry-delay 3 https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs && rm -rf /var/lib/apt/lists/*
 
 # Caddy
-RUN curl -fsSL 'https://github.com/caddyserver/caddy/releases/download/v2.9.1/caddy_2.9.1_linux_amd64.tar.gz' -o /tmp/caddy.tar.gz \
+RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+    'https://github.com/caddyserver/caddy/releases/download/v2.11.1/caddy_2.11.1_linux_amd64.tar.gz' \
+    -o /tmp/caddy.tar.gz \
     && tar xzf /tmp/caddy.tar.gz -C /usr/local/bin/ caddy && rm /tmp/caddy.tar.gz \
     && chmod +x /usr/local/bin/caddy
 
@@ -26,8 +28,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Chromium（Ubuntu 24.04 Docker环境）
-RUN wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
-    && dpkg -i google-chrome-stable_current_amd64.deb || apt-get -f install -y \
+RUN wget -q --tries=3 --retry-connrefused https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+    && (dpkg -i google-chrome-stable_current_amd64.deb || apt-get -f install -y) \
     && rm -f google-chrome-stable_current_amd64.deb \
     && rm -rf /var/lib/apt/lists/*
 
