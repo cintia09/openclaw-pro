@@ -251,7 +251,7 @@ function Assert-Administrator {
     Write-Host "     如果已下载 install-windows.bat，可右键 → 以管理员身份运行" -ForegroundColor Gray
     Write-Host ""
     Read-Host "按回车退出"
-    exit 1
+    return
 }
 
 # ─── Windows version check ────────────────────────────────────────────────────
@@ -271,7 +271,7 @@ function Test-WindowsVersion {
         Write-Err "Windows 版本过低 (Build $build)"
         Write-Suggestion "WSL2 需要 Windows 10 版本 2004 (Build 19041) 或更高版本 / Windows 11"
         Write-Suggestion "请前往 Windows Update 升级系统后重试"
-        exit 1
+        return
     }
 
     Write-OK "Windows 版本符合要求"
@@ -1815,7 +1815,7 @@ function Main {
 
             Write-Host ""
             Read-Host "  安装 Docker Desktop 后，按回车退出，然后重新运行安装命令"
-            exit 0
+            return
         } else {
             # Option B: auto-install WSL2
             Write-Info "将自动安装 WSL2 + Docker Engine"
@@ -1870,14 +1870,14 @@ function Main {
             Write-OK "WSL2 安装包已安装，需要重启以完成配置"
             Register-ResumeTask
             Show-RebootMessage
-            exit 0
+            return
         } elseif ($result -eq "error") {
             Show-Error `
                 "WSL2 安装" `
                 "wsl --install 命令失败" `
                 "请访问 https://aka.ms/wsl 手动安装 WSL2，然后重新运行此脚本"
             Read-Host "按回车退出"
-            exit 1
+            return
         }
 
         Write-OK "WSL2 + $UBUNTU_DISTRO 安装成功"
@@ -1926,7 +1926,7 @@ function Main {
                     "$distroName 启动超时" `
                     "请尝试手动运行: wsl -d $distroName，然后重新运行此脚本"
                 Read-Host "按回车退出"
-                exit 1
+                return
             }
 
             $dockerOK = Install-DockerInWsl -DistroName $distroName
@@ -1937,7 +1937,7 @@ function Main {
                     "在 WSL 中安装 Docker 失败" `
                     "请手动运行: wsl -d $distroName，然后参考 https://docs.docker.com/engine/install/ubuntu/ 安装 Docker"
                 Read-Host "按回车退出"
-                exit 1
+                return
             }
         } else {
             Write-Step 3 5 "Docker 已安装，跳过"
@@ -2330,7 +2330,7 @@ function Main {
                         Write-Info "删除损坏的下载文件，请重新运行安装命令"
                         Remove-Item $zipFile -Force -ErrorAction SilentlyContinue
                         Read-Host "按回车退出"
-                        exit 1
+                        return
                     }
 
                     # Extract ZIP（home-data 已独立于部署目录，无需备份）
@@ -2379,7 +2379,7 @@ function Main {
                     Write-Host "     3. 重新运行此脚本" -ForegroundColor White
                     Write-Host ""
                     Read-Host "按回车退出"
-                    exit 1
+                    return
                 }
             }
         } else {
@@ -3255,7 +3255,7 @@ function Main {
                     "无法将部署包复制到 WSL" `
                     "请手动复制 docker 目录到 WSL 后运行: cd /root/openclaw-pro && ./openclaw-docker.sh run"
                 Read-Host "按回车退出"
-                exit 1
+                return
             }
         } else {
             Write-OK "部署包已存在，跳过复制"
@@ -3301,5 +3301,5 @@ try {
     Write-Host "  📄 日志文件: $LOG_FILE" -ForegroundColor DarkGray
     Write-Host ""
     Read-Host "按回车退出"
-    exit 1
+    return
 }
