@@ -3046,6 +3046,50 @@ function Main {
             }
             Write-OK "镜像准备完成"
 
+            # 启动前强校验：确保 openclaw-pro:latest 标签真实存在
+            $preRunImageCheck = & docker image inspect openclaw-pro 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warn "镜像标签 openclaw-pro 缺失，尝试自动修复..."
+
+                # 优先把已存在的 GHCR 镜像重新 tag 为 openclaw-pro:latest
+                try {
+                    $ghcrLocalCandidates = & docker images --format "{{.Repository}}:{{.Tag}}" 2>$null | Where-Object {
+                        $_ -like "ghcr.io/$GITHUB_REPO:*"
+                    }
+                    if ($ghcrLocalCandidates -and $ghcrLocalCandidates.Count -gt 0) {
+                        $cand = $ghcrLocalCandidates[0]
+                        & docker tag $cand "openclaw-pro:latest" 2>$null
+                    }
+                } catch { }
+
+                $preRunImageCheck = & docker image inspect openclaw-pro 2>$null
+                if ($LASTEXITCODE -ne 0) {
+                    # 仍缺失时，直接拉取 GHCR 并 tag
+                    $repairTag = if ($latestReleaseTag) { $latestReleaseTag } else { "latest" }
+                    $repairImage = "ghcr.io/${GITHUB_REPO}:${repairTag}"
+                    Write-Info "镜像修复: 拉取 $repairImage"
+                    try {
+                        & docker pull $repairImage 2>&1 | ForEach-Object {
+                            if ($_ -match "Pulling|Downloading|Extracting|Pull complete|Digest|Status") {
+                                Write-Host "  $_" -ForegroundColor DarkGray
+                            }
+                            Write-Log "docker pull(repair): $_"
+                        }
+                        if ($LASTEXITCODE -eq 0) {
+                            & docker tag $repairImage "openclaw-pro:latest" 2>$null
+                        }
+                    } catch {
+                        Write-Log "Image repair pull failed: $_"
+                    }
+                }
+
+                $preRunImageCheck = & docker image inspect openclaw-pro 2>$null
+                if ($LASTEXITCODE -ne 0) {
+                    throw "镜像修复失败：未找到 openclaw-pro:latest"
+                }
+                Write-OK "镜像标签修复完成"
+            }
+
             # 再次检查目标容器名是否有残留（防御性检查）
             $existing = & docker ps -a --filter "name=^${containerName}$" --format "{{.Names}}" 2>&1
             if ($existing -match $containerName) {
