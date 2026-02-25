@@ -2631,7 +2631,7 @@ function Main {
         try {
             Push-Location $localDeployDir
 
-            # 策略: 检查本地已有镜像 → GHCR拉取 → 下载预构建 → 本地构建
+            # 策略: 检查本地已有镜像 → 下载Release tar.gz → GHCR拉取 → 本地构建
             $imageReady = $false
             $forceRefreshImage = $false
 
@@ -2720,36 +2720,7 @@ function Main {
                 }
             }
 
-            # ── 尝试 1: 从 GHCR 拉取预构建镜像（最快） ──
-            if (-not $imageReady) {
-                $ghcrTag = if ($latestReleaseTag) { $latestReleaseTag } else { "latest" }
-                $ghcrImage = "ghcr.io/${GITHUB_REPO}:${ghcrTag}"
-                Write-Info "尝试从 GHCR 拉取镜像: $ghcrImage ..."
-                try {
-                    & docker pull $ghcrImage 2>&1 | ForEach-Object {
-                        if ($_ -match "Pulling|Downloading|Extracting|Pull complete|Digest|Status") {
-                            Write-Host "  $_" -ForegroundColor DarkGray
-                        }
-                        Write-Log "docker pull: $_"
-                    }
-                    if ($LASTEXITCODE -eq 0) {
-                        & docker tag $ghcrImage "openclaw-pro:latest" 2>$null
-                        $imageReady = $true
-                        Write-OK "GHCR 镜像拉取成功"
-                        try {
-                            $pulledId = (& docker image inspect openclaw-pro --format '{{.Id}}' 2>$null)
-                            if ($pulledId) { $script:loadedImageDigest = $pulledId }
-                        } catch { }
-                    } else {
-                        Write-Warn "GHCR 拉取失败（可能网络不通或镜像不公开），继续尝试其他方式..."
-                    }
-                } catch {
-                    Write-Log "GHCR pull failed: $_"
-                    Write-Warn "GHCR 拉取异常，继续尝试其他方式..."
-                }
-            }
-
-            # ── 尝试 2: 下载预构建镜像 tar.gz（分块断点续传） ──
+            # ── 尝试 1: 下载预构建镜像 tar.gz（分块断点续传） ──
             if (-not $imageReady) {
             Write-Info "检查 Release 预构建镜像..."
             try {
@@ -2832,11 +2803,11 @@ function Main {
                                 }
                             } catch { }
                         } else {
-                            Write-Warn "docker load 失败，将尝试本地 docker build..."
+                            Write-Warn "docker load 失败，继续尝试其他方式..."
                         }
                         Remove-Item $imageTar -Force -ErrorAction SilentlyContinue
                     } else {
-                        Write-Warn "分块下载失败，将尝试本地 docker build..."
+                        Write-Warn "分块下载失败，继续尝试其他方式..."
                         # 保留部分下载的文件以便续传（下次运行自动恢复）
                     }
                 } else {
@@ -2844,9 +2815,38 @@ function Main {
                 }
             } catch {
                 Write-Log "Pre-built image download failed: $_"
-                Write-Info "Release 镜像获取失败，将尝试本地 docker build..."
+                Write-Info "Release 镜像获取失败，继续尝试其他方式..."
             }
             }  # end if (-not $imageReady) for download
+
+            # ── 尝试 2: 从 GHCR 拉取镜像 ──
+            if (-not $imageReady) {
+                $ghcrTag = if ($latestReleaseTag) { $latestReleaseTag } else { "latest" }
+                $ghcrImage = "ghcr.io/${GITHUB_REPO}:${ghcrTag}"
+                Write-Info "尝试从 GHCR 拉取镜像: $ghcrImage ..."
+                try {
+                    & docker pull $ghcrImage 2>&1 | ForEach-Object {
+                        if ($_ -match "Pulling|Downloading|Extracting|Pull complete|Digest|Status") {
+                            Write-Host "  $_" -ForegroundColor DarkGray
+                        }
+                        Write-Log "docker pull: $_"
+                    }
+                    if ($LASTEXITCODE -eq 0) {
+                        & docker tag $ghcrImage "openclaw-pro:latest" 2>$null
+                        $imageReady = $true
+                        Write-OK "GHCR 镜像拉取成功"
+                        try {
+                            $pulledId = (& docker image inspect openclaw-pro --format '{{.Id}}' 2>$null)
+                            if ($pulledId) { $script:loadedImageDigest = $pulledId }
+                        } catch { }
+                    } else {
+                        Write-Warn "GHCR 拉取失败，继续尝试本地构建..."
+                    }
+                } catch {
+                    Write-Log "GHCR pull failed: $_"
+                    Write-Warn "GHCR 拉取异常，继续尝试本地构建..."
+                }
+            }
 
             # ── 尝试 3: 本地构建 (fallback) ──
             if (-not $imageReady) {
