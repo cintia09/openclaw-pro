@@ -211,7 +211,6 @@ Write-Host ""
 
 # ── 0. 智能检测更新类型 ──
 $recommendFull = $false
-$forceFullOnly = $false
 $recommendMsg = ""
 $containerRunning = $false
 $containerExists = $false
@@ -267,25 +266,23 @@ try {
         $recommendFull = $true
         $recommendMsg = "  ⚠️  容器无法启动，建议完整更新重建容器"
     } else {
-        # 容器不存在 → 只能完整更新
-        $recommendFull = $true
-        $forceFullOnly = $true
-        $recommendMsg = "  ⚠️  未找到容器 '$CONTAINER_NAME'，需要完整更新"
+        # 容器不存在 → 提示安装
+        Write-Host ""
+        Write-Err "未找到容器 '$CONTAINER_NAME'"
+        Write-Host ""
+        Write-Host "  请先运行安装脚本来创建容器：" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "  irm https://raw.githubusercontent.com/$GITHUB_REPO/main/install-windows.ps1 | iex" -ForegroundColor Cyan
+        Write-Host ""
+        Read-Host "按回车退出"
+        exit 0
     }
 } catch {
     Write-Host " (检测跳过)" -ForegroundColor DarkGray
 }
 
-# 没有容器时不显示热更新选项
-if ($forceFullOnly) {
-    Write-Host ""
-    Write-Host $recommendMsg -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "  将执行完整更新：下载镜像并创建容器" -ForegroundColor Cyan
-    Write-Host ""
-    $updateChoice = "2"
-} else {
-    Write-Host "  请选择更新方式:" -ForegroundColor White
+# 显示更新菜单
+Write-Host "  请选择更新方式:" -ForegroundColor White
     if ($recommendMsg) {
         Write-Host ""
         Write-Host $recommendMsg -ForegroundColor Yellow
@@ -312,7 +309,6 @@ if ($forceFullOnly) {
     Write-Host "  选择 [1/2，默认${defaultChoice}]: " -NoNewline -ForegroundColor White
     $updateChoice = (Read-Host).Trim()
     if (-not $updateChoice) { $updateChoice = $defaultChoice }
-}
 
 if ($updateChoice -eq "1") {
     # ══════════════ 热更新模式 ══════════════
