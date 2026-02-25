@@ -15,12 +15,12 @@ net session >nul 2>&1
 if %errorLevel% neq 0 (
     echo  [INFO] Requesting administrator privileges...
     echo.
-    powershell -Command "Start-Process cmd -ArgumentList '/c cd /d ""%~dp0"" && powershell -ExecutionPolicy Bypass -File ""%~dp0install-windows.ps1""' -Verb RunAs"
+    powershell -Command "Start-Process cmd -ArgumentList '/c cd /d ""%~dp0"" && ""%~f0""' -Verb RunAs"
     exit /b
 )
 
 REM Already admin, run PowerShell script directly
 cd /d "%~dp0"
-powershell -ExecutionPolicy Bypass -File "%~dp0install-windows.ps1" %*
+powershell -ExecutionPolicy Bypass -Command "[Console]::OutputEncoding=[Text.Encoding]::UTF8; & { . ([scriptblock]::Create([IO.File]::ReadAllText('%~dp0install-windows.ps1',[Text.Encoding]::UTF8))) }"
 echo.
 pause
