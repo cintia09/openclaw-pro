@@ -3226,7 +3226,7 @@ function Main {
                 } else {
                     Write-Err "docker run 失败"
                 }
-                throw "docker run failed"
+                throw "docker run failed: $runOutputText"
             }
             Pop-Location
         } catch {
@@ -3240,6 +3240,64 @@ function Main {
                 Write-Host "     1. 查看占用: netstat -ano | findstr :${conflictPort}" -ForegroundColor White
                 Write-Host "     2. 或者重新运行安装脚本，选择其他端口" -ForegroundColor White
                 Write-Host "" 
+            } elseif ($errMsg -match "No such image") {
+                # ── 镜像缺失 — 自动尝试 GHCR 拉取恢复 ──
+                Write-Warn "本地镜像不存在，尝试自动从 GHCR 拉取..."
+                $ghcrRecovered = $false
+                try {
+                    $recoverTag = if ($latestReleaseTag) { $latestReleaseTag } else { "latest" }
+                    $recoverImage = "ghcr.io/${GITHUB_REPO}:${recoverTag}"
+                    & docker pull $recoverImage 2>&1 | ForEach-Object {
+                        if ($_ -match "Pulling|Downloading|Extracting|Pull complete|Digest|Status") {
+                            Write-Host "  $_" -ForegroundColor DarkGray
+                        }
+                    }
+                    if ($LASTEXITCODE -eq 0) {
+                        & docker tag $recoverImage "openclaw-pro:latest" 2>$null
+                        Write-OK "GHCR 镜像拉取成功，正在重试启动容器..."
+
+                        # 清理可能残留的容器
+                        & docker rm -f $containerName 2>&1 | Out-Null
+                        Start-Sleep -Seconds 1
+
+                        # 重试 docker run
+                        try {
+                            Push-Location $localDeployDir
+                            $retryArgs = @(
+                                "run", "-d",
+                                "--name", $containerName,
+                                "--hostname", "openclaw",
+                                "--dns", "8.8.8.8",
+                                "--dns", "8.8.4.4",
+                                "-v", "${homeData}:/root",
+                                "-e", "TZ=Asia/Shanghai",
+                                "--restart", "unless-stopped"
+                            )
+                            $retryArgs += $deployConfig.PortArgs
+                            $retryArgs += "openclaw-pro"
+                            $retryResult = & docker @retryArgs 2>&1
+                            if ($LASTEXITCODE -eq 0) {
+                                $ghcrRecovered = $true
+                                Write-OK "容器启动成功（通过 GHCR 镜像恢复）"
+                                $launched = $true
+                            }
+                            Pop-Location
+                        } catch {
+                            Pop-Location -ErrorAction SilentlyContinue
+                        }
+                    }
+                } catch {
+                    Write-Log "GHCR recovery failed: $_"
+                }
+
+                if (-not $ghcrRecovered) {
+                    Write-Err "镜像获取失败"
+                    Write-Host ""
+                    Write-Host "  💡 请手动执行以下命令后重新运行安装脚本:" -ForegroundColor Cyan
+                    Write-Host "     docker pull ghcr.io/${GITHUB_REPO}:latest" -ForegroundColor White
+                    Write-Host "     docker tag ghcr.io/${GITHUB_REPO}:latest openclaw-pro:latest" -ForegroundColor White
+                    Write-Host ""
+                }
             } else {
                 Write-Err "Docker 操作失败: $_"
             }
