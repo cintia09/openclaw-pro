@@ -115,7 +115,7 @@ function Download-Robust {
                 try {
                     $req = [System.Net.HttpWebRequest]::Create($Urls[$urlIdx])
                     $req.AllowAutoRedirect = $true
-                    $req.Timeout = 15000; $req.ReadWriteTimeout = 15000
+                    $req.Timeout = 30000; $req.ReadWriteTimeout = 30000
                     $req.UserAgent = "OpenClaw-Updater/1.0"
                     $req.KeepAlive = $false
                     $req.AddRange([long]$rangeStart, [long]$rangeEnd)
@@ -636,11 +636,14 @@ if ($downloadUrl -and $imageSize -gt 0) {
     Write-Info "发现预构建镜像 ($latestVersion, ${sizeMB}MB)"
     Write-Info "正在下载... (8线程并行，断线自动续传)"
 
-    # 多下载源（直连 + 代理）
+    # 多下载源（代理镜像优先 — 国内直连 github.com 通常很慢或不通）
     $downloadUrls = @(
-        $downloadUrl,
         "https://ghfast.top/$downloadUrl",
-        "https://mirror.ghproxy.com/$downloadUrl"
+        "https://mirror.ghproxy.com/$downloadUrl",
+        "https://gh-proxy.com/$downloadUrl",
+        "https://github.moeyy.xyz/$downloadUrl",
+        "https://ghproxy.net/$downloadUrl",
+        $downloadUrl
     )
 
     $downloadOK = Download-Robust `

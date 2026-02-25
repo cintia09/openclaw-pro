@@ -1065,8 +1065,8 @@ function Download-Robust {
                     for ($redir = 0; $redir -lt 6; $redir++) {
                         $req = [System.Net.HttpWebRequest]::Create($targetUrl)
                         $req.AllowAutoRedirect = $false
-                        $req.Timeout = 15000
-                        $req.ReadWriteTimeout = 15000
+                        $req.Timeout = 30000
+                        $req.ReadWriteTimeout = 30000
                         $req.UserAgent = "OpenClaw-Installer/1.0"
                         $req.KeepAlive = $false
                         $req.AddRange([long]$rangeStart, [long]$rangeEnd)
@@ -1272,6 +1272,18 @@ function Get-RemoteFileSize {
                     if ($len -gt 0) { return $len }
                 }
                 break
+            }
+        } catch { }
+    }
+
+    # Fallback: use curl.exe -I (often works better behind corporate proxies)
+    foreach ($u in $Urls) {
+        try {
+            $curlOut = & curl.exe -sI -L --connect-timeout 10 --max-time 15 $u 2>&1
+            $curlStr = $curlOut | Out-String
+            if ($curlStr -match '(?i)content-length:\s*(\d+)') {
+                $len = [long]$Matches[1]
+                if ($len -gt 1000000) { return $len }   # > 1MB → valid
             }
         } catch { }
     }
@@ -2828,10 +2840,12 @@ function Main {
                         $imageUrl = $imageAsset.browser_download_url
                         $expectedSize = [long]$imageAsset.size
                         $tagText = ($releaseInfo.tag_name | ForEach-Object { "$_" }).Trim()
+                        Write-Info "GitHub API 返回: $tagText, $([math]::Round($expectedSize / 1MB, 1))MB"
                     }
                 } catch {
                     # 很多网络环境 api.github.com 可能被拦；后面会走直链兜底
                     Write-Log "Release API fetch failed: $($_.Exception.Message)"
+                    Write-Info "GitHub API 不可用，将通过代理镜像下载..."
                 }
 
                 # 构建下载源（API URL 优先；否则用 github.com 的 latest/download 直链）
@@ -2845,30 +2859,56 @@ function Main {
                     $baseUrls += "https://github.com/$GITHUB_REPO/releases/latest/download/$assetName"
                 }
 
+                # 代理镜像列表（优先排在前面 — 国内直连 github.com/objects.githubusercontent.com 通常很慢或不通）
+                $proxyPrefixes = @(
+                    "https://ghfast.top/",
+                    "https://mirror.ghproxy.com/",
+                    "https://gh-proxy.com/",
+                    "https://github.moeyy.xyz/",
+                    "https://ghproxy.net/"
+                )
+
                 $downloadUrls = @()
+                # 代理镜像优先
                 foreach ($u in $baseUrls) {
-                    $downloadUrls += $u
-                    $downloadUrls += "https://ghfast.top/$u"
-                    $downloadUrls += "https://mirror.ghproxy.com/$u"
+                    foreach ($px in $proxyPrefixes) {
+                        $downloadUrls += "${px}${u}"
+                    }
                 }
+                # 直连 GitHub 放最后（国内通常很慢但偶尔可用）
+                $downloadUrls += $baseUrls
 
                 if ($expectedSize -le 0) {
+                    Write-Info "检测文件大小 (探测 $($downloadUrls.Count) 个下载源)..."
                     $expectedSize = Get-RemoteFileSize -Urls $downloadUrls
+                    if ($expectedSize -gt 0) {
+                        Write-Info "文件大小: $([math]::Round($expectedSize / 1MB, 1))MB (通过代理探测)"
+                    }
                 }
 
                 $downloadOK = $false
                 if ($expectedSize -le 0) {
-                    Write-Warn "无法获取 Release 镜像大小（可能网络拦截或代理不支持），将尝试直链下载（不支持断点续传）"
+                    Write-Warn "无法获取 Release 镜像大小（可能网络拦截），将逐个尝试直链下载..."
                     foreach ($u in $downloadUrls) {
                         try {
-                            Write-Info "尝试下载: $u"
+                            $shortUrl = if ($u.Length -gt 80) { $u.Substring(0, 77) + "..." } else { $u }
+                            Write-Info "尝试: $shortUrl"
                             if (Test-Path $imageTar) { Remove-Item $imageTar -Force -ErrorAction SilentlyContinue }
-                            & curl.exe -L --fail --retry 20 --retry-all-errors --retry-delay 2 -o $imageTar $u 2>$null | Out-Null
+                            # --connect-timeout 15: 连接15秒内无响应则放弃; --max-time 600: 单次最多10分钟
+                            & curl.exe -L --fail --connect-timeout 15 --max-time 600 --retry 3 --retry-all-errors --retry-delay 3 --progress-bar -o $imageTar $u 2>&1 | ForEach-Object {
+                                if ($_ -match '\d+.*%') { Write-Host "`r  $($_.Trim())" -NoNewline -ForegroundColor DarkGray }
+                            }
+                            Write-Host ""
                             if ((Test-Path $imageTar) -and (Get-Item $imageTar).Length -gt 50MB) {
                                 $downloadOK = $true
+                                Write-OK "直链下载成功"
                                 break
+                            } else {
+                                Write-Info "  → 下载不完整或被拦截，换下一个源..."
                             }
-                        } catch { }
+                        } catch {
+                            Write-Info "  → 连接失败，换下一个源..."
+                        }
                     }
                 } else {
                     $imageSizeMB = [math]::Round($expectedSize / 1MB, 1)
@@ -3432,56 +3472,107 @@ function Main {
                 Write-Host "     2. 或者重新运行安装脚本，选择其他端口" -ForegroundColor White
                 Write-Host "" 
             } elseif ($errMsg -match "No such image") {
-                # -- 镜像缺失 — 自动尝试 GHCR 拉取恢复 --
-                Write-Warn "本地镜像不存在，尝试自动从 GHCR 拉取..."
-                $ghcrRecovered = $false
-                try {
-                    $recoverTag = if ($latestReleaseTag) { $latestReleaseTag } else { "latest" }
-                    $recoverImage = "ghcr.io/${GITHUB_REPO}:${recoverTag}"
-                    & docker pull $recoverImage 2>&1 | ForEach-Object {
-                        if ($_ -match "Pulling|Downloading|Extracting|Pull complete|Digest|Status") {
-                            Write-Host "  $_" -ForegroundColor DarkGray
+                # -- 镜像缺失 — 先尝试 Release 下载，再尝试 GHCR 拉取 --
+                Write-Warn "本地镜像不存在，尝试自动恢复..."
+                $recoverOK = $false
+
+                # 恢复方式 1: 快速 curl.exe 下载 Release tar.gz (代理镜像)
+                $recoverTag = if ($latestReleaseTag) { $latestReleaseTag } else { "latest" }
+                $recoverTar = Join-Path $env:TEMP "openclaw-pro-image.tar.gz"
+                $releaseBaseUrl = if ($latestReleaseTag) {
+                    "https://github.com/$GITHUB_REPO/releases/download/$latestReleaseTag/openclaw-pro-image.tar.gz"
+                } else {
+                    "https://github.com/$GITHUB_REPO/releases/latest/download/openclaw-pro-image.tar.gz"
+                }
+                $recoverUrls = @(
+                    "https://ghfast.top/$releaseBaseUrl",
+                    "https://mirror.ghproxy.com/$releaseBaseUrl",
+                    "https://gh-proxy.com/$releaseBaseUrl",
+                    $releaseBaseUrl
+                )
+                Write-Info "尝试从 Release 下载镜像..."
+                foreach ($ru in $recoverUrls) {
+                    try {
+                        $shortRu = if ($ru.Length -gt 70) { $ru.Substring(0, 67) + "..." } else { $ru }
+                        Write-Info "  → $shortRu"
+                        & curl.exe -L --fail --connect-timeout 10 --max-time 600 --retry 2 --retry-delay 3 --progress-bar -o $recoverTar $ru 2>&1 | ForEach-Object {
+                            if ($_ -match '\d+.*%') { Write-Host "`r  $($_.Trim())" -NoNewline -ForegroundColor DarkGray }
                         }
-                    }
-                    if ($LASTEXITCODE -eq 0) {
-                        & docker tag $recoverImage "openclaw-pro:latest" 2>$null
-                        Write-OK "GHCR 镜像拉取成功，正在重试启动容器..."
-
-                        # 清理可能残留的容器
-                        & docker rm -f $containerName 2>&1 | Out-Null
-                        Start-Sleep -Seconds 1
-
-                        # 重试 docker run
-                        try {
-                            Push-Location $localDeployDir
-                            $retryArgs = @(
-                                "run", "-d",
-                                "--name", $containerName,
-                                "--hostname", "openclaw",
-                                "--dns", "8.8.8.8",
-                                "--dns", "8.8.4.4",
-                                "-v", "${homeData}:/root",
-                                "-e", "TZ=Asia/Shanghai",
-                                "--restart", "unless-stopped"
-                            )
-                            $retryArgs += $deployConfig.PortArgs
-                            $retryArgs += "openclaw-pro"
-                            $retryResult = & docker @retryArgs 2>&1
-                            if ($LASTEXITCODE -eq 0) {
-                                $ghcrRecovered = $true
-                                Write-OK "容器启动成功（通过 GHCR 镜像恢复）"
-                                $launched = $true
+                        Write-Host ""
+                        if ((Test-Path $recoverTar) -and (Get-Item $recoverTar).Length -gt 50MB) {
+                            Write-Info "加载镜像到 Docker..."
+                            & docker load -i $recoverTar 2>&1 | ForEach-Object {
+                                Write-Log "docker load(recover): $_"
+                                if ($_ -match "Loaded image") {
+                                    Write-Host "  $_" -ForegroundColor DarkGray
+                                    if ($_ -match '^Loaded image:\s*(.+)\s*$') {
+                                        & docker tag $Matches[1].Trim() "openclaw-pro:latest" 2>$null
+                                    }
+                                } elseif ($_ -match '^Loaded image ID:\s*(sha256:[0-9a-f]+)\s*$') {
+                                    & docker tag $Matches[1].Trim() "openclaw-pro:latest" 2>$null
+                                }
                             }
-                            Pop-Location
-                        } catch {
-                            Pop-Location -ErrorAction SilentlyContinue
+                            $chk = & docker image inspect openclaw-pro 2>$null
+                            if ($LASTEXITCODE -eq 0) {
+                                Write-OK "Release 镜像加载完成"
+                                $recoverOK = $true
+                                break
+                            }
                         }
-                    }
-                } catch {
-                    Write-Log "GHCR recovery failed: $_"
+                    } catch { }
                 }
 
-                if (-not $ghcrRecovered) {
+                # 恢复方式 2: GHCR 拉取
+                if (-not $recoverOK) {
+                    Write-Info "Release 下载失败，尝试从 GHCR 拉取..."
+                    try {
+                        $recoverImage = "ghcr.io/${GITHUB_REPO}:${recoverTag}"
+                        & docker pull $recoverImage 2>&1 | ForEach-Object {
+                            if ($_ -match "Pulling|Downloading|Extracting|Pull complete|Digest|Status") {
+                                Write-Host "  $_" -ForegroundColor DarkGray
+                            }
+                        }
+                        if ($LASTEXITCODE -eq 0) {
+                            & docker tag $recoverImage "openclaw-pro:latest" 2>$null
+                            Write-OK "GHCR 镜像拉取成功"
+                            $recoverOK = $true
+                        }
+                    } catch {
+                        Write-Log "GHCR recovery failed: $_"
+                    }
+                }
+
+                # 恢复后重试启动容器
+                if ($recoverOK) {
+                    Write-Info "正在重试启动容器..."
+                    & docker rm -f $containerName 2>&1 | Out-Null
+                    Start-Sleep -Seconds 1
+                    try {
+                        Push-Location $localDeployDir
+                        $retryArgs = @(
+                            "run", "-d",
+                            "--name", $containerName,
+                            "--hostname", "openclaw",
+                            "--dns", "8.8.8.8",
+                            "--dns", "8.8.4.4",
+                            "-v", "${homeData}:/root",
+                            "-e", "TZ=Asia/Shanghai",
+                            "--restart", "unless-stopped"
+                        )
+                        $retryArgs += $deployConfig.PortArgs
+                        $retryArgs += "openclaw-pro"
+                        $retryResult = & docker @retryArgs 2>&1
+                        if ($LASTEXITCODE -eq 0) {
+                            Write-OK "容器启动成功"
+                            $launched = $true
+                        }
+                        Pop-Location
+                    } catch {
+                        Pop-Location -ErrorAction SilentlyContinue
+                    }
+                }
+
+                if (-not $launched) {
                     Write-Err "镜像获取失败"
                     Write-Host ""
                     Write-Host "  💡 请手动执行以下命令后重新运行安装脚本:" -ForegroundColor Cyan
