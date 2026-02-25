@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     OpenClaw Pro - Quick Update Script
     快速更新 OpenClaw Pro 容器到最新版本
@@ -90,14 +90,26 @@ if ($updateChoice -eq "1") {
     $hotpatchResult = & docker exec $CONTAINER_NAME curl -s -X POST http://127.0.0.1:3000/api/update/hotpatch -H "Content-Type: application/json" -d '{"branch":"main"}' 2>$null
     
     # Poll for completion
+    # Note: if server.js is updated, the web panel auto-restarts, which means:
+    #   - curl requests fail during restart (catch handles this)
+    #   - after restart, status resets to 'idle' (new process)
+    # We track consecutive failures to detect a restart cycle.
     Write-Host "  " -NoNewline
     $done = $false
-    for ($i = 1; $i -le 60; $i++) {
+    $wasRunning = $false
+    $failCount = 0
+    for ($i = 1; $i -le 90; $i++) {
         Start-Sleep 1
         try {
-            $statusJson = & docker exec $CONTAINER_NAME curl -s http://127.0.0.1:3000/api/update/hotpatch/status 2>$null
+            $statusJson = & docker exec $CONTAINER_NAME curl -sf http://127.0.0.1:3000/api/update/hotpatch/status 2>$null
+            if (-not $statusJson) { throw "empty" }
             $status = $statusJson | ConvertFrom-Json
-            if ($status.status -eq "done" -or $status.status -eq "error") {
+            
+            if ($status.status -eq "running") {
+                $wasRunning = $true
+                $failCount = 0
+            }
+            elseif ($status.status -eq "done" -or $status.status -eq "error") {
                 $done = $true
                 Write-Host ""
                 Write-Host ""
@@ -118,7 +130,29 @@ if ($updateChoice -eq "1") {
                 }
                 break
             }
-        } catch {}
+            elseif ($status.status -eq "idle" -and $wasRunning) {
+                # Server restarted (was running, now idle = new process after server.js update)
+                $done = $true
+                Write-Host ""
+                Write-Host ""
+                Write-OK "热更新完成（Web 面板已自动重启）"
+                break
+            }
+            $failCount = 0
+        } catch {
+            $failCount++
+            # If we saw it running and now can't connect for 5+ seconds, server is restarting
+            if ($wasRunning -and $failCount -ge 5) {
+                # Wait a few more seconds for server to come back up
+                Write-Host "" 
+                Write-Host "    等待 Web 面板重启..." -ForegroundColor DarkGray
+                Start-Sleep 5
+                $done = $true
+                Write-Host ""
+                Write-OK "热更新完成（Web 面板已重启）"
+                break
+            }
+        }
         Write-Host "." -NoNewline
     }
     
