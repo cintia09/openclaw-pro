@@ -12,11 +12,11 @@ $GITHUB_REPO = "cintia09/openclaw-pro"
 $CONTAINER_NAME = "openclaw-pro"
 $IMAGE_NAME = "openclaw-pro"
 
-function Write-Step($msg) { Write-Host "`n  ▸ $msg" -ForegroundColor Cyan }
-function Write-OK($msg)   { Write-Host "  ✅ $msg" -ForegroundColor Green }
-function Write-Err($msg)  { Write-Host "  ❌ $msg" -ForegroundColor Red }
+function Write-Step($msg) { Write-Host "`n  > $msg" -ForegroundColor Cyan }
+function Write-OK($msg)   { Write-Host "  [OK] $msg" -ForegroundColor Green }
+function Write-Err($msg)  { Write-Host "  [X] $msg" -ForegroundColor Red }
 function Write-Dim($msg)  { Write-Host "    $msg" -ForegroundColor DarkGray }
-function Write-Warn($msg) { Write-Host "  ⚠️  $msg" -ForegroundColor Yellow }
+function Write-Warn($msg) { Write-Host "  [!] $msg" -ForegroundColor Yellow }
 function Write-Info($msg) { Write-Host "  $msg" -ForegroundColor Cyan }
 
 # --- Robust Multi-threaded Chunked Download (多线程分块断点续传) --------------
@@ -242,7 +242,7 @@ try {
         & docker exec $CONTAINER_NAME test -f /etc/openclaw-dockerfile-hash 2>$null
         if ($LASTEXITCODE -ne 0) {
             $recommendFull = $true
-            $recommendMsg = "  ⚠️  检测到旧版镜像，建议完整更新以获取最新系统包（如 dnsmasq）"
+            $recommendMsg = "  [!] 检测到旧版镜像，建议完整更新以获取最新系统包（如 dnsmasq）"
             Write-Host " 旧版镜像" -ForegroundColor Yellow
         } else {
             # 方法2：通过 API 对比远程 Dockerfile hash（需要网络）
@@ -252,7 +252,7 @@ try {
                 $dfChanged = "$($checkResult.dockerfileChanged)" -eq "True" -or "$($checkResult.dockerfileChanged)" -eq "true"
                 if ($dfChanged) {
                     $recommendFull = $true
-                    $recommendMsg = "  ⚠️  检测到 Dockerfile 已变更，建议完整更新"
+                    $recommendMsg = "  [!] 检测到 Dockerfile 已变更，建议完整更新"
                     Write-Host " Dockerfile 已变更" -ForegroundColor Yellow
                 } else {
                     Write-Host " OK" -ForegroundColor Green
@@ -264,7 +264,7 @@ try {
     } elseif ($containerExists) {
         # 容器存在但无法启动 → 推荐完整更新
         $recommendFull = $true
-        $recommendMsg = "  ⚠️  容器无法启动，建议完整更新重建容器"
+        $recommendMsg = "  [!] 容器无法启动，建议完整更新重建容器"
     } else {
         # 容器不存在 → 提示安装
         Write-Host ""
@@ -292,18 +292,18 @@ Write-Host "  请选择更新方式:" -ForegroundColor White
     }
     Write-Host ""
     if ($recommendFull) {
-        Write-Host "  [1] ⚡ 热更新" -ForegroundColor DarkGray
+        Write-Host "  [1] 热更新" -ForegroundColor DarkGray
         Write-Host "      只更新 Web 面板、配置模板等文件，无需下载镜像/重启容器" -ForegroundColor DarkGray
         Write-Host ""
-        Write-Host "  [2] 📦 完整更新（推荐）" -ForegroundColor Yellow
+        Write-Host "  [2] 完整更新（推荐）" -ForegroundColor Yellow
         Write-Host "      下载完整镜像并重建容器（~1GB，需几分钟）" -ForegroundColor DarkGray
         Write-Host "      适合：系统包/Node.js 升级、大版本更新" -ForegroundColor DarkGray
     } else {
-        Write-Host "  [1] ⚡ 热更新（推荐）" -ForegroundColor Yellow
+        Write-Host "  [1] 热更新（推荐）" -ForegroundColor Yellow
         Write-Host "      只更新 Web 面板、配置模板等文件，无需下载镜像/重启容器" -ForegroundColor DarkGray
         Write-Host "      适合：前端修复、配置变更、小版本更新" -ForegroundColor DarkGray
         Write-Host ""
-        Write-Host "  [2] 📦 完整更新" -ForegroundColor Cyan
+        Write-Host "  [2] 完整更新" -ForegroundColor Cyan
         Write-Host "      下载完整镜像并重建容器（~1GB，需几分钟）" -ForegroundColor DarkGray
         Write-Host "      适合：系统包/Node.js 升级、大版本更新" -ForegroundColor DarkGray
     }
@@ -790,9 +790,9 @@ $domain = $config.domain
 if ($domain) {
     $httpsPort = $config.https_port
     if ($httpsPort -and $httpsPort -ne 443) {
-        Write-Host "  🔗 https://${domain}:${httpsPort}" -ForegroundColor White
+        Write-Host "  URL: https://${domain}:${httpsPort}" -ForegroundColor White
     } elseif ($httpsPort) {
-        Write-Host "  🔗 https://${domain}" -ForegroundColor White
+        Write-Host "  URL: https://${domain}" -ForegroundColor White
     }
 } else {
     $webPort = 3000
@@ -804,7 +804,7 @@ if ($domain) {
             }
         }
     }
-    Write-Host "  🔗 http://localhost:${webPort}" -ForegroundColor White
+    Write-Host "  URL: http://localhost:${webPort}" -ForegroundColor White
 }
 Write-Host ""
 
