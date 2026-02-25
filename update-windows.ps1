@@ -687,6 +687,21 @@ if (Test-Path $tarPath) {
     Write-Step "加载镜像到 Docker...（约 1-3 分钟，请耐心等待）"
     & docker rmi -f $IMAGE_NAME 2>$null | Out-Null
 
+    # 清理可能残留的 docker load 进程（上次 Ctrl+C 后遗留的 Start-Job 子进程）
+    try {
+        Get-Process | Where-Object {
+            $_.ProcessName -match 'docker' -and $_.Id -ne $PID
+        } | ForEach-Object {
+            try {
+                $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)" -ErrorAction SilentlyContinue).CommandLine
+                if ($cmdLine -match 'load.*tar') {
+                    Write-Log "Killing stale docker load process: PID=$($_.Id)"
+                    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                }
+            } catch { }
+        }
+    } catch { }
+
     $loadJob = Start-Job -ScriptBlock {
         param($tar, $img)
         & docker load -i $tar 2>&1
@@ -696,12 +711,19 @@ if (Test-Path $tarPath) {
     $spinner = @('|','/','-','\','|','/','-','\','|','/','-','\','|','/','-','\')
     $si = 0
     $loadTimer = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
     while ($loadJob.State -eq 'Running') {
         $elapsed = [math]::Floor($loadTimer.Elapsed.TotalSeconds)
         $min = [math]::Floor($elapsed / 60); $sec = $elapsed % 60
         $spinChar = $spinner[$si % $spinner.Count]
         Write-Host "`r  $spinChar 加载中... 已耗时 ${min}分${sec}秒    " -NoNewline -ForegroundColor Cyan
         $si++; Start-Sleep -Milliseconds 200
+    }
+    } finally {
+        if ($loadJob.State -eq 'Running') {
+            Write-Host "`n  正在清理后台加载进程..." -ForegroundColor Yellow
+            Stop-Job $loadJob -ErrorAction SilentlyContinue
+        }
     }
     Write-Host ""
     $loadTimer.Stop()

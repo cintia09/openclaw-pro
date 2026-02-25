@@ -2943,6 +2943,21 @@ function Main {
                         Write-OK "镜像下载完成"
                         Write-Info "正在加载镜像到 Docker...（1.6GB 需约 1-3 分钟，请耐心等待）"
 
+                        # 清理可能残留的 docker load 进程（上次 Ctrl+C 后遗留的 Start-Job 子进程）
+                        try {
+                            Get-Process | Where-Object {
+                                $_.ProcessName -match 'docker' -and $_.Id -ne $PID
+                            } | ForEach-Object {
+                                try {
+                                    $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)" -ErrorAction SilentlyContinue).CommandLine
+                                    if ($cmdLine -match 'load.*tar') {
+                                        Write-Log "Killing stale docker load process: PID=$($_.Id)"
+                                        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                                    }
+                                } catch { }
+                            }
+                        } catch { }
+
                         # 后台加载 + 前台旋转动画
                         $loadJob = Start-Job -ScriptBlock {
                             param($tar)
@@ -2953,6 +2968,7 @@ function Main {
                         $spinner = @('|','/','-','\','|','/','-','\','|','/','-','\','|','/','-','\')
                         $si = 0
                         $loadTimer = [System.Diagnostics.Stopwatch]::StartNew()
+                        try {
                         while ($loadJob.State -eq 'Running') {
                             $elapsed = [math]::Floor($loadTimer.Elapsed.TotalSeconds)
                             $min = [math]::Floor($elapsed / 60)
@@ -2961,6 +2977,13 @@ function Main {
                             Write-Host "`r  $spinChar 加载中... 已耗时 ${min}分${sec}秒    " -NoNewline -ForegroundColor Cyan
                             $si++
                             Start-Sleep -Milliseconds 200
+                        }
+                        } finally {
+                            # Ctrl+C 时确保清理 job 及其子进程
+                            if ($loadJob.State -eq 'Running') {
+                                Write-Host "`n  正在清理后台加载进程..." -ForegroundColor Yellow
+                                Stop-Job $loadJob -ErrorAction SilentlyContinue
+                            }
                         }
                         Write-Host ""
                         $loadTimer.Stop()
@@ -3589,6 +3612,21 @@ function Main {
                         Write-OK "镜像下载完成"
                         Write-Info "正在加载镜像到 Docker...（1.6GB 需约 1-3 分钟，请耐心等待）"
 
+                        # 清理可能残留的 docker load 进程（上次 Ctrl+C 后遗留的 Start-Job 子进程）
+                        try {
+                            Get-Process | Where-Object {
+                                $_.ProcessName -match 'docker' -and $_.Id -ne $PID
+                            } | ForEach-Object {
+                                try {
+                                    $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)" -ErrorAction SilentlyContinue).CommandLine
+                                    if ($cmdLine -match 'load.*tar') {
+                                        Write-Log "Killing stale docker load process: PID=$($_.Id)"
+                                        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                                    }
+                                } catch { }
+                            }
+                        } catch { }
+
                         # 后台加载 + 前台旋转动画
                         $loadJob = Start-Job -ScriptBlock {
                             param($tar)
@@ -3598,6 +3636,7 @@ function Main {
                         $spinner = @('|','/','-','\')
                         $si = 0
                         $loadTimer = [System.Diagnostics.Stopwatch]::StartNew()
+                        try {
                         while ($loadJob.State -eq 'Running') {
                             $elapsed = [math]::Floor($loadTimer.Elapsed.TotalSeconds)
                             $min = [math]::Floor($elapsed / 60)
@@ -3606,6 +3645,12 @@ function Main {
                             Write-Host "`r  $spinChar 加载中... 已耗时 ${min}分${sec}秒    " -NoNewline -ForegroundColor Cyan
                             $si++
                             Start-Sleep -Milliseconds 200
+                        }
+                        } finally {
+                            if ($loadJob.State -eq 'Running') {
+                                Write-Host "`n  正在清理后台加载进程..." -ForegroundColor Yellow
+                                Stop-Job $loadJob -ErrorAction SilentlyContinue
+                            }
                         }
                         Write-Host ""
                         $loadTimer.Stop()
