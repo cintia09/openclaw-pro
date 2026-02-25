@@ -11,18 +11,28 @@
 curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.sh | bash
 ```
 
-**Windows（PowerShell 管理员）：**
+**Windows（推荐 — 双击 bat 文件）：**
+
+> 下载仓库后，右键 `install-windows.bat` → **以管理员身份运行**
+
+或在 **管理员 PowerShell** 中执行：
 ```powershell
-[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $u='https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1'; $s=$null; try{$s=irm $u}catch{}; if(-not $s){$wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString($u)}; iex $s
+irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1 | iex
 ```
 
-自动完成：安装 WSL2/Docker → 克隆仓库 → 构建镜像 → 启动配置向导。
+> **提示：** 如果 PowerShell 报 TLS 错误，先执行 `[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12` 再重试。推荐直接用 `.bat` 文件，无需操心兼容问题。
+
+自动完成：安装 WSL2/Docker → 构建镜像 → 启动配置向导。
 
 ### 一键更新
 
-**Windows（PowerShell）：**
+**Windows（推荐 — 双击 bat 文件）：**
+
+> 双击运行 `update-windows.bat`（自动检测热更新或完整重建）
+
+或在 PowerShell 中执行：
 ```powershell
-[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $u='https://raw.githubusercontent.com/cintia09/openclaw-pro/main/update-windows.ps1'; $s=$null; try{$s=irm $u}catch{}; if(-not $s){$wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString($u)}; iex $s
+irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/update-windows.ps1 | iex
 ```
 
 > **目录说明：** curl 安装后，程序部署在当前目录下的 `openclaw-pro/`，运行时数据目录在 `openclaw-pro/home-data/`。
@@ -126,8 +136,10 @@ openclaw-pro/          ← 部署脚本和Docker文件
 │       ├── login.js
 │       ├── style.css
 │       └── app.js
-├── install-windows.bat   # Windows安装入口
+├── install-windows.bat   # Windows安装入口（双击运行）
 ├── install-windows.ps1   # Windows安装脚本（WSL2+Docker）
+├── update-windows.bat    # Windows更新入口（双击运行）
+├── update-windows.ps1    # Windows更新脚本（热更新/完整重建）
 ├── README.md
 └── home-data/            ← 持久化数据（自动创建，挂载为容器/root）
     ├── .openclaw/
