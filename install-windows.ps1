@@ -2631,7 +2631,7 @@ function Main {
         try {
             Push-Location $localDeployDir
 
-            # 策略: 检查本地已有镜像 → 下载预构建 → 本地构建
+            # 策略: 检查本地已有镜像 → GHCR拉取 → 下载预构建 → 本地构建
             $imageReady = $false
             $forceRefreshImage = $false
 
@@ -2720,9 +2720,38 @@ function Main {
                 }
             }
 
-            # ── 尝试 1: 下载预构建镜像（分块断点续传） ──
+            # ── 尝试 1: 从 GHCR 拉取预构建镜像（最快） ──
             if (-not $imageReady) {
-            Write-Info "检查预构建镜像..."
+                $ghcrTag = if ($latestReleaseTag) { $latestReleaseTag } else { "latest" }
+                $ghcrImage = "ghcr.io/${GITHUB_REPO}:${ghcrTag}"
+                Write-Info "尝试从 GHCR 拉取镜像: $ghcrImage ..."
+                try {
+                    & docker pull $ghcrImage 2>&1 | ForEach-Object {
+                        if ($_ -match "Pulling|Downloading|Extracting|Pull complete|Digest|Status") {
+                            Write-Host "  $_" -ForegroundColor DarkGray
+                        }
+                        Write-Log "docker pull: $_"
+                    }
+                    if ($LASTEXITCODE -eq 0) {
+                        & docker tag $ghcrImage "openclaw-pro:latest" 2>$null
+                        $imageReady = $true
+                        Write-OK "GHCR 镜像拉取成功"
+                        try {
+                            $pulledId = (& docker image inspect openclaw-pro --format '{{.Id}}' 2>$null)
+                            if ($pulledId) { $script:loadedImageDigest = $pulledId }
+                        } catch { }
+                    } else {
+                        Write-Warn "GHCR 拉取失败（可能网络不通或镜像不公开），继续尝试其他方式..."
+                    }
+                } catch {
+                    Write-Log "GHCR pull failed: $_"
+                    Write-Warn "GHCR 拉取异常，继续尝试其他方式..."
+                }
+            }
+
+            # ── 尝试 2: 下载预构建镜像 tar.gz（分块断点续传） ──
+            if (-not $imageReady) {
+            Write-Info "检查 Release 预构建镜像..."
             try {
                 $releaseApi = "https://api.github.com/repos/$GITHUB_REPO/releases/latest"
                 $releaseInfo = Invoke-RestMethod -Uri $releaseApi -TimeoutSec 10 -ErrorAction Stop
@@ -2803,11 +2832,11 @@ function Main {
                                 }
                             } catch { }
                         } else {
-                            Write-Warn "docker load 失败，将尝试本地构建"
+                            Write-Warn "docker load 失败，将尝试本地 docker build..."
                         }
                         Remove-Item $imageTar -Force -ErrorAction SilentlyContinue
                     } else {
-                        Write-Warn "分块下载失败，将尝试本地构建"
+                        Write-Warn "分块下载失败，将尝试本地 docker build..."
                         # 保留部分下载的文件以便续传（下次运行自动恢复）
                     }
                 } else {
@@ -2815,11 +2844,11 @@ function Main {
                 }
             } catch {
                 Write-Log "Pre-built image download failed: $_"
-                Write-Info "预构建镜像获取失败，将本地构建"
+                Write-Info "Release 镜像获取失败，将尝试本地 docker build..."
             }
             }  # end if (-not $imageReady) for download
 
-            # ── 尝试 2: 本地构建 (fallback) ──
+            # ── 尝试 3: 本地构建 (fallback) ──
             if (-not $imageReady) {
                 Write-Info "正在本地构建镜像...（首次约需 5-10 分钟）"
                 $buildOK = $false
@@ -2857,7 +2886,7 @@ function Main {
 
                 if (-not $buildOK) {
                     $originalDockerfile | Set-Content $dockerfilePath -Force -NoNewline
-                    throw "镜像获取失败 — 下载和本地构建均不可用"
+                    throw "镜像获取失败 — GHCR拉取、下载和本地构建均不可用。请检查网络连接后重试。"
                 }
                 $imageReady = $true
                 # 保存本地构建的镜像 digest
@@ -3048,23 +3077,7 @@ function Main {
             # ── 最终镜像可用性检查 ──
             $finalImageCheck = & docker image inspect openclaw-pro 2>$null
             if ($LASTEXITCODE -ne 0) {
-                Write-Warn "镜像 openclaw-pro:latest 不存在，尝试从 GHCR 拉取..."
-                try {
-                    $ghcrTag = if ($latestReleaseTag) { $latestReleaseTag } else { "latest" }
-                    & docker pull "ghcr.io/${GITHUB_REPO}:${ghcrTag}" 2>&1 | ForEach-Object {
-                        Write-Host "  $_" -ForegroundColor DarkGray
-                    }
-                    if ($LASTEXITCODE -eq 0) {
-                        & docker tag "ghcr.io/${GITHUB_REPO}:${ghcrTag}" "openclaw-pro:latest" 2>$null
-                        Write-OK "GHCR 镜像拉取成功"
-                    }
-                } catch {}
-
-                # 再次检查
-                $finalImageCheck2 = & docker image inspect openclaw-pro 2>$null
-                if ($LASTEXITCODE -ne 0) {
-                    throw "镜像 openclaw-pro:latest 不可用，请重新运行安装脚本"
-                }
+                throw "镜像 openclaw-pro:latest 不可用 — 所有获取方式均已失败。请检查网络后重新运行安装脚本。"
             }
 
             # Build docker run arguments
