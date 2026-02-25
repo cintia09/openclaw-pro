@@ -211,6 +211,7 @@ Write-Host ""
 
 # ── 0. 智能检测更新类型 ──
 $recommendFull = $false
+$forceFullOnly = $false
 $recommendMsg = ""
 $containerRunning = $false
 $containerExists = $false
@@ -266,40 +267,52 @@ try {
         $recommendFull = $true
         $recommendMsg = "  ⚠️  容器无法启动，建议完整更新重建容器"
     } else {
-        # 容器不存在
-        Write-Host "  未找到容器 '$CONTAINER_NAME'" -ForegroundColor Yellow
+        # 容器不存在 → 只能完整更新
+        $recommendFull = $true
+        $forceFullOnly = $true
+        $recommendMsg = "  ⚠️  未找到容器 '$CONTAINER_NAME'，需要完整更新"
     }
 } catch {
     Write-Host " (检测跳过)" -ForegroundColor DarkGray
 }
 
-Write-Host "  请选择更新方式:" -ForegroundColor White
-if ($recommendMsg) {
+# 没有容器时不显示热更新选项
+if ($forceFullOnly) {
     Write-Host ""
     Write-Host $recommendMsg -ForegroundColor Yellow
-}
-Write-Host ""
-if ($recommendFull) {
-    Write-Host "  [1] ⚡ 热更新" -ForegroundColor DarkGray
-    Write-Host "      只更新 Web 面板、配置模板等文件，无需下载镜像/重启容器" -ForegroundColor DarkGray
     Write-Host ""
-    Write-Host "  [2] 📦 完整更新（推荐）" -ForegroundColor Yellow
-    Write-Host "      下载完整镜像并重建容器（~1GB，需几分钟）" -ForegroundColor DarkGray
-    Write-Host "      适合：系统包/Node.js 升级、大版本更新" -ForegroundColor DarkGray
+    Write-Host "  将执行完整更新：下载镜像并创建容器" -ForegroundColor Cyan
+    Write-Host ""
+    $updateChoice = "2"
 } else {
-    Write-Host "  [1] ⚡ 热更新（推荐）" -ForegroundColor Yellow
-    Write-Host "      只更新 Web 面板、配置模板等文件，无需下载镜像/重启容器" -ForegroundColor DarkGray
-    Write-Host "      适合：前端修复、配置变更、小版本更新" -ForegroundColor DarkGray
+    Write-Host "  请选择更新方式:" -ForegroundColor White
+    if ($recommendMsg) {
+        Write-Host ""
+        Write-Host $recommendMsg -ForegroundColor Yellow
+    }
     Write-Host ""
-    Write-Host "  [2] 📦 完整更新" -ForegroundColor Cyan
-    Write-Host "      下载完整镜像并重建容器（~1GB，需几分钟）" -ForegroundColor DarkGray
-    Write-Host "      适合：系统包/Node.js 升级、大版本更新" -ForegroundColor DarkGray
+    if ($recommendFull) {
+        Write-Host "  [1] ⚡ 热更新" -ForegroundColor DarkGray
+        Write-Host "      只更新 Web 面板、配置模板等文件，无需下载镜像/重启容器" -ForegroundColor DarkGray
+        Write-Host ""
+        Write-Host "  [2] 📦 完整更新（推荐）" -ForegroundColor Yellow
+        Write-Host "      下载完整镜像并重建容器（~1GB，需几分钟）" -ForegroundColor DarkGray
+        Write-Host "      适合：系统包/Node.js 升级、大版本更新" -ForegroundColor DarkGray
+    } else {
+        Write-Host "  [1] ⚡ 热更新（推荐）" -ForegroundColor Yellow
+        Write-Host "      只更新 Web 面板、配置模板等文件，无需下载镜像/重启容器" -ForegroundColor DarkGray
+        Write-Host "      适合：前端修复、配置变更、小版本更新" -ForegroundColor DarkGray
+        Write-Host ""
+        Write-Host "  [2] 📦 完整更新" -ForegroundColor Cyan
+        Write-Host "      下载完整镜像并重建容器（~1GB，需几分钟）" -ForegroundColor DarkGray
+        Write-Host "      适合：系统包/Node.js 升级、大版本更新" -ForegroundColor DarkGray
+    }
+    Write-Host ""
+    $defaultChoice = if ($recommendFull) { "2" } else { "1" }
+    Write-Host "  选择 [1/2，默认${defaultChoice}]: " -NoNewline -ForegroundColor White
+    $updateChoice = (Read-Host).Trim()
+    if (-not $updateChoice) { $updateChoice = $defaultChoice }
 }
-Write-Host ""
-$defaultChoice = if ($recommendFull) { "2" } else { "1" }
-Write-Host "  选择 [1/2，默认${defaultChoice}]: " -NoNewline -ForegroundColor White
-$updateChoice = (Read-Host).Trim()
-if (-not $updateChoice) { $updateChoice = $defaultChoice }
 
 if ($updateChoice -eq "1") {
     # ══════════════ 热更新模式 ══════════════
@@ -452,8 +465,13 @@ try {
 Write-Step "检查现有容器..."
 $existingId = (& docker ps -aq --filter "name=^${CONTAINER_NAME}$" 2>$null)
 if (-not $existingId) {
-    Write-Err "未找到容器 '$CONTAINER_NAME'，请先运行安装脚本"
-    Write-Dim "irm https://raw.githubusercontent.com/$GITHUB_REPO/main/install-windows.ps1 | iex"
+    Write-Err "未找到容器 '$CONTAINER_NAME'"
+    Write-Host ""
+    Write-Dim "更新脚本需要现有容器来读取配置。"
+    Write-Dim "请使用安装脚本重新安装："
+    Write-Host ""
+    Write-Host "  irm https://raw.githubusercontent.com/$GITHUB_REPO/main/install-windows.ps1 | iex" -ForegroundColor Cyan
+    Write-Host ""
     Read-Host "按回车退出"
     exit 1
 }
