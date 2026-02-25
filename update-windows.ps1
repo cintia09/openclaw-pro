@@ -110,10 +110,13 @@ if ($updateChoice -eq "1") {
     #   - curl requests fail during restart (catch handles this)
     #   - after restart, status resets to 'idle' (new process)
     # We track consecutive failures to detect a restart cycle.
+    # Also track from the very start — if POST succeeded, update was triggered.
     Write-Host "  " -NoNewline
     $done = $false
     $wasRunning = $false
+    $postOk = ($hotpatchResult -and $hotpatchResult -match '"ok"')
     $failCount = 0
+    $idleAfterPostCount = 0
     $lastLog = ""
     for ($i = 1; $i -le 180; $i++) {
         Start-Sleep 1
@@ -167,11 +170,23 @@ if ($updateChoice -eq "1") {
                 Write-OK "热更新完成（Web 面板已自动重启）"
                 break
             }
+            elseif ($status.status -eq "idle" -and $postOk -and -not $wasRunning) {
+                # POST succeeded but we never saw "running" — update may have finished very fast
+                # or server restarted before we could poll. Wait a few cycles then declare done.
+                $idleAfterPostCount++
+                if ($idleAfterPostCount -ge 8) {
+                    $done = $true
+                    Write-Host ""
+                    Write-Host ""
+                    Write-OK "热更新完成"
+                    break
+                }
+            }
             $failCount = 0
         } catch {
             $failCount++
-            # If we saw it running and now can't connect for 5+ seconds, server is restarting
-            if ($wasRunning -and $failCount -ge 5) {
+            # If we saw it running (or POST was ok) and now can't connect, server is restarting
+            if (($wasRunning -or $postOk) -and $failCount -ge 5) {
                 # Wait a few more seconds for server to come back up
                 Write-Host "" 
                 Write-Host "    等待 Web 面板重启..." -ForegroundColor DarkGray
@@ -255,8 +270,9 @@ if (-not $homeDataMount) {
 }
 Write-Dim "数据目录: $homeDataMount"
 
-# 获取端口映射
+# 获取端口映射（去重）
 $portMappings = @()
+$seenMappings = @{}
 try {
     $inspect = (& docker inspect $CONTAINER_NAME 2>$null) | ConvertFrom-Json
     $ports = $inspect[0].NetworkSettings.Ports
@@ -266,8 +282,12 @@ try {
             foreach ($b in $bindings) {
                 $hostPort = $b.HostPort
                 $cPort = $containerPort -replace '/tcp$', '' -replace '/udp$', ''
-                $portMappings += "-p"
-                $portMappings += "${hostPort}:${cPort}"
+                $mappingKey = "${hostPort}:${cPort}"
+                if (-not $seenMappings.ContainsKey($mappingKey)) {
+                    $seenMappings[$mappingKey] = $true
+                    $portMappings += "-p"
+                    $portMappings += $mappingKey
+                }
             }
         }
     }
@@ -305,7 +325,7 @@ try {
     Write-Dim "无法获取最新版本信息: $_"
 }
 
-if ($latestVersion -and $latestVersion -eq $currentVersion) {
+if ($latestVersion -and $latestVersion -eq $currentVersion -and -not $recommendFull) {
     Write-Host ""
     Write-OK "当前已是最新版本 ($currentVersion)"
     Write-Host ""
@@ -313,6 +333,8 @@ if ($latestVersion -and $latestVersion -eq $currentVersion) {
     if ($forceUpdate -notin @("y", "Y", "yes")) {
         exit 0
     }
+} elseif ($recommendFull) {
+    Write-OK "镜像需要重建（Dockerfile 已变更）"
 } elseif ($latestVersion) {
     Write-OK "最新版本: $latestVersion"
 }
