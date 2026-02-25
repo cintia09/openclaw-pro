@@ -67,20 +67,20 @@ function Write-Step {
 
 function Write-OK {
     param([string]$Text)
-    Write-Host "  [OK] $Text" -ForegroundColor Green
+    Write-Host "  ✅ $Text" -ForegroundColor Green
     Write-Log "OK: $Text"
 }
 
 function Write-Warn {
     param([string]$Text)
-    Write-Host "  [!] $Text" -ForegroundColor Yellow
+    Write-Host "  ⚠️  $Text" -ForegroundColor Yellow
     Write-Log "WARN: $Text" "WARN"
 }
 
 function Write-Err {
     param([string]$Text)
     Write-Host ""
-    Write-Host "  [X] $Text" -ForegroundColor Red
+    Write-Host "  ❌ $Text" -ForegroundColor Red
     Write-Host ""
     Write-Log "ERROR: $Text" "ERROR"
 }
@@ -93,7 +93,7 @@ function Write-Info {
 
 function Write-Suggestion {
     param([string]$Text)
-    Write-Host "  [i] $Text" -ForegroundColor Cyan
+    Write-Host "  💡 $Text" -ForegroundColor Cyan
 }
 
 
@@ -153,7 +153,7 @@ function Start-AnimatedProgress {
     Write-Host "`r$(' ' * 70)`r" -NoNewline
 
     if ($CompletedLabel) {
-        Write-Host "  [OK] $CompletedLabel ($elapsed)" -ForegroundColor Green
+        Write-Host "  ✅ $CompletedLabel ($elapsed)" -ForegroundColor Green
     }
 
     return $result
@@ -163,9 +163,9 @@ function Show-StepProgress {
     <#
     .SYNOPSIS
         Shows a multi-step progress list, similar to:
-        [OK] 更新软件包列表
-        [...] 安装 Docker Engine...
-        [ ] 启动 Docker 服务
+        ✅ 更新软件包列表
+        ⏳ 安装 Docker Engine...
+        ○ 启动 Docker 服务
     #>
     param(
         [string[]]$Steps,
@@ -173,11 +173,11 @@ function Show-StepProgress {
     )
     for ($i = 0; $i -lt $Steps.Count; $i++) {
         if ($i -lt $CurrentStep) {
-            Write-Host "     [OK] $($Steps[$i])" -ForegroundColor Green
+            Write-Host "     ✅ $($Steps[$i])" -ForegroundColor Green
         } elseif ($i -eq $CurrentStep) {
-            Write-Host "     [...] $($Steps[$i])..." -ForegroundColor Yellow
+            Write-Host "     ⏳ $($Steps[$i])..." -ForegroundColor Yellow
         } else {
-            Write-Host "     [ ] $($Steps[$i])" -ForegroundColor DarkGray
+            Write-Host "     ○  $($Steps[$i])" -ForegroundColor DarkGray
         }
     }
 }
@@ -194,7 +194,7 @@ function Show-Logo {
     Write-Host "   \___/| .__/ \___|_| |_\____|_|\__,_| \_/\_/  " -ForegroundColor Cyan
     Write-Host "        |_|                                     " -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "                    OpenClaw Pro - Windows Installer" -ForegroundColor White
+    Write-Host "                    🐾  OpenClaw Pro  —  Windows Installer" -ForegroundColor White
     Write-Host ""
     Write-Host "  ---------------------------------------------------------------------" -ForegroundColor DarkGray
     Write-Host ""
@@ -238,11 +238,11 @@ function Assert-Administrator {
     }
 
     Write-Host ""
-    Write-Host "  [X] 此脚本需要管理员权限运行" -ForegroundColor Red
+    Write-Host "  ❌ 此脚本需要管理员权限运行" -ForegroundColor Red
     Write-Host ""
     Write-Host "  安装 WSL2 和 Docker 需要管理员权限，请以管理员身份重新运行。" -ForegroundColor Yellow
     Write-Host ""
-    Write-Host "  [i] 操作方法:" -ForegroundColor Cyan
+    Write-Host "  💡 操作方法:" -ForegroundColor Cyan
     Write-Host "     1. 右键点击 '开始' 菜单 → 'Windows PowerShell (管理员)'" -ForegroundColor White
     Write-Host "        或搜索 PowerShell → 右键 → 以管理员身份运行" -ForegroundColor Gray
     Write-Host "     2. 运行以下命令:" -ForegroundColor White
@@ -474,24 +474,24 @@ function Install-Wsl2 {
         Write-Log "wsl --install exit code: $exitCode"
 
         # Show completed steps
-        Write-Host "     [OK] 启用 WSL 功能" -ForegroundColor Green
-        Write-Host "     [OK] 下载 $UBUNTU_DISTRO 镜像" -ForegroundColor Green
+        Write-Host "     ✅ 启用 WSL 功能" -ForegroundColor Green
+        Write-Host "     ✅ 下载 $UBUNTU_DISTRO 镜像" -ForegroundColor Green
 
         if ($exitCode -eq 0) {
             Start-Sleep -Seconds 3
             $testOutput = & wsl --status 2>&1
             if ($LASTEXITCODE -ne 0) {
-                Write-Host "     [!] 安装并配置 - 需要重启" -ForegroundColor Yellow
+                Write-Host "     ⚠️  安装并配置 — 需要重启" -ForegroundColor Yellow
                 Write-Host ""
                 Write-Info "安装耗时: $elapsed"
                 return "reboot"
             }
-            Write-Host "     [OK] 安装并配置 ($elapsed)" -ForegroundColor Green
+            Write-Host "     ✅ 安装并配置 ($elapsed)" -ForegroundColor Green
             Write-Host ""
             return "ok"
         } elseif ($exitCode -eq 1) {
             if ("$output $errOutput" -match "restart|reboot|重启|重新启动") {
-                Write-Host "     [!] 安装并配置 - 需要重启" -ForegroundColor Yellow
+                Write-Host "     ⚠️  安装并配置 — 需要重启" -ForegroundColor Yellow
                 Write-Host ""
                 Write-Info "安装耗时: $elapsed"
                 return "reboot"
@@ -501,7 +501,7 @@ function Install-Wsl2 {
             return "error"
         } else {
             Write-Warn "WSL 安装返回代码 $exitCode，可能需要重启"
-            Write-Host "     [!] 安装并配置 - 需要重启" -ForegroundColor Yellow
+            Write-Host "     ⚠️  安装并配置 — 需要重启" -ForegroundColor Yellow
             Write-Host ""
             return "reboot"
         }
@@ -627,7 +627,7 @@ echo "DOCKER_INSTALL_COMPLETE"
                     Write-Host "`r$(' ' * 80)`r" -NoNewline
                     for ($i = 0; $i -lt $dockerSteps.Count; $i++) {
                         if ($i -lt $currentStep) {
-                            Write-Host "     [OK] $($dockerSteps[$i])" -ForegroundColor Green
+                            Write-Host "     ✅ $($dockerSteps[$i])" -ForegroundColor Green
                         } elseif ($i -eq $currentStep) {
                             # Will be shown by spinner below
                             break
@@ -663,7 +663,7 @@ echo "DOCKER_INSTALL_COMPLETE"
         if ($allOutput -match "DOCKER_INSTALL_COMPLETE") {
             # Show all steps completed
             for ($i = 0; $i -lt $dockerSteps.Count; $i++) {
-                Write-Host "     [OK] $($dockerSteps[$i])" -ForegroundColor Green
+                Write-Host "     ✅ $($dockerSteps[$i])" -ForegroundColor Green
             }
             Write-Host ""
             Write-OK "Docker Engine 安装完成 ($totalTime)"
@@ -1319,7 +1319,7 @@ function Get-DeployConfig {
 
     # 2. HTTPS 域名
     Write-Host ""
-    Write-Host "  [i] 输入域名可启用 HTTPS（自动申请 Let's Encrypt 证书）" -ForegroundColor DarkGray
+    Write-Host "  💡 输入域名可启用 HTTPS（自动申请 Let's Encrypt 证书）" -ForegroundColor DarkGray
     Write-Host "     需要域名已解析到本机IP，且 80/443 端口可从外网访问" -ForegroundColor DarkGray
     Write-Host "     留空则使用 HTTP 直连模式（局域网/本机访问）" -ForegroundColor DarkGray
     Write-Host ""
@@ -1336,7 +1336,7 @@ function Get-DeployConfig {
             $config.HttpsEnabled = $true
             $config.CertMode = "internal"
             Write-Host ""
-            Write-Host "  [TLS] 检测到 IP 地址，将使用自签证书 HTTPS 模式" -ForegroundColor Yellow
+            Write-Host "  🔐 检测到 IP 地址，将使用自签证书 HTTPS 模式" -ForegroundColor Yellow
             Write-Host "     访问时浏览器会提示「不安全」，点击「继续访问」即可正常使用" -ForegroundColor DarkGray
             Write-Host "     如需受信任的证书，请使用域名并选择 Let's Encrypt" -ForegroundColor DarkGray
         } else {
@@ -1344,7 +1344,7 @@ function Get-DeployConfig {
             $config.HttpsEnabled = $true
 
             Write-Host ""
-            Write-Host "  [TLS] 证书模式:" -ForegroundColor White
+            Write-Host "  🔐 证书模式:" -ForegroundColor White
             Write-Host "     [1] Let's Encrypt 公网证书（默认，需公网DNS+80/443可达）" -ForegroundColor Gray
             Write-Host "     [2] 自签证书（Caddy Internal，适合局域网测试）" -ForegroundColor Gray
             Write-Host ""
@@ -1392,7 +1392,7 @@ function Get-DeployConfig {
     } else {
         # 域名为空 — 提供 IP 自签名 HTTPS 选项
         Write-Host ""
-        Write-Host "  [TLS] 是否启用 HTTPS（自签证书 + 本机 IP）？" -ForegroundColor White
+        Write-Host "  🔒 是否启用 HTTPS（自签证书 + 本机 IP）？" -ForegroundColor White
         Write-Host "     无需域名，Caddy 自动为本机 IP 生成自签名证书" -ForegroundColor DarkGray
         Write-Host "     浏览器会提示「不安全」，点击「继续访问」即可" -ForegroundColor DarkGray
         Write-Host ""
@@ -1519,7 +1519,7 @@ function Get-DeployConfig {
     # 显示配置摘要
     Write-Host ""
     Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray
-    Write-Host "  端口映射:" -ForegroundColor White
+    Write-Host "  📝 端口映射:" -ForegroundColor White
     if ($config.HttpsEnabled) {
         Write-Host "     HTTP   $($config.HttpPort) → 容器 80  (证书验证+跳转)" -ForegroundColor Gray
         Write-Host "     HTTPS  $($config.HttpsPort) → 容器 443 (主入口)" -ForegroundColor Gray
@@ -1533,7 +1533,7 @@ function Get-DeployConfig {
         $isIpDomain = ($config.Domain -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')
         if ($isIpDomain) {
             Write-Host "     IP: $($config.Domain) (自签名 HTTPS)" -ForegroundColor Cyan
-            Write-Host "     [!] 浏览器会提示不安全，点击「继续访问」即可" -ForegroundColor Yellow
+            Write-Host "     ⚠️  浏览器会提示不安全，点击「继续访问」即可" -ForegroundColor Yellow
         } else {
             Write-Host "     域名: $($config.Domain)" -ForegroundColor Cyan
         }
@@ -1558,7 +1558,7 @@ function Get-DeployConfig {
     $fwPortsText = ($fwPortList | Sort-Object -Unique) -join ','
     $defaultAutoOpen = if ($config.HttpsEnabled -and $config.CertMode -eq "internal") { "N" } else { "Y" }
     $defaultHint = if ($defaultAutoOpen -eq "Y") { "Y/n" } else { "y/N" }
-    Write-Host "  防火墙设置（目标端口: ${fwPortsText}）" -ForegroundColor White
+    Write-Host "  🛡️  防火墙设置（目标端口: ${fwPortsText}）" -ForegroundColor White
     Write-Host "     是否自动开放上述端口？[${defaultHint}] : " -NoNewline -ForegroundColor White
     $fwChoice = (Read-Host).Trim().ToLower()
     if (-not $fwChoice) {
@@ -1591,58 +1591,58 @@ function Show-Completion {
     )
 
     Write-Host ""
-    $completionTitle = if ($script:upgradeMode) { "升级完成" } else { "安装完成" }
+    $completionTitle = if ($script:upgradeMode) { "🎉 升级完成" } else { "🎉 安装完成" }
     if ($DeployLaunched) {
         Write-Host "  ==================================================" -ForegroundColor Green
         Write-Host "                $completionTitle" -ForegroundColor Green
         Write-Host "  ==================================================" -ForegroundColor Green
     } else {
         Write-Host "  ==================================================" -ForegroundColor Yellow
-        Write-Host "             [!] 安装未完成" -ForegroundColor Yellow
+        Write-Host "             ⚠️  安装未完成" -ForegroundColor Yellow
         Write-Host "  ==================================================" -ForegroundColor Yellow
     }
     Write-Host ""
 
     if ($IsDockerDesktop) {
-        Write-Host "  [OK] Docker Desktop" -ForegroundColor Green
+        Write-Host "  ✅ Docker Desktop" -ForegroundColor Green
     } else {
-        Write-Host "  [OK] WSL2" -ForegroundColor Green
-        Write-Host "  [OK] Ubuntu ($UBUNTU_DISTRO)" -ForegroundColor Green
-        Write-Host "  [OK] Docker Engine" -ForegroundColor Green
+        Write-Host "  ✅ WSL2" -ForegroundColor Green
+        Write-Host "  ✅ Ubuntu ($UBUNTU_DISTRO)" -ForegroundColor Green
+        Write-Host "  ✅ Docker Engine" -ForegroundColor Green
     }
 
     if ($DeployLaunched) {
-        Write-Host "  OpenClaw Pro 容器已启动" -ForegroundColor Cyan
+        Write-Host "  🚀 OpenClaw Pro 容器已启动" -ForegroundColor Cyan
         Write-Host ""
 
         if ($Domain) {
             # HTTPS 模式
-            Write-Host "  端口映射:" -ForegroundColor White
+            Write-Host "  📝 端口映射:" -ForegroundColor White
             Write-Host "     HTTP   ${HttpPort} → 证书验证 + 跳转HTTPS" -ForegroundColor Gray
             Write-Host "     HTTPS  ${HttpsPort} → 主入口（Caddy 反代）" -ForegroundColor Gray
             Write-Host "     SSH    ${SshPort} → 远程登录（密钥认证）" -ForegroundColor Gray
             if ($CertMode -eq "internal") {
                 Write-Host "     证书模式: 自签证书（局域网测试）" -ForegroundColor Yellow
-                Write-Host "     [!] 首次访问浏览器会提示「不安全」，点击「继续访问」/「高级」即可" -ForegroundColor Yellow
+                Write-Host "     ⚠️  首次访问浏览器会提示「不安全」，点击「继续访问」/「高级」即可" -ForegroundColor Yellow
             } else {
                 Write-Host "     证书模式: Let's Encrypt 公网证书" -ForegroundColor Gray
             }
             Write-Host "     Gateway/Web 面板 → 仅容器内部（不占宿主机端口）" -ForegroundColor Gray
             Write-Host ""
-            Write-Host "  访问地址:" -ForegroundColor White
+            Write-Host "  🌐 访问地址:" -ForegroundColor White
             $httpsUrl = if ($HttpsPort -eq 443) { "https://${Domain}" } else { "https://${Domain}:${HttpsPort}" }
-            Write-Host "     主站:     $httpsUrl" -ForegroundColor Cyan
-            Write-Host "     管理面板: ${httpsUrl}/admin" -ForegroundColor Cyan
+            Write-Host "     🔗 主站:     $httpsUrl" -ForegroundColor Cyan
+            Write-Host "     🔗 管理面板: ${httpsUrl}/admin" -ForegroundColor Cyan
         } else {
             # HTTP 直连模式
-            Write-Host "  端口映射:" -ForegroundColor White
+            Write-Host "  📝 端口映射:" -ForegroundColor White
             Write-Host "     Gateway ${GatewayPort} → 容器 18789 (API入口)" -ForegroundColor Gray
             Write-Host "     Web面板 ${PanelPort} → 容器 3000  (管理面板)" -ForegroundColor Gray
             Write-Host "     SSH    ${SshPort} → 容器 22    (远程登录)" -ForegroundColor Gray
             Write-Host ""
-            Write-Host "  访问地址:" -ForegroundColor White
-            Write-Host "     Gateway:  http://localhost:${GatewayPort}" -ForegroundColor Cyan
-            Write-Host "     管理面板: http://localhost:${PanelPort}" -ForegroundColor Cyan
+            Write-Host "  🌐 访问地址:" -ForegroundColor White
+            Write-Host "     🔗 Gateway:  http://localhost:${GatewayPort}" -ForegroundColor Cyan
+            Write-Host "     🔗 管理面板: http://localhost:${PanelPort}" -ForegroundColor Cyan
         }
 
         Write-Host ""
@@ -1677,7 +1677,7 @@ function Show-Completion {
 
         if ($Domain -and $CertMode -eq "internal") {
             Write-Host ""
-            Write-Host "  关于 HTTPS 证书提示:" -ForegroundColor White
+            Write-Host "  🔒 关于 HTTPS 证书提示:" -ForegroundColor White
             Write-Host "     首次打开页面时，浏览器会显示「不安全」或「证书错误」—— 这是正常的。" -ForegroundColor DarkGray
             Write-Host "     因为证书是本机自动生成的，不是公网机构签发的。" -ForegroundColor DarkGray
             Write-Host "     点击「高级」→「继续前往」即可正常使用，不影响数据安全。" -ForegroundColor DarkGray
@@ -1688,7 +1688,7 @@ function Show-Completion {
         }
         Write-Host ""
 
-        Write-Host "  管理命令：" -ForegroundColor White
+        Write-Host "  📝 管理命令：" -ForegroundColor White
         Write-Host "     docker ps                      # 查看容器状态" -ForegroundColor Gray
         Write-Host "     docker logs openclaw-pro       # 查看日志" -ForegroundColor Gray
         Write-Host "     docker stop openclaw-pro       # 停止服务" -ForegroundColor Gray
@@ -1696,7 +1696,7 @@ function Show-Completion {
         Write-Host "     docker exec -it openclaw-pro bash  # 进入容器终端" -ForegroundColor Gray
         Write-Host "     ssh root@localhost -p ${SshPort}    # SSH 远程登录" -ForegroundColor Gray
         Write-Host ""
-        Write-Host "  升级到新版本：" -ForegroundColor White
+        Write-Host "  🔄 升级到新版本：" -ForegroundColor White
         Write-Host "     重新运行安装命令即可，脚本会自动检测版本差异：" -ForegroundColor DarkGray
         Write-Host "     irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1 | iex" -ForegroundColor Cyan
         Write-Host "     数据目录 (home-data) 不受影响，升级后原有配置和数据保留。" -ForegroundColor DarkGray
@@ -1704,11 +1704,11 @@ function Show-Completion {
         Write-Host ""
         Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray
         Write-Host ""
-        Write-Host "  可能的原因:" -ForegroundColor Cyan
+        Write-Host "  📍 可能的原因:" -ForegroundColor Cyan
         Write-Host "     • 端口被其他程序占用（重新运行脚本选择其他端口）" -ForegroundColor Gray
         Write-Host "     • Docker 镜像获取失败（网络问题）" -ForegroundColor Gray
         Write-Host ""
-        Write-Host "  排查步骤:" -ForegroundColor Cyan
+        Write-Host "  🔍 排查步骤:" -ForegroundColor Cyan
         Write-Host "     docker ps -a                   # 检查所有容器" -ForegroundColor Gray
         Write-Host "     docker logs openclaw-pro       # 查看日志" -ForegroundColor Gray
         Write-Host "     netstat -ano | findstr :18789  # 检查端口占用" -ForegroundColor Gray
@@ -1717,9 +1717,9 @@ function Show-Completion {
         # 检查镜像是否已存在
         $imageCheck = & docker image inspect openclaw-pro 2>$null
         if ($LASTEXITCODE -eq 0) {
-            Write-Host "  [OK] 镜像已加载，重新运行脚本即可（会跳过下载）" -ForegroundColor Green
+            Write-Host "  ✅ 镜像已加载，重新运行脚本即可（会跳过下载）" -ForegroundColor Green
         } else {
-        Write-Host "  手动获取镜像:" -ForegroundColor Cyan
+        Write-Host "  📥 手动获取镜像:" -ForegroundColor Cyan
         Write-Host ""
         Write-Host "     方式1: 浏览器下载（推荐）" -ForegroundColor Yellow
         $manualTag = if ($script:latestReleaseTag) { $script:latestReleaseTag } elseif ($latestReleaseTag) { $latestReleaseTag } else { "v1.0.0" }
@@ -1775,7 +1775,7 @@ function Show-Error {
 
     Write-Host ""
     Write-Host "  ==================================================" -ForegroundColor Red
-    Write-Host "             [X] 安装失败" -ForegroundColor Red
+    Write-Host "             ❌ 安装失败" -ForegroundColor Red
     Write-Host "  ==================================================" -ForegroundColor Red
     Write-Host ""
     Write-Host "  失败步骤: $Step" -ForegroundColor Red
@@ -1784,10 +1784,10 @@ function Show-Error {
     }
     if ($Suggestion) {
         Write-Host ""
-        Write-Host "  [i] 建议: $Suggestion" -ForegroundColor Cyan
+        Write-Host "  💡 建议: $Suggestion" -ForegroundColor Cyan
     }
     Write-Host ""
-    Write-Host "  完整日志: $LOG_FILE" -ForegroundColor DarkGray
+    Write-Host "  📄 完整日志: $LOG_FILE" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  如需帮助，请将日志文件发送给技术支持。" -ForegroundColor Gray
     Write-Host ""
@@ -2046,7 +2046,7 @@ function Main {
             (Test-Path (Join-Path $currentDir "start-services.sh"))) {
             $parentDir = Split-Path $currentDir -Parent
             Write-Host ""
-            Write-Host "  [!] 检测到当前目录已是 OpenClaw 部署目录:" -ForegroundColor Yellow
+            Write-Host "  ⚠️  检测到当前目录已是 OpenClaw 部署目录:" -ForegroundColor Yellow
             Write-Host "     $currentDir" -ForegroundColor DarkGray
             Write-Host ""
             Write-Host "     [1] 在当前目录运行（数据目录将在上级: $parentDir）" -ForegroundColor White
@@ -2461,7 +2461,7 @@ function Main {
                 } catch {
                     Write-Err "下载失败: $_"
                     Write-Host ""
-                    Write-Host "  [i] 请手动下载并解压:" -ForegroundColor Cyan
+                    Write-Host "  💡 请手动下载并解压:" -ForegroundColor Cyan
                     Write-Host "     1. 浏览器打开: https://github.com/cintia09/openclaw-pro/releases/latest" -ForegroundColor White
                     Write-Host "     2. 解压到当前目录，重命名为 openclaw-pro" -ForegroundColor White
                     Write-Host "     3. 重新运行此脚本" -ForegroundColor White
@@ -2508,7 +2508,7 @@ function Main {
 
         if ($runningContainers.Count -gt 0) {
             Write-Host "" 
-            Write-Host "  [!] 发现正在运行的 OpenClaw 容器:" -ForegroundColor Yellow
+            Write-Host "  ⚠️  发现正在运行的 OpenClaw 容器:" -ForegroundColor Yellow
             Write-Host ""
             foreach ($rc in $runningContainers) {
                 $parts = $rc -split '\|'
@@ -2646,7 +2646,7 @@ function Main {
                 & docker rm -f $containerName 2>&1 | Out-Null
                 Start-Sleep -Seconds 2
                 Write-OK "旧容器已删除"
-                Write-Info "[i] 数据目录 (home-data) 不会被删除，原有配置和数据均保留"
+                Write-Info "💡 数据目录 (home-data) 不会被删除，原有配置和数据均保留"
                 Write-Info "   如需彻底删除数据，请手动删除目录: $(Join-Path $homeBaseDir $upgradeHomeDataName)"
             } else {
                 # [3] 重新配置 — 原有的删除逻辑
@@ -2689,7 +2689,7 @@ function Main {
                 }
                 Start-Sleep -Seconds 2  # 等待端口释放
                 Write-OK "旧容器已删除"
-                Write-Info "[i] 数据目录 (home-data) 不会被删除，原有配置和数据均保留"
+                Write-Info "💡 数据目录 (home-data) 不会被删除，原有配置和数据均保留"
                 $delHomeDataName = "home-data"
                 if ($containerName -match '^openclaw-pro-(\d+)$') {
                     $delHomeDataName = "home-data-$($Matches[1])"
@@ -3410,7 +3410,7 @@ function Main {
                 if ($runOutput -match "port is already allocated" -or $dockerErr -match "port is already allocated") {
                     if ($conflictPort) {
                         Write-Err "端口 ${conflictPort} 被占用，请关闭占用端口的程序后重试"
-                        Write-Host "  [i] 查看端口占用: netstat -ano | findstr :${conflictPort}" -ForegroundColor Cyan
+                        Write-Host "  💡 查看端口占用: netstat -ano | findstr :${conflictPort}" -ForegroundColor Cyan
                     } else {
                         Write-Err "端口被占用，请关闭占用端口的程序后重试"
                     }
@@ -3427,7 +3427,7 @@ function Main {
                 $conflictPort = if ($errMsg -match 'Bind for.*:(\d+)') { $Matches[1] } else { "?" }
                 Write-Err "端口 ${conflictPort} 已被占用"
                 Write-Host "" 
-                Write-Host "  [i] 解决方法:" -ForegroundColor Cyan
+                Write-Host "  💡 解决方法:" -ForegroundColor Cyan
                 Write-Host "     1. 查看占用: netstat -ano | findstr :${conflictPort}" -ForegroundColor White
                 Write-Host "     2. 或者重新运行安装脚本，选择其他端口" -ForegroundColor White
                 Write-Host "" 
@@ -3484,7 +3484,7 @@ function Main {
                 if (-not $ghcrRecovered) {
                     Write-Err "镜像获取失败"
                     Write-Host ""
-                    Write-Host "  [i] 请手动执行以下命令后重新运行安装脚本:" -ForegroundColor Cyan
+                    Write-Host "  💡 请手动执行以下命令后重新运行安装脚本:" -ForegroundColor Cyan
                     Write-Host "     docker pull ghcr.io/${GITHUB_REPO}:latest" -ForegroundColor White
                     Write-Host "     docker tag ghcr.io/${GITHUB_REPO}:latest openclaw-pro:latest" -ForegroundColor White
                     Write-Host ""
@@ -3557,10 +3557,10 @@ try {
     Write-Log "FATAL: $errMsg" "ERROR"
     Write-Log "Stack trace: $($_.ScriptStackTrace)" "ERROR"
     Write-Host ""
-    Write-Host "  [X] 安装程序遇到意外错误:" -ForegroundColor Red
+    Write-Host "  ❌ 安装程序遇到意外错误:" -ForegroundColor Red
     Write-Host "  $errMsg" -ForegroundColor Red
     Write-Host ""
-    Write-Host "  日志文件: $LOG_FILE" -ForegroundColor DarkGray
+    Write-Host "  📄 日志文件: $LOG_FILE" -ForegroundColor DarkGray
     Write-Host ""
     Read-Host "按回车退出"
     return
