@@ -114,10 +114,11 @@ if ($updateChoice -eq "1") {
     Write-Host "  " -NoNewline
     $done = $false
     $wasRunning = $false
-    $postOk = ($hotpatchResult -and $hotpatchResult -match '"ok"')
+    $postOk = ($hotpatchResult -and ($hotpatchResult -match '"success"' -or $hotpatchResult -match '"ok"'))
     $failCount = 0
     $idleAfterPostCount = 0
     $lastLog = ""
+    if ($postOk) { Write-Dim "热更新已触发，等待完成..." }
     for ($i = 1; $i -le 180; $i++) {
         Start-Sleep 1
         try {

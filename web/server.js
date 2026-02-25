@@ -41,7 +41,7 @@ async function fetchWithFallback(url, options = {}) {
     return resp;
   } catch (fetchErr) {
     // fetch failed (likely DNS), fallback to curl
-    const curlArgs = ['-sf', '--connect-timeout', '10', '-L'];
+    const curlArgs = ['-sf', '--connect-timeout', '5', '--max-time', '10', '-L'];
     if (options.headers) {
       for (const [k, v] of Object.entries(options.headers)) {
         curlArgs.push('-H', `${k}: ${v}`);
@@ -646,7 +646,7 @@ app.post('/api/update/hotpatch', async (req, res) => {
         const url = `${GITHUB_RAW_BASE}/${branch}/${ghPath}`;
         const resp = await fetchWithFallback(url, {
           headers: { 'User-Agent': 'openclaw-pro' },
-          timeout: 15000
+          timeout: 8000
         });
 
         if (!resp.ok) {
