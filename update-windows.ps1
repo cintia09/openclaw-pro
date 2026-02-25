@@ -16,6 +16,192 @@ function Write-Step($msg) { Write-Host "`n  ▸ $msg" -ForegroundColor Cyan }
 function Write-OK($msg)   { Write-Host "  ✅ $msg" -ForegroundColor Green }
 function Write-Err($msg)  { Write-Host "  ❌ $msg" -ForegroundColor Red }
 function Write-Dim($msg)  { Write-Host "    $msg" -ForegroundColor DarkGray }
+function Write-Warn($msg) { Write-Host "  ⚠️  $msg" -ForegroundColor Yellow }
+function Write-Info($msg) { Write-Host "  $msg" -ForegroundColor Cyan }
+
+# ─── Robust Multi-threaded Chunked Download (多线程分块断点续传) ──────────────
+function Download-Robust {
+    param(
+        [string[]]$Urls,
+        [string]$OutFile,
+        [long]$ExpectedSize,
+        [int]$ChunkSizeMB = 2,
+        [int]$Threads = 8,
+        [int]$RetryPerChunk = 20
+    )
+
+    $chunkSize = [long]($ChunkSizeMB * 1024 * 1024)
+    $totalChunks = [int][math]::Ceiling($ExpectedSize / $chunkSize)
+    $totalMB = [math]::Round($ExpectedSize / 1MB, 1)
+
+    $progressFile = "${OutFile}.progress"
+    $completedSet = [System.Collections.Concurrent.ConcurrentDictionary[int,byte]]::new()
+
+    $needPrealloc = $false
+    if (-not (Test-Path $OutFile)) { $needPrealloc = $true }
+    elseif ((Get-Item $OutFile).Length -ne $ExpectedSize) { $needPrealloc = $true }
+
+    $progressValid = $false
+    if ((Test-Path $progressFile) -and -not $needPrealloc) {
+        $progressLines = Get-Content $progressFile -ErrorAction SilentlyContinue
+        $sizeMatch = $false
+        foreach ($line in $progressLines) {
+            if ($line -match '^SIZE:(\d+)$') {
+                if ([long]$Matches[1] -eq $ExpectedSize) { $sizeMatch = $true }
+                continue
+            }
+            if ($line -match '^\d+$') { $completedSet.TryAdd([int]$line, [byte]1) | Out-Null }
+        }
+        if ($sizeMatch -or ($completedSet.Count -gt 0 -and -not ($progressLines | Where-Object { $_ -match '^SIZE:' }))) {
+            $progressValid = $true
+        } else { $completedSet.Clear() }
+    }
+
+    if ($needPrealloc) {
+        if ((Test-Path $progressFile) -and $completedSet.Count -eq 0) {
+            $oldCount = (Get-Content $progressFile -ErrorAction SilentlyContinue | Where-Object { $_ -match '^\d+$' }).Count
+            if ($oldCount -gt 0) { Write-Warn "目标文件已失效，旧进度 ${oldCount} 块作废，将重新下载" }
+        }
+        $completedSet.Clear()
+        if (Test-Path $progressFile) { Remove-Item $progressFile -Force -ErrorAction SilentlyContinue }
+        Write-Info "预分配 ${totalMB}MB 磁盘空间..."
+        $fs = [IO.File]::Create($OutFile); $fs.SetLength($ExpectedSize); $fs.Close()
+        "SIZE:$ExpectedSize" | Set-Content $progressFile -Force
+    } elseif (-not (Test-Path $progressFile)) {
+        "SIZE:$ExpectedSize" | Set-Content $progressFile -Force
+    }
+
+    if ($completedSet.Count -gt 0) {
+        $doneMB = [math]::Round([math]::Min([long]$completedSet.Count * $chunkSize, $ExpectedSize) / 1MB, 1)
+        Write-Info "续传下载，已完成 $($completedSet.Count)/${totalChunks} 块 (${doneMB}MB / ${totalMB}MB)"
+    }
+
+    if ($completedSet.Count -ge $totalChunks) {
+        if ((Test-Path $OutFile) -and (Get-Item $OutFile).Length -eq $ExpectedSize) {
+            Write-OK "镜像文件已完整下载 (${totalMB}MB)"
+            Remove-Item $progressFile -Force -ErrorAction SilentlyContinue
+            return $true
+        }
+    }
+
+    $chunkQueue = [System.Collections.Concurrent.ConcurrentQueue[int]]::new()
+    $pendingCount = 0
+    for ($i = 0; $i -lt $totalChunks; $i++) {
+        if (-not $completedSet.ContainsKey($i)) { $chunkQueue.Enqueue($i); $pendingCount++ }
+    }
+    if ($pendingCount -eq 0) {
+        Write-OK "所有块已下载完成"
+        Remove-Item $progressFile -Force -ErrorAction SilentlyContinue
+        return $true
+    }
+
+    $failedChunks = [System.Collections.Concurrent.ConcurrentBag[int]]::new()
+    $actualThreads = [math]::Min($Threads, $pendingCount)
+    Write-Info "${actualThreads} 线程并行下载: ${pendingCount} 块 x ${ChunkSizeMB}MB (断线自动续传)"
+
+    $workerScript = {
+        param($Queue, [string[]]$Urls, [string]$FilePath, [long]$ChunkSize, [long]$FileSize,
+              [int]$MaxRetry, $Done, [string]$ProgressPath, $Failed)
+
+        $chunkIdx = 0
+        while ($Queue.TryDequeue([ref]$chunkIdx)) {
+            $rangeStart = [long]($chunkIdx * $ChunkSize)
+            $rangeEnd   = [long]([math]::Min(($chunkIdx + 1) * $ChunkSize - 1, $FileSize - 1))
+            $expectedLen = [long]($rangeEnd - $rangeStart + 1)
+            $ok = $false
+            for ($retry = 0; $retry -lt $MaxRetry -and -not $ok; $retry++) {
+                $urlIdx = $retry % $Urls.Count
+                $resp = $null; $netStream = $null; $fs = $null
+                try {
+                    $req = [System.Net.HttpWebRequest]::Create($Urls[$urlIdx])
+                    $req.AllowAutoRedirect = $true
+                    $req.Timeout = 15000; $req.ReadWriteTimeout = 15000
+                    $req.UserAgent = "OpenClaw-Updater/1.0"
+                    $req.KeepAlive = $false
+                    $req.AddRange([long]$rangeStart, [long]$rangeEnd)
+                    $resp = $req.GetResponse()
+                    $netStream = $resp.GetResponseStream()
+                    $fs = [IO.File]::Open($FilePath, [IO.FileMode]::Open, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
+                    $fs.Seek($rangeStart, [IO.SeekOrigin]::Begin) | Out-Null
+                    $buf = New-Object byte[] 65536
+                    $got = [long]0
+                    while ($got -lt $expectedLen) {
+                        $n = $netStream.Read($buf, 0, [int][math]::Min($buf.Length, $expectedLen - $got))
+                        if ($n -eq 0) { break }
+                        $fs.Write($buf, 0, $n); $got += $n
+                    }
+                    $fs.Flush(); $fs.Close(); $fs = $null
+                    $netStream.Close(); $netStream = $null
+                    $resp.Close(); $resp = $null
+                    if ($got -eq $expectedLen) {
+                        $ok = $true
+                        $Done.TryAdd($chunkIdx, [byte]1) | Out-Null
+                        try { [IO.File]::AppendAllText($ProgressPath, "$chunkIdx`r`n") } catch {}
+                    }
+                } catch {
+                    if ($retry -lt $MaxRetry - 1) { Start-Sleep -Seconds ([math]::Min(($retry + 1) * 2, 8)) }
+                } finally {
+                    if ($fs) { try { $fs.Close() } catch {} }
+                    if ($netStream) { try { $netStream.Close() } catch {} }
+                    if ($resp) { try { $resp.Close() } catch {} }
+                }
+            }
+            if (-not $ok) { $Failed.Add($chunkIdx) }
+        }
+    }
+
+    $pool = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspacePool(1, $actualThreads)
+    $pool.Open()
+    $handles = [System.Collections.ArrayList]::new()
+    for ($t = 0; $t -lt $actualThreads; $t++) {
+        $ps = [PowerShell]::Create()
+        $ps.RunspacePool = $pool
+        $ps.AddScript($workerScript).
+            AddArgument($chunkQueue).AddArgument($Urls).AddArgument($OutFile).
+            AddArgument($chunkSize).AddArgument($ExpectedSize).AddArgument($RetryPerChunk).
+            AddArgument($completedSet).AddArgument($progressFile).AddArgument($failedChunks) | Out-Null
+        $handles.Add(@{ PS = $ps; AR = $ps.BeginInvoke() }) | Out-Null
+    }
+
+    $speedTimer = [System.Diagnostics.Stopwatch]::StartNew()
+    $initialDone = $totalChunks - $pendingCount
+    while ($handles | Where-Object { -not $_.AR.IsCompleted }) {
+        Start-Sleep -Milliseconds 500
+        $doneNow = $completedSet.Count
+        $currentBytes = [long][math]::Min([long]$doneNow * $chunkSize, $ExpectedSize)
+        $pct = [math]::Round($currentBytes * 100 / $ExpectedSize)
+        $dlMB = [math]::Round($currentBytes / 1MB, 1)
+        $elapsedSec = $speedTimer.Elapsed.TotalSeconds
+        $newChunks = $doneNow - $initialDone
+        $speedMBps = if ($elapsedSec -gt 1) { [math]::Round([long]$newChunks * $chunkSize / $elapsedSec / 1MB, 1) } else { 0 }
+        $eta = ""
+        if ($speedMBps -gt 0) {
+            $remainMB = $totalMB - $dlMB; $etaSec = [int]($remainMB / $speedMBps)
+            if ($etaSec -gt 0) { $eta = " ETA $([math]::Floor($etaSec/60))m$($etaSec%60)s" }
+        }
+        Write-Host "`r  ⏳ ${actualThreads}线程下载: ${dlMB}MB / ${totalMB}MB (${pct}%) ${speedMBps}MB/s${eta} [${doneNow}/${totalChunks}块]    " -NoNewline -ForegroundColor Cyan
+    }
+    Write-Host ""
+
+    foreach ($h in $handles) { try { $h.PS.EndInvoke($h.AR) } catch {}; $h.PS.Dispose() }
+    $pool.Close(); $pool.Dispose()
+
+    if ($failedChunks.Count -gt 0) {
+        $failList = @(); foreach ($fc in $failedChunks) { $failList += $fc }
+        Write-Warn "$($failedChunks.Count) 个块下载失败"
+        Write-Warn "重新运行脚本即可自动续传剩余块"
+        return $false
+    }
+
+    $finalSize = (Get-Item $OutFile).Length
+    if ($finalSize -eq $ExpectedSize) {
+        Remove-Item $progressFile -Force -ErrorAction SilentlyContinue
+        return $true
+    } else {
+        Write-Warn "文件大小不匹配: ${finalSize} / ${ExpectedSize} 字节"
+        return $false
+    }
+}
 
 Write-Host ""
 Write-Host "  ╔══════════════════════════════════════════╗" -ForegroundColor Cyan
@@ -312,15 +498,16 @@ Write-Dim "当前版本: $currentVersion"
 Write-Step "检查最新版本..."
 $latestVersion = ""
 $downloadUrl = ""
+$imageSize = 0
+$release = $null
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$GITHUB_REPO/releases/latest" -UseBasicParsing -TimeoutSec 15
     $latestVersion = $release.tag_name
-    foreach ($asset in $release.assets) {
-        if ($asset.name -eq "openclaw-pro-image.tar.gz") {
-            $downloadUrl = $asset.browser_download_url
-            break
-        }
+    $imageAsset = $release.assets | Where-Object { $_.name -eq "openclaw-pro-image.tar.gz" } | Select-Object -First 1
+    if ($imageAsset) {
+        $downloadUrl = $imageAsset.browser_download_url
+        $imageSize = [long]$imageAsset.size
     }
 } catch {
     Write-Dim "无法获取最新版本信息: $_"
@@ -348,15 +535,31 @@ if (-not (Test-Path $downloadDir)) { New-Item -ItemType Directory -Path $downloa
 $tarPath = Join-Path $downloadDir "openclaw-pro-image.tar.gz"
 $downloaded = $false
 
-if ($downloadUrl) {
-    Write-Dim "从 GitHub Release 下载..."
-    try {
-        $webClient = New-Object System.Net.WebClient
-        $webClient.DownloadFile($downloadUrl, $tarPath)
+if ($downloadUrl -and $imageSize -gt 0) {
+    $sizeMB = [math]::Round($imageSize / 1MB, 1)
+    Write-Info "发现预构建镜像 ($latestVersion, ${sizeMB}MB)"
+    Write-Info "正在下载... (8线程并行，断线自动续传)"
+
+    # 多下载源（直连 + 代理）
+    $downloadUrls = @(
+        $downloadUrl,
+        "https://ghfast.top/$downloadUrl",
+        "https://mirror.ghproxy.com/$downloadUrl"
+    )
+
+    $downloadOK = Download-Robust `
+        -Urls $downloadUrls `
+        -OutFile $tarPath `
+        -ExpectedSize $imageSize `
+        -ChunkSizeMB 2 `
+        -Threads 8 `
+        -RetryPerChunk 20
+
+    if ($downloadOK) {
         $downloaded = $true
-        Write-OK "下载完成: $([Math]::Round((Get-Item $tarPath).Length / 1MB, 1)) MB"
-    } catch {
-        Write-Dim "下载失败: $_, 尝试 GHCR..."
+        Write-OK "镜像下载完成 (${sizeMB}MB)"
+    } else {
+        Write-Dim "分块下载未完成，尝试 GHCR..."
     }
 }
 
@@ -382,10 +585,35 @@ if (-not $downloaded) {
 
 # ── 7. 加载镜像 ──
 if (Test-Path $tarPath) {
-    Write-Step "加载镜像..."
+    Write-Step "加载镜像到 Docker...（约 1-3 分钟，请耐心等待）"
     & docker rmi -f $IMAGE_NAME 2>$null | Out-Null
-    & docker load -i $tarPath 2>&1
-    if ($LASTEXITCODE -ne 0) {
+
+    $loadJob = Start-Job -ScriptBlock {
+        param($tar, $img)
+        & docker load -i $tar 2>&1
+        return $LASTEXITCODE
+    } -ArgumentList $tarPath, $IMAGE_NAME
+
+    $spinner = @('⠁','⠃','⠇','⠏','⠟','⠿','⡿','⣿','⣾','⣼','⣸','⣰','⣠','⣀','⢀','⠀')
+    $si = 0
+    $loadTimer = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($loadJob.State -eq 'Running') {
+        $elapsed = [math]::Floor($loadTimer.Elapsed.TotalSeconds)
+        $min = [math]::Floor($elapsed / 60); $sec = $elapsed % 60
+        $spinChar = $spinner[$si % $spinner.Count]
+        Write-Host "`r  $spinChar 加载中... 已耗时 ${min}分${sec}秒    " -NoNewline -ForegroundColor Cyan
+        $si++; Start-Sleep -Milliseconds 200
+    }
+    Write-Host ""
+    $loadTimer.Stop()
+    $loadOutput = Receive-Job $loadJob
+    Remove-Job $loadJob -Force
+
+    $loadOutput | ForEach-Object {
+        if ($_ -match "Loaded image") { Write-Host "  $_" -ForegroundColor DarkGray }
+    }
+
+    if (-not ($loadOutput | Out-String) -or ($loadOutput | Out-String) -match "Error") {
         Write-Err "docker load 失败"
         Read-Host "按回车退出"
         exit 1
