@@ -564,35 +564,38 @@ app.get('/api/update/check', async (req, res) => {
       publishedAt: release.published_at,
       releaseUrl: release.html_url,
       releaseName: release.name || latestVersion,
-      hotUpdateOnly: false
+      hotUpdateOnly: false,
+      dockerfileChanged: false
     };
 
-    // Check if Dockerfile changed (determines hot vs full update)
-    if (hasUpdate) {
-      try {
-        const dfResp = await fetchWithFallback(`${GITHUB_RAW_BASE}/main/Dockerfile`, {
-          headers: { 'User-Agent': 'openclaw-pro' },
-          timeout: 10000
-        });
-        if (dfResp.ok) {
-          const remoteDockerfile = await dfResp.text();
-          const remoteHash = crypto.createHash('sha256').update(remoteDockerfile).digest('hex');
-          const localHash = getLocalDockerfileHash();
-          if (localHash) {
-            // Hash file exists: compare to determine update type
-            result.hotUpdateOnly = remoteHash === localHash;
-            result.dockerfileChanged = remoteHash !== localHash;
-          } else {
-            // Old image without hash file: image predates hash feature,
-            // Dockerfile has almost certainly changed — recommend full update
-            result.hotUpdateOnly = false;
-            result.dockerfileChanged = true;
-          }
+    // Always check Dockerfile hash — even when versions match
+    // (hotpatch updates version file but doesn't rebuild image)
+    try {
+      const dfResp = await fetchWithFallback(`${GITHUB_RAW_BASE}/main/Dockerfile`, {
+        headers: { 'User-Agent': 'openclaw-pro' },
+        timeout: 10000
+      });
+      if (dfResp.ok) {
+        const remoteDockerfile = await dfResp.text();
+        const remoteHash = crypto.createHash('sha256').update(remoteDockerfile).digest('hex');
+        const localHash = getLocalDockerfileHash();
+        if (localHash) {
+          result.hotUpdateOnly = !hasUpdate || remoteHash === localHash;
+          result.dockerfileChanged = remoteHash !== localHash;
+        } else {
+          // Old image without hash file: image predates hash feature
+          result.hotUpdateOnly = false;
+          result.dockerfileChanged = true;
         }
-      } catch {}
+      }
+    } catch {}
+
+    // If Dockerfile changed, there's always a pending update (even if version matches)
+    if (result.dockerfileChanged) {
+      result.hasUpdate = true;
     }
 
-    updateCache = { data: { latestVersion, hasUpdate, publishedAt: release.published_at, releaseUrl: release.html_url, releaseName: release.name || latestVersion, hotUpdateOnly: result.hotUpdateOnly, dockerfileChanged: result.dockerfileChanged }, checkedAt: Date.now() };
+    updateCache = { data: { latestVersion, hasUpdate: result.hasUpdate, publishedAt: release.published_at, releaseUrl: release.html_url, releaseName: release.name || latestVersion, hotUpdateOnly: result.hotUpdateOnly, dockerfileChanged: result.dockerfileChanged }, checkedAt: Date.now() };
     res.json(result);
   } catch (e) {
     res.json({ currentVersion, latestVersion: null, error: e.message });

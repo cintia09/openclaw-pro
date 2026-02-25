@@ -222,7 +222,13 @@ async function checkForUpdate(force = false) {
     const hotBtn = $('btn-hotpatch-banner');
     const fullHint = $('update-full-hint');
     if (hotBtn) hotBtn.style.display = u.dockerfileChanged ? 'none' : '';
-    if (fullHint) fullHint.style.display = u.dockerfileChanged ? '' : 'none';
+    if (fullHint) {
+      fullHint.style.display = u.dockerfileChanged ? '' : 'none';
+      // When versions match but Dockerfile changed, show special hint
+      if (u.dockerfileChanged && u.currentVersion === u.latestVersion) {
+        fullHint.innerHTML = '📦 <b>镜像需要重建</b>：Dockerfile 已更新（如 dnsmasq），请运行完整更新脚本';
+      }
+    }
   }
 
   // Sidebar red dot
@@ -237,7 +243,11 @@ async function checkForUpdate(force = false) {
     const linkEl = $('settings-release-link');
     if (u.hasUpdate) {
       if (u.dockerfileChanged) {
-        statusEl.innerHTML = '<span style="color:#f59e0b">📦 需要完整更新</span>';
+        if (u.currentVersion === u.latestVersion) {
+          statusEl.innerHTML = '<span style="color:#f59e0b">📦 镜像需要重建</span>';
+        } else {
+          statusEl.innerHTML = '<span style="color:#f59e0b">📦 需要完整更新</span>';
+        }
       } else {
         statusEl.innerHTML = '<span style="color:#4ade80">⚡ 可热更新</span>';
       }
