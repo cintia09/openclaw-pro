@@ -98,7 +98,8 @@ if ($updateChoice -eq "1") {
     $done = $false
     $wasRunning = $false
     $failCount = 0
-    for ($i = 1; $i -le 90; $i++) {
+    $lastLog = ""
+    for ($i = 1; $i -le 180; $i++) {
         Start-Sleep 1
         try {
             $statusJson = & docker exec $CONTAINER_NAME curl -sf http://127.0.0.1:3000/api/update/hotpatch/status 2>$null
@@ -108,6 +109,18 @@ if ($updateChoice -eq "1") {
             if ($status.status -eq "running") {
                 $wasRunning = $true
                 $failCount = 0
+                # Show real-time progress from log
+                if ($status.log -and $status.log -ne $lastLog) {
+                    $newLines = $status.log.Replace($lastLog, "").Trim()
+                    if ($newLines) {
+                        Write-Host ""
+                        $newLines -split "`n" | ForEach-Object {
+                            if ($_) { Write-Host "    $_" -ForegroundColor DarkGray }
+                        }
+                        Write-Host "  " -NoNewline
+                    }
+                    $lastLog = $status.log
+                }
             }
             elseif ($status.status -eq "done" -or $status.status -eq "error") {
                 $done = $true
