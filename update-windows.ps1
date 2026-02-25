@@ -35,10 +35,15 @@ $recommendMsg = ""
 try {
     $existingId = (& docker ps -q --filter "name=^${CONTAINER_NAME}$" 2>$null)
     if ($existingId) {
-        $checkResult = & docker exec $CONTAINER_NAME curl -s http://127.0.0.1:3000/api/update/check?force=1 2>$null | ConvertFrom-Json
-        if ($checkResult.dockerfileChanged) {
-            $recommendFull = $true
-            $recommendMsg = "  ⚠️  检测到 Dockerfile 已变更，建议完整更新"
+        $rawJson = & docker exec $CONTAINER_NAME curl -sf http://127.0.0.1:3000/api/update/check?force=1 2>$null
+        if ($rawJson) {
+            $checkResult = $rawJson | ConvertFrom-Json
+            # dockerfileChanged can be bool or string depending on PS version
+            $dfChanged = "$($checkResult.dockerfileChanged)" -eq "True" -or "$($checkResult.dockerfileChanged)" -eq "true"
+            if ($dfChanged) {
+                $recommendFull = $true
+                $recommendMsg = "  ⚠️  检测到 Dockerfile 已变更（如 dnsmasq），建议完整更新"
+            }
         }
     }
 } catch {}
