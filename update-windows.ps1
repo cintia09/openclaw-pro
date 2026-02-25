@@ -29,18 +29,35 @@ $recommendMsg = ""
 try {
     $existingId = (& docker ps -q --filter "name=^${CONTAINER_NAME}$" 2>$null)
     if ($existingId) {
-        $rawJson = & docker exec $CONTAINER_NAME curl -sf http://127.0.0.1:3000/api/update/check?force=1 2>$null
-        if ($rawJson) {
-            $checkResult = $rawJson | ConvertFrom-Json
-            # dockerfileChanged can be bool or string depending on PS version
-            $dfChanged = "$($checkResult.dockerfileChanged)" -eq "True" -or "$($checkResult.dockerfileChanged)" -eq "true"
-            if ($dfChanged) {
-                $recommendFull = $true
-                $recommendMsg = "  ⚠️  检测到 Dockerfile 已变更（如 dnsmasq），建议完整更新"
+        Write-Host "  检测更新类型..." -ForegroundColor DarkGray -NoNewline
+
+        # 方法1：直接检查容器内是否有 Dockerfile hash 文件（不依赖网络）
+        & docker exec $CONTAINER_NAME test -f /etc/openclaw-dockerfile-hash 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            $recommendFull = $true
+            $recommendMsg = "  ⚠️  检测到旧版镜像，建议完整更新以获取最新系统包（如 dnsmasq）"
+            Write-Host " 旧版镜像" -ForegroundColor Yellow
+        } else {
+            # 方法2：通过 API 对比远程 Dockerfile hash（需要网络）
+            $rawJson = & docker exec $CONTAINER_NAME curl -sf --max-time 15 http://127.0.0.1:3000/api/update/check?force=1 2>$null
+            if ($rawJson) {
+                $checkResult = $rawJson | ConvertFrom-Json
+                $dfChanged = "$($checkResult.dockerfileChanged)" -eq "True" -or "$($checkResult.dockerfileChanged)" -eq "true"
+                if ($dfChanged) {
+                    $recommendFull = $true
+                    $recommendMsg = "  ⚠️  检测到 Dockerfile 已变更，建议完整更新"
+                    Write-Host " Dockerfile 已变更" -ForegroundColor Yellow
+                } else {
+                    Write-Host " OK" -ForegroundColor Green
+                }
+            } else {
+                Write-Host " (API 检测跳过)" -ForegroundColor DarkGray
             }
         }
     }
-} catch {}
+} catch {
+    Write-Host " (检测跳过)" -ForegroundColor DarkGray
+}
 
 Write-Host "  请选择更新方式:" -ForegroundColor White
 if ($recommendMsg) {
