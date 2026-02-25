@@ -3559,8 +3559,32 @@ function Main {
 
                     if ($recoverDownloadOK) {
                         Write-OK "镜像下载完成"
-                        Write-Info "正在加载镜像到 Docker..."
-                        $loadOutput = & docker load -i $recoverTar 2>&1
+                        Write-Info "正在加载镜像到 Docker...（1.6GB 需约 1-3 分钟，请耐心等待）"
+
+                        # 后台加载 + 前台旋转动画
+                        $loadJob = Start-Job -ScriptBlock {
+                            param($tar)
+                            & docker load -i $tar 2>&1
+                        } -ArgumentList $recoverTar
+
+                        $spinner = @('|','/','-','\')
+                        $si = 0
+                        $loadTimer = [System.Diagnostics.Stopwatch]::StartNew()
+                        while ($loadJob.State -eq 'Running') {
+                            $elapsed = [math]::Floor($loadTimer.Elapsed.TotalSeconds)
+                            $min = [math]::Floor($elapsed / 60)
+                            $sec = $elapsed % 60
+                            $spinChar = $spinner[$si % $spinner.Count]
+                            Write-Host "`r  $spinChar 加载中... 已耗时 ${min}分${sec}秒    " -NoNewline -ForegroundColor Cyan
+                            $si++
+                            Start-Sleep -Milliseconds 200
+                        }
+                        Write-Host ""
+                        $loadTimer.Stop()
+                        $loadOutput = Receive-Job $loadJob
+                        Remove-Job $loadJob -Force
+                        $totalLoadSec = [math]::Floor($loadTimer.Elapsed.TotalSeconds)
+
                         $loadOutput | ForEach-Object {
                             Write-Log "docker load(recover): $_"
                             if ($_ -match "Loaded image") {
@@ -3574,7 +3598,7 @@ function Main {
                         }
                         $chk = & docker image inspect openclaw-pro 2>$null
                         if ($LASTEXITCODE -eq 0) {
-                            Write-OK "Release 镜像加载完成"
+                            Write-OK "Release 镜像加载完成 (耗时 ${totalLoadSec} 秒)"
                             $recoverOK = $true
                         }
                         Remove-Item $recoverTar -Force -ErrorAction SilentlyContinue
