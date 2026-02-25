@@ -491,6 +491,9 @@ F2B
       fi  # do_firewall
     fi
 
+    # 获取镜像（配置完成后再下载，与 Windows 安装器流程对齐）
+    ensure_image
+
     # 创建容器
     info "创建容器..."
     docker create \
@@ -573,7 +576,6 @@ show_running_panel() {
 cmd_run() {
     ensure_docker
     ensure_jq
-    ensure_image
     ensure_home
 
     # 检查容器状态
@@ -581,9 +583,11 @@ cmd_run() {
         # 容器存在
         if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
             # 运行中
+            ensure_image
             show_running_panel
         else
             # 已停止
+            ensure_image
             info "容器已停止，正在启动..."
             docker start "$CONTAINER_NAME"
             success "容器已启动"
