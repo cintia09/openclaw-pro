@@ -275,7 +275,7 @@ try {
         Write-Host "  irm https://raw.githubusercontent.com/$GITHUB_REPO/main/install-windows.ps1 | iex" -ForegroundColor Cyan
         Write-Host ""
         Read-Host "按回车退出"
-        exit 0
+        return
     }
 } catch {
     Write-Host " (检测跳过)" -ForegroundColor DarkGray
@@ -330,7 +330,7 @@ if ($updateChoice -eq "1") {
             Write-Dim "请选择完整更新（选项 2）来重建容器"
             Write-Host ""
             Read-Host "按回车退出"
-            exit 1
+            return
         }
     }
     Write-OK "容器运行中: $($existingId.Substring(0, 12))"
@@ -440,7 +440,7 @@ if ($updateChoice -eq "1") {
     
     Write-Host ""
     Read-Host "按回车退出"
-    exit 0
+    return
 }
 
 # ══════════════ 完整更新模式 (原逻辑) ══════════════
@@ -454,7 +454,7 @@ try {
 } catch {
     Write-Err "未检测到 Docker，请先安装 Docker Desktop"
     Read-Host "按回车退出"
-    exit 1
+    return
 }
 
 # ── 2. 检查现有容器 ──
@@ -469,7 +469,7 @@ if (-not $existingId) {
     Write-Host "  irm https://raw.githubusercontent.com/$GITHUB_REPO/main/install-windows.ps1 | iex" -ForegroundColor Cyan
     Write-Host ""
     Read-Host "按回车退出"
-    exit 1
+    return
 }
 Write-OK "找到容器: $($existingId.Substring(0, 12))"
 
@@ -506,7 +506,7 @@ if (-not $configJson.Trim()) {
 if (-not $configJson.Trim()) {
     Write-Err "无法读取容器配置文件"
     Read-Host "按回车退出"
-    exit 1
+    return
 }
 
 $config = $configJson | ConvertFrom-Json
@@ -528,7 +528,7 @@ try {
 if (-not $homeDataMount) {
     Write-Err "无法获取 home-data 挂载路径"
     Read-Host "按回车退出"
-    exit 1
+    return
 }
 Write-Dim "数据目录: $homeDataMount"
 
@@ -563,7 +563,7 @@ if ($portMappings.Count -eq 0) {
     } else {
         Write-Err "无法获取端口映射"
         Read-Host "按回车退出"
-        exit 1
+        return
     }
 } else {
     Write-Dim "端口映射: $($portMappings -join ' ')"
@@ -612,7 +612,7 @@ if ($latestVersion -and $latestVersion -eq $currentVersion -and -not $recommendF
     Write-Host ""
     $forceUpdate = Read-Host "  仍然要重新安装吗？[y/N]"
     if ($forceUpdate -notin @("y", "Y", "yes")) {
-        exit 0
+        return
     }
 } elseif ($recommendFull) {
     Write-OK "镜像需要重建（Dockerfile 已变更）"
@@ -673,7 +673,7 @@ if (-not $downloaded) {
 if (-not $downloaded) {
     Write-Err "无法获取最新镜像"
     Read-Host "按回车退出"
-    exit 1
+    return
 }
 
 # ── 7. 加载镜像 ──
@@ -709,7 +709,7 @@ if (Test-Path $tarPath) {
     if (-not ($loadOutput | Out-String) -or ($loadOutput | Out-String) -match "Error") {
         Write-Err "docker load 失败"
         Read-Host "按回车退出"
-        exit 1
+        return
     }
     Write-OK "镜像加载完成"
     Remove-Item $tarPath -Force -ErrorAction SilentlyContinue
@@ -741,7 +741,7 @@ $output = $result | Out-String
 if ($LASTEXITCODE -ne 0) {
     Write-Err "启动失败: $output"
     Read-Host "按回车退出"
-    exit 1
+    return
 }
 Write-OK "新容器已启动"
 
