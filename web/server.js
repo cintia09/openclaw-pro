@@ -583,9 +583,10 @@ app.get('/api/update/check', async (req, res) => {
             result.hotUpdateOnly = remoteHash === localHash;
             result.dockerfileChanged = remoteHash !== localHash;
           } else {
-            // Old image without hash file: default to allowing hot update
-            result.hotUpdateOnly = true;
-            result.dockerfileChanged = false;
+            // Old image without hash file: image predates hash feature,
+            // Dockerfile has almost certainly changed — recommend full update
+            result.hotUpdateOnly = false;
+            result.dockerfileChanged = true;
           }
         }
       } catch {}
