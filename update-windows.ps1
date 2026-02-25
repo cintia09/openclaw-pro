@@ -212,9 +212,30 @@ Write-Host ""
 # ── 0. 智能检测更新类型 ──
 $recommendFull = $false
 $recommendMsg = ""
+$containerRunning = $false
+$containerExists = $false
 try {
-    $existingId = (& docker ps -q --filter "name=^${CONTAINER_NAME}$" 2>$null)
-    if ($existingId) {
+    $runningId = (& docker ps -q --filter "name=^${CONTAINER_NAME}$" 2>$null)
+    $anyId = (& docker ps -aq --filter "name=^${CONTAINER_NAME}$" 2>$null)
+    if ($runningId) {
+        $containerRunning = $true
+        $containerExists = $true
+    } elseif ($anyId) {
+        $containerExists = $true
+        # 容器存在但未运行，尝试启动以便检测
+        Write-Host "  容器已停止，正在启动..." -ForegroundColor DarkGray -NoNewline
+        & docker start $CONTAINER_NAME 2>$null | Out-Null
+        Start-Sleep 3
+        $runningId = (& docker ps -q --filter "name=^${CONTAINER_NAME}$" 2>$null)
+        if ($runningId) {
+            $containerRunning = $true
+            Write-Host " OK" -ForegroundColor Green
+        } else {
+            Write-Host " 启动失败" -ForegroundColor Yellow
+        }
+    }
+
+    if ($containerRunning) {
         Write-Host "  检测更新类型..." -ForegroundColor DarkGray -NoNewline
 
         # 方法1：直接检查容器内是否有 Dockerfile hash 文件（不依赖网络）
@@ -240,6 +261,13 @@ try {
                 Write-Host " (API 检测跳过)" -ForegroundColor DarkGray
             }
         }
+    } elseif ($containerExists) {
+        # 容器存在但无法启动 → 推荐完整更新
+        $recommendFull = $true
+        $recommendMsg = "  ⚠️  容器无法启动，建议完整更新重建容器"
+    } else {
+        # 容器不存在
+        Write-Host "  未找到容器 '$CONTAINER_NAME'" -ForegroundColor Yellow
     }
 } catch {
     Write-Host " (检测跳过)" -ForegroundColor DarkGray
@@ -280,9 +308,21 @@ if ($updateChoice -eq "1") {
     
     $existingId = (& docker ps -q --filter "name=^${CONTAINER_NAME}$" 2>$null)
     if (-not $existingId) {
-        Write-Err "容器 '$CONTAINER_NAME' 未在运行"
-        Read-Host "按回车退出"
-        exit 1
+        # 容器未运行，尝试启动
+        $stoppedId = (& docker ps -aq --filter "name=^${CONTAINER_NAME}$" 2>$null)
+        if ($stoppedId) {
+            Write-Dim "容器已停止，正在启动..."
+            & docker start $CONTAINER_NAME 2>$null | Out-Null
+            Start-Sleep 5
+            $existingId = (& docker ps -q --filter "name=^${CONTAINER_NAME}$" 2>$null)
+        }
+        if (-not $existingId) {
+            Write-Err "容器 '$CONTAINER_NAME' 未在运行且无法启动"
+            Write-Dim "请选择完整更新（选项 2）来重建容器"
+            Write-Host ""
+            Read-Host "按回车退出"
+            exit 1
+        }
     }
     Write-OK "容器运行中: $($existingId.Substring(0, 12))"
 
@@ -419,14 +459,35 @@ if (-not $existingId) {
 }
 Write-OK "找到容器: $($existingId.Substring(0, 12))"
 
+# 确保容器在运行（读取配置需要 docker exec）
+$isRunning = (& docker ps -q --filter "name=^${CONTAINER_NAME}$" 2>$null)
+if (-not $isRunning) {
+    Write-Dim "容器已停止，正在启动..."
+    & docker start $CONTAINER_NAME 2>$null | Out-Null
+    Start-Sleep 5
+    $isRunning = (& docker ps -q --filter "name=^${CONTAINER_NAME}$" 2>$null)
+    if (-not $isRunning) {
+        Write-Warn "容器无法启动，将使用 docker inspect 读取配置"
+    }
+}
+
 # ── 3. 读取现有配置 ──
 Write-Step "读取容器配置..."
 
-# 从容器获取 docker-config.json
+# 从容器获取 docker-config.json（优先 exec，降级 cp）
 $configJson = ""
-try {
-    $configJson = (& docker exec $CONTAINER_NAME cat /root/.openclaw/docker-config.json 2>$null) | Out-String
-} catch {}
+if ($isRunning) {
+    try { $configJson = (& docker exec $CONTAINER_NAME cat /root/.openclaw/docker-config.json 2>$null) | Out-String } catch {}
+}
+if (-not $configJson.Trim()) {
+    # 容器未运行或 exec 失败，尝试 docker cp
+    $tmpConfig = Join-Path $env:TEMP "openclaw-docker-config.json"
+    & docker cp "${CONTAINER_NAME}:/root/.openclaw/docker-config.json" $tmpConfig 2>$null
+    if (Test-Path $tmpConfig) {
+        $configJson = Get-Content $tmpConfig -Raw
+        Remove-Item $tmpConfig -Force -ErrorAction SilentlyContinue
+    }
+}
 
 if (-not $configJson.Trim()) {
     Write-Err "无法读取容器配置文件"
@@ -481,17 +542,35 @@ try {
 } catch {}
 
 if ($portMappings.Count -eq 0) {
-    Write-Err "无法获取端口映射"
-    Read-Host "按回车退出"
-    exit 1
+    # 降级：从 config 中构建端口映射
+    if ($config.http_port -and $config.https_port) {
+        $portMappings = @("-p", "$($config.https_port):443", "-p", "$($config.http_port):80")
+        Write-Dim "端口映射（从配置恢复）: $($portMappings -join ' ')"
+    } else {
+        Write-Err "无法获取端口映射"
+        Read-Host "按回车退出"
+        exit 1
+    }
+} else {
+    Write-Dim "端口映射: $($portMappings -join ' ')"
 }
-Write-Dim "端口映射: $($portMappings -join ' ')"
 
 # ── 4. 获取当前版本 ──
 $currentVersion = "unknown"
 try {
-    $currentVersion = (& docker exec $CONTAINER_NAME cat /etc/openclaw-version 2>$null).Trim()
+    if ($isRunning) {
+        $currentVersion = (& docker exec $CONTAINER_NAME cat /etc/openclaw-version 2>$null).Trim()
+    }
+    if ($currentVersion -eq "unknown" -or -not $currentVersion) {
+        $tmpVer = Join-Path $env:TEMP "openclaw-version.tmp"
+        & docker cp "${CONTAINER_NAME}:/etc/openclaw-version" $tmpVer 2>$null
+        if (Test-Path $tmpVer) {
+            $currentVersion = (Get-Content $tmpVer -Raw).Trim()
+            Remove-Item $tmpVer -Force -ErrorAction SilentlyContinue
+        }
+    }
 } catch {}
+if (-not $currentVersion) { $currentVersion = "unknown" }
 Write-Dim "当前版本: $currentVersion"
 
 # ── 5. 检查最新版本 ──
