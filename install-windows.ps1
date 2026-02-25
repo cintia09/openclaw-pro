@@ -3012,22 +3012,38 @@ function Main {
                 $ghcrImage = "ghcr.io/${GITHUB_REPO}:${ghcrTag}"
                 Write-Info "尝试从 GHCR 拉取镜像: $ghcrImage ..."
                 try {
-                    & docker pull $ghcrImage 2>&1 | ForEach-Object {
+                    # 重要: 不能用 | ForEach-Object，PowerShell 5.1 中 pipeline 会导致 $LASTEXITCODE 不可靠
+                    $pullOutput = & docker pull $ghcrImage 2>&1
+                    $pullExitCode = $LASTEXITCODE
+                    # 显示拉取日志
+                    $pullOutput | ForEach-Object {
                         if ($_ -match "Pulling|Downloading|Extracting|Pull complete|Digest|Status") {
                             Write-Host "  $_" -ForegroundColor DarkGray
                         }
                         Write-Log "docker pull: $_"
                     }
-                    if ($LASTEXITCODE -eq 0) {
-                        & docker tag $ghcrImage "openclaw-pro:latest" 2>$null
-                        $imageReady = $true
-                        Write-OK "GHCR 镜像拉取成功"
-                        try {
-                            $pulledId = (& docker image inspect openclaw-pro --format '{{.Id}}' 2>$null)
-                            if ($pulledId) { $script:loadedImageDigest = $pulledId }
-                        } catch { }
+                    if ($pullExitCode -eq 0) {
+                        # 绝对校验: tag 前确认 GHCR 镜像确实存在
+                        $ghcrCheck = & docker image inspect $ghcrImage 2>$null
+                        if ($LASTEXITCODE -eq 0) {
+                            & docker tag $ghcrImage "openclaw-pro:latest" 2>$null
+                            # 再次确认 tag 成功
+                            $tagCheck = & docker image inspect "openclaw-pro:latest" 2>$null
+                            if ($LASTEXITCODE -eq 0) {
+                                $imageReady = $true
+                                Write-OK "GHCR 镜像拉取成功"
+                                try {
+                                    $pulledId = (& docker image inspect openclaw-pro --format '{{.Id}}' 2>$null)
+                                    if ($pulledId) { $script:loadedImageDigest = $pulledId }
+                                } catch { }
+                            } else {
+                                Write-Warn "docker tag 失败，继续尝试本地构建..."
+                            }
+                        } else {
+                            Write-Warn "GHCR 拉取返回成功但镜像不存在（pipeline 异常），继续尝试本地构建..."
+                        }
                     } else {
-                        Write-Warn "GHCR 拉取失败，继续尝试本地构建..."
+                        Write-Warn "GHCR 拉取失败 (exit=$pullExitCode)，继续尝试本地构建..."
                     }
                 } catch {
                     Write-Log "GHCR pull failed: $_"
@@ -3056,13 +3072,16 @@ function Main {
                         Write-Info "已修改 Dockerfile 使用镜像源"
                     }
 
-                    & docker build --no-cache -t openclaw-pro . 2>&1 | ForEach-Object {
+                    # 重要: 不能用 | ForEach-Object，PowerShell 5.1 中 pipeline 会导致 $LASTEXITCODE 不可靠
+                    $buildOutput = & docker build --no-cache -t openclaw-pro . 2>&1
+                    $buildExitCode = $LASTEXITCODE
+                    $buildOutput | ForEach-Object {
                         if ($_ -match "^#\d+ \[" -or $_ -match "^Step " -or $_ -match "Successfully") {
                             Write-Host "  $_" -ForegroundColor DarkGray
                         }
                         Write-Log "docker build: $_"
                     }
-                    if ($LASTEXITCODE -eq 0) {
+                    if ($buildExitCode -eq 0) {
                         $buildOK = $true
                         if ($prefix) {
                             $originalDockerfile | Set-Content $dockerfilePath -Force -NoNewline
@@ -3085,11 +3104,13 @@ function Main {
                 } catch { }
             }
             Write-OK "镜像准备完成"
+            Write-Log "Image ready. imageReady=$imageReady. Proceeding to pre-run checks."
 
             # 启动前强校验：确保 openclaw-pro:latest 标签真实存在
             $preRunImageCheck = & docker image inspect openclaw-pro 2>$null
             if ($LASTEXITCODE -ne 0) {
-                Write-Warn "镜像标签 openclaw-pro 缺失，尝试自动修复..."
+                Write-Warn "镜像标签 openclaw-pro:latest 缺失，尝试自动修复..."
+                Write-Log "Pre-run image check FAILED. Attempting repair."
 
                 # 优先把已存在的 GHCR 镜像重新 tag 为 openclaw-pro:latest
                 try {
@@ -3109,14 +3130,19 @@ function Main {
                     $repairImage = "ghcr.io/${GITHUB_REPO}:${repairTag}"
                     Write-Info "镜像修复: 拉取 $repairImage"
                     try {
-                        & docker pull $repairImage 2>&1 | ForEach-Object {
+                        # 不能用 pipeline，PS 5.1 中 $LASTEXITCODE 在 | ForEach-Object 后不可靠
+                        $repairPullOutput = & docker pull $repairImage 2>&1
+                        $repairPullCode = $LASTEXITCODE
+                        $repairPullOutput | ForEach-Object {
                             if ($_ -match "Pulling|Downloading|Extracting|Pull complete|Digest|Status") {
                                 Write-Host "  $_" -ForegroundColor DarkGray
                             }
                             Write-Log "docker pull(repair): $_"
                         }
-                        if ($LASTEXITCODE -eq 0) {
+                        if ($repairPullCode -eq 0) {
                             & docker tag $repairImage "openclaw-pro:latest" 2>$null
+                        } else {
+                            Write-Log "Repair pull failed with exit code $repairPullCode"
                         }
                     } catch {
                         Write-Log "Image repair pull failed: $_"
@@ -3308,8 +3334,13 @@ function Main {
             # -- 最终镜像可用性检查 --
             $finalImageCheck = & docker image inspect openclaw-pro 2>$null
             if ($LASTEXITCODE -ne 0) {
+                # 日志记录 docker images 列表以辅助诊断
+                $imgList = & docker images --format "{{.Repository}}:{{.Tag}} {{.ID}}" 2>$null | Out-String
+                Write-Log "FINAL IMAGE CHECK FAILED. Docker images: $imgList"
                 throw "镜像 openclaw-pro:latest 不可用 — 所有获取方式均已失败。请检查网络后重新运行安装脚本。"
             }
+            $finalImageId = & docker image inspect openclaw-pro --format '{{.Id}}' 2>$null
+            Write-Log "Final image check OK. ID=$finalImageId"
 
             # Build docker run arguments
             $runArgs = @(
@@ -3472,11 +3503,11 @@ function Main {
                 Write-Host "     2. 或者重新运行安装脚本，选择其他端口" -ForegroundColor White
                 Write-Host "" 
             } elseif ($errMsg -match "No such image") {
-                # -- 镜像缺失 — 先尝试 Release 下载，再尝试 GHCR 拉取 --
+                # -- 镜像缺失 — 先尝试 Release 健壮下载，再尝试 GHCR 拉取 --
                 Write-Warn "本地镜像不存在，尝试自动恢复..."
                 $recoverOK = $false
 
-                # 恢复方式 1: 快速 curl.exe 下载 Release tar.gz (代理镜像)
+                # 恢复方式 1: Download-Robust 多线程分块下载 Release tar.gz
                 $recoverTag = if ($latestReleaseTag) { $latestReleaseTag } else { "latest" }
                 $recoverTar = Join-Path $env:TEMP "openclaw-pro-image.tar.gz"
                 $releaseBaseUrl = if ($latestReleaseTag) {
@@ -3484,42 +3515,72 @@ function Main {
                 } else {
                     "https://github.com/$GITHUB_REPO/releases/latest/download/openclaw-pro-image.tar.gz"
                 }
+                # 代理镜像优先（国内直连 github.com 通常很慢或不通）
                 $recoverUrls = @(
                     "https://ghfast.top/$releaseBaseUrl",
                     "https://mirror.ghproxy.com/$releaseBaseUrl",
                     "https://gh-proxy.com/$releaseBaseUrl",
+                    "https://github.moeyy.xyz/$releaseBaseUrl",
+                    "https://ghproxy.net/$releaseBaseUrl",
                     $releaseBaseUrl
                 )
-                Write-Info "尝试从 Release 下载镜像..."
-                foreach ($ru in $recoverUrls) {
-                    try {
-                        $shortRu = if ($ru.Length -gt 70) { $ru.Substring(0, 67) + "..." } else { $ru }
-                        Write-Info "  → $shortRu"
-                        & curl.exe -L --fail --connect-timeout 10 --max-time 600 --retry 2 --retry-delay 3 --progress-bar -o $recoverTar $ru 2>&1 | ForEach-Object {
-                            if ($_ -match '\d+.*%') { Write-Host "`r  $($_.Trim())" -NoNewline -ForegroundColor DarkGray }
+
+                Write-Info "尝试从 Release 下载镜像 (多线程分块断点续传)..."
+                try {
+                    $recoverSize = Get-RemoteFileSize -Urls $recoverUrls
+                    if ($recoverSize -gt 0) {
+                        $recoverMB = [math]::Round($recoverSize / 1MB, 1)
+                        Write-Info "文件大小: ${recoverMB}MB，开始 8 线程下载..."
+                        $recoverDownloadOK = Download-Robust `
+                            -Urls $recoverUrls `
+                            -OutFile $recoverTar `
+                            -ExpectedSize $recoverSize `
+                            -ChunkSizeMB 2 `
+                            -Threads 8 `
+                            -RetryPerChunk 20
+                    } else {
+                        Write-Warn "无法获取文件大小，尝试 curl.exe 直链下载..."
+                        $recoverDownloadOK = $false
+                        foreach ($ru in $recoverUrls) {
+                            try {
+                                $shortRu = if ($ru.Length -gt 70) { $ru.Substring(0, 67) + "..." } else { $ru }
+                                Write-Info "  → $shortRu"
+                                & curl.exe -L --fail --connect-timeout 15 --max-time 900 --retry 3 --retry-delay 3 --progress-bar -o $recoverTar $ru 2>&1 | ForEach-Object {
+                                    if ($_ -match '\d+.*%') { Write-Host "`r  $($_.Trim())" -NoNewline -ForegroundColor DarkGray }
+                                }
+                                Write-Host ""
+                                if ((Test-Path $recoverTar) -and (Get-Item $recoverTar).Length -gt 50MB) {
+                                    $recoverDownloadOK = $true
+                                    break
+                                }
+                            } catch { }
                         }
-                        Write-Host ""
-                        if ((Test-Path $recoverTar) -and (Get-Item $recoverTar).Length -gt 50MB) {
-                            Write-Info "加载镜像到 Docker..."
-                            & docker load -i $recoverTar 2>&1 | ForEach-Object {
-                                Write-Log "docker load(recover): $_"
-                                if ($_ -match "Loaded image") {
-                                    Write-Host "  $_" -ForegroundColor DarkGray
-                                    if ($_ -match '^Loaded image:\s*(.+)\s*$') {
-                                        & docker tag $Matches[1].Trim() "openclaw-pro:latest" 2>$null
-                                    }
-                                } elseif ($_ -match '^Loaded image ID:\s*(sha256:[0-9a-f]+)\s*$') {
+                    }
+
+                    if ($recoverDownloadOK) {
+                        Write-OK "镜像下载完成"
+                        Write-Info "正在加载镜像到 Docker..."
+                        $loadOutput = & docker load -i $recoverTar 2>&1
+                        $loadOutput | ForEach-Object {
+                            Write-Log "docker load(recover): $_"
+                            if ($_ -match "Loaded image") {
+                                Write-Host "  $_" -ForegroundColor DarkGray
+                                if ($_ -match '^Loaded image:\s*(.+)\s*$') {
                                     & docker tag $Matches[1].Trim() "openclaw-pro:latest" 2>$null
                                 }
-                            }
-                            $chk = & docker image inspect openclaw-pro 2>$null
-                            if ($LASTEXITCODE -eq 0) {
-                                Write-OK "Release 镜像加载完成"
-                                $recoverOK = $true
-                                break
+                            } elseif ($_ -match '^Loaded image ID:\s*(sha256:[0-9a-f]+)\s*$') {
+                                & docker tag $Matches[1].Trim() "openclaw-pro:latest" 2>$null
                             }
                         }
-                    } catch { }
+                        $chk = & docker image inspect openclaw-pro 2>$null
+                        if ($LASTEXITCODE -eq 0) {
+                            Write-OK "Release 镜像加载完成"
+                            $recoverOK = $true
+                        }
+                        Remove-Item $recoverTar -Force -ErrorAction SilentlyContinue
+                    }
+                } catch {
+                    Write-Log "Recovery Release download failed: $_"
                 }
 
                 # 恢复方式 2: GHCR 拉取
@@ -3527,15 +3588,20 @@ function Main {
                     Write-Info "Release 下载失败，尝试从 GHCR 拉取..."
                     try {
                         $recoverImage = "ghcr.io/${GITHUB_REPO}:${recoverTag}"
-                        & docker pull $recoverImage 2>&1 | ForEach-Object {
+                        $pullOut = & docker pull $recoverImage 2>&1
+                        $pullCode = $LASTEXITCODE
+                        $pullOut | ForEach-Object {
                             if ($_ -match "Pulling|Downloading|Extracting|Pull complete|Digest|Status") {
                                 Write-Host "  $_" -ForegroundColor DarkGray
                             }
                         }
-                        if ($LASTEXITCODE -eq 0) {
+                        if ($pullCode -eq 0) {
                             & docker tag $recoverImage "openclaw-pro:latest" 2>$null
-                            Write-OK "GHCR 镜像拉取成功"
-                            $recoverOK = $true
+                            $tagOk = & docker image inspect "openclaw-pro:latest" 2>$null
+                            if ($LASTEXITCODE -eq 0) {
+                                Write-OK "GHCR 镜像拉取成功"
+                                $recoverOK = $true
+                            }
                         }
                     } catch {
                         Write-Log "GHCR recovery failed: $_"
