@@ -1,12 +1,6 @@
-﻿<#
-.SYNOPSIS
-    OpenClaw Pro - Quick Update Script
-    快速更新 OpenClaw Pro 容器到最新版本
-
-.DESCRIPTION
-    读取现有容器配置，拉取最新镜像，重建容器（保留所有数据和配置）
-    等效于运行安装脚本并选择"升级"，但跳过所有交互。
-#>
+# OpenClaw Pro - Quick Update Script
+# 快速更新 OpenClaw Pro 容器到最新版本
+# 读取现有容器配置，拉取最新镜像，重建容器（保留所有数据和配置）
 
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
