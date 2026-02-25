@@ -2887,7 +2887,21 @@ function Main {
                 }
 
                 $downloadOK = $false
-                if ($expectedSize -le 0) {
+
+                # 检测上次保留的完整 tar 文件（docker load 失败时不删除，避免重新下载）
+                if ((Test-Path $imageTar) -and (Get-Item $imageTar).Length -gt 50MB) {
+                    $existingSize = (Get-Item $imageTar).Length
+                    if ($expectedSize -gt 0 -and [math]::Abs($existingSize - $expectedSize) -lt 1MB) {
+                        Write-OK "检测到已下载的镜像文件 ($([math]::Round($existingSize / 1MB, 1))MB)，跳过下载"
+                        $downloadOK = $true
+                    } elseif ($expectedSize -le 0 -and $existingSize -gt 500MB) {
+                        # 无法获取远端大小时，若本地文件 > 500MB 也认为可能是完整的
+                        Write-OK "检测到已下载的镜像文件 ($([math]::Round($existingSize / 1MB, 1))MB)，尝试直接加载"
+                        $downloadOK = $true
+                    }
+                }
+
+                if (-not $downloadOK -and $expectedSize -le 0) {
                     Write-Warn "无法获取 Release 镜像大小（可能网络拦截），将逐个尝试直链下载..."
                     foreach ($u in $downloadUrls) {
                         try {
@@ -2910,7 +2924,7 @@ function Main {
                             Write-Info "  → 连接失败，换下一个源..."
                         }
                     }
-                } else {
+                } elseif (-not $downloadOK) {
                     $imageSizeMB = [math]::Round($expectedSize / 1MB, 1)
                     Write-Info "发现预构建镜像 ($tagText, ${imageSizeMB}MB)"
                     Write-Info "正在下载... (无需从 Docker Hub 拉取)"
@@ -2994,8 +3008,11 @@ function Main {
                             } catch { }
                         } else {
                             Write-Warn "docker load 失败，继续尝试其他方式..."
+                            Write-Info "镜像文件已保留: $imageTar（下次运行可直接加载，无需重新下载）"
                         }
-                        Remove-Item $imageTar -Force -ErrorAction SilentlyContinue
+                        if ($imageReady) {
+                            Remove-Item $imageTar -Force -ErrorAction SilentlyContinue
+                        }
                 } else {
                     Write-Warn "Release 镜像下载失败，继续尝试其他方式..."
                     # 若是分块下载失败，会保留部分下载的文件以便续传（下次运行自动恢复）
@@ -3527,6 +3544,16 @@ function Main {
 
                 Write-Info "尝试从 Release 下载镜像 (多线程分块断点续传)..."
                 try {
+                    $recoverDownloadOK = $false
+
+                    # 检测上次保留的完整 tar 文件（docker load 失败时不删除）
+                    if ((Test-Path $recoverTar) -and (Get-Item $recoverTar).Length -gt 500MB) {
+                        $existRecoverSize = (Get-Item $recoverTar).Length
+                        Write-OK "检测到已下载的镜像文件 ($([math]::Round($existRecoverSize / 1MB, 1))MB)，跳过下载"
+                        $recoverDownloadOK = $true
+                    }
+
+                    if (-not $recoverDownloadOK) {
                     $recoverSize = Get-RemoteFileSize -Urls $recoverUrls
                     if ($recoverSize -gt 0) {
                         $recoverMB = [math]::Round($recoverSize / 1MB, 1)
@@ -3556,6 +3583,7 @@ function Main {
                             } catch { }
                         }
                     }
+                    } # end if (-not $recoverDownloadOK)
 
                     if ($recoverDownloadOK) {
                         Write-OK "镜像下载完成"
@@ -3600,8 +3628,11 @@ function Main {
                         if ($LASTEXITCODE -eq 0) {
                             Write-OK "Release 镜像加载完成 (耗时 ${totalLoadSec} 秒)"
                             $recoverOK = $true
+                            Remove-Item $recoverTar -Force -ErrorAction SilentlyContinue
+                        } else {
+                            Write-Warn "docker load 失败"
+                            Write-Info "镜像文件已保留: $recoverTar（下次运行可直接加载，无需重新下载）"
                         }
-                        Remove-Item $recoverTar -Force -ErrorAction SilentlyContinue
                     }
                 } catch {
                     Write-Log "Recovery Release download failed: $_"
