@@ -3054,7 +3054,7 @@ function Main {
                 # 优先把已存在的 GHCR 镜像重新 tag 为 openclaw-pro:latest
                 try {
                     $ghcrLocalCandidates = & docker images --format "{{.Repository}}:{{.Tag}}" 2>$null | Where-Object {
-                        $_ -like "ghcr.io/$GITHUB_REPO:*"
+                        $_ -like "ghcr.io/${GITHUB_REPO}:*"
                     }
                     if ($ghcrLocalCandidates -and $ghcrLocalCandidates.Count -gt 0) {
                         $cand = $ghcrLocalCandidates[0]
