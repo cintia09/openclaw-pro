@@ -270,8 +270,11 @@ try {
         Write-Host ""
         Write-Err "未找到容器 '$CONTAINER_NAME'"
         Write-Host ""
-        Write-Host "  请先运行安装脚本来创建容器：" -ForegroundColor Yellow
+        Write-Host "  容器不存在，更新脚本无法使用。" -ForegroundColor Yellow
+        Write-Host "  请使用安装脚本重新创建容器：" -ForegroundColor Yellow
         Write-Host ""
+        Write-Host "  方法1（推荐）：双击运行 install-windows.bat" -ForegroundColor White
+        Write-Host "  方法2：在 PowerShell 中执行：" -ForegroundColor White
         Write-Host "  irm https://raw.githubusercontent.com/$GITHUB_REPO/main/install-windows.ps1 | iex" -ForegroundColor Cyan
         Write-Host ""
         Read-Host "按回车退出"
