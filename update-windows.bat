@@ -1,5 +1,6 @@
 @echo off
 setlocal
+chcp 65001 >nul 2>&1
 
 REM OpenClaw Pro - One-Click Updater
 REM Double-click this file to update

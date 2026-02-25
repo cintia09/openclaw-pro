@@ -1,5 +1,6 @@
 @echo off
 setlocal
+chcp 65001 >nul 2>&1
 
 REM OpenClaw Pro - Windows Installer
 REM Right-click this file and select "Run as administrator"

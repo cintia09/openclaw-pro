@@ -19,7 +19,7 @@ function Write-Dim($msg)  { Write-Host "    $msg" -ForegroundColor DarkGray }
 function Write-Warn($msg) { Write-Host "  ⚠️  $msg" -ForegroundColor Yellow }
 function Write-Info($msg) { Write-Host "  $msg" -ForegroundColor Cyan }
 
-# ─── Robust Multi-threaded Chunked Download (多线程分块断点续传) ──────────────
+# --- Robust Multi-threaded Chunked Download (多线程分块断点续传) --------------
 function Download-Robust {
     param(
         [string[]]$Urls,
@@ -204,12 +204,12 @@ function Download-Robust {
 }
 
 Write-Host ""
-Write-Host "  ╔══════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "  ║     OpenClaw Pro - Quick Updater         ║" -ForegroundColor Cyan
-Write-Host "  ╚══════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host "  +==========================================+" -ForegroundColor Cyan
+Write-Host "  |     OpenClaw Pro - Quick Updater         |" -ForegroundColor Cyan
+Write-Host "  +==========================================+" -ForegroundColor Cyan
 Write-Host ""
 
-# ── 0. 智能检测更新类型 ──
+# -- 0. 智能检测更新类型 --
 $recommendFull = $false
 $recommendMsg = ""
 $containerRunning = $false
@@ -314,7 +314,7 @@ Write-Host "  请选择更新方式:" -ForegroundColor White
     if (-not $updateChoice) { $updateChoice = $defaultChoice }
 
 if ($updateChoice -eq "1") {
-    # ══════════════ 热更新模式 ══════════════
+    # =============== 热更新模式 ===============
     Write-Host ""
     Write-Step "热更新模式：检查容器..."
     
@@ -446,9 +446,9 @@ if ($updateChoice -eq "1") {
     return
 }
 
-# ══════════════ 完整更新模式 (原逻辑) ══════════════
+# =============== 完整更新模式 (原逻辑) ===============
 
-# ── 1. 检查 Docker ──
+# -- 1. 检查 Docker --
 Write-Step "检查 Docker..."
 try {
     $dockerVer = (& docker version --format '{{.Server.Version}}' 2>$null)
@@ -460,7 +460,7 @@ try {
     return
 }
 
-# ── 2. 检查现有容器 ──
+# -- 2. 检查现有容器 --
 Write-Step "检查现有容器..."
 $existingId = (& docker ps -aq --filter "name=^${CONTAINER_NAME}$" 2>$null)
 if (-not $existingId) {
@@ -488,7 +488,7 @@ if (-not $isRunning) {
     }
 }
 
-# ── 3. 读取现有配置 ──
+# -- 3. 读取现有配置 --
 Write-Step "读取容器配置..."
 
 # 从容器获取 docker-config.json（优先 exec，降级 cp）
@@ -572,7 +572,7 @@ if ($portMappings.Count -eq 0) {
     Write-Dim "端口映射: $($portMappings -join ' ')"
 }
 
-# ── 4. 获取当前版本 ──
+# -- 4. 获取当前版本 --
 $currentVersion = "unknown"
 try {
     if ($isRunning) {
@@ -590,7 +590,7 @@ try {
 if (-not $currentVersion) { $currentVersion = "unknown" }
 Write-Dim "当前版本: $currentVersion"
 
-# ── 5. 检查最新版本 ──
+# -- 5. 检查最新版本 --
 Write-Step "检查最新版本..."
 $latestVersion = ""
 $downloadUrl = ""
@@ -623,7 +623,7 @@ if ($latestVersion -and $latestVersion -eq $currentVersion -and -not $recommendF
     Write-OK "最新版本: $latestVersion"
 }
 
-# ── 6. 下载最新镜像 ──
+# -- 6. 下载最新镜像 --
 Write-Step "下载最新镜像..."
 $downloadDir = Join-Path $env:TEMP "openclaw-update"
 if (-not (Test-Path $downloadDir)) { New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null }
@@ -679,7 +679,7 @@ if (-not $downloaded) {
     return
 }
 
-# ── 7. 加载镜像 ──
+# -- 7. 加载镜像 --
 if (Test-Path $tarPath) {
     Write-Step "加载镜像到 Docker...（约 1-3 分钟，请耐心等待）"
     & docker rmi -f $IMAGE_NAME 2>$null | Out-Null
@@ -690,7 +690,7 @@ if (Test-Path $tarPath) {
         return $LASTEXITCODE
     } -ArgumentList $tarPath, $IMAGE_NAME
 
-    $spinner = @('⠁','⠃','⠇','⠏','⠟','⠿','⡿','⣿','⣾','⣼','⣸','⣰','⣠','⣀','⢀','⠀')
+    $spinner = @('|','/','-','\','|','/','-','\','|','/','-','\','|','/','-','\')
     $si = 0
     $loadTimer = [System.Diagnostics.Stopwatch]::StartNew()
     while ($loadJob.State -eq 'Running') {
@@ -718,13 +718,13 @@ if (Test-Path $tarPath) {
     Remove-Item $tarPath -Force -ErrorAction SilentlyContinue
 }
 
-# ── 8. 停止并删除旧容器 ──
+# -- 8. 停止并删除旧容器 --
 Write-Step "停止旧容器..."
 & docker stop $CONTAINER_NAME 2>$null | Out-Null
 & docker rm -f $CONTAINER_NAME 2>$null | Out-Null
 Write-OK "旧容器已删除"
 
-# ── 9. 启动新容器 ──
+# -- 9. 启动新容器 --
 Write-Step "启动新容器..."
 $runArgs = @(
     "run", "-d",
@@ -748,7 +748,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-OK "新容器已启动"
 
-# ── 10. 等待服务就绪 ──
+# -- 10. 等待服务就绪 --
 Write-Step "等待服务就绪..."
 $ready = $false
 for ($i = 1; $i -le 30; $i++) {
@@ -770,11 +770,11 @@ if ($ready) {
     Write-Dim "服务仍在启动中，请稍等几秒再访问"
 }
 
-# ── 完成 ──
+# -- 完成 --
 Write-Host ""
-Write-Host "  ╔══════════════════════════════════════════╗" -ForegroundColor Green
-Write-Host "  ║          更新完成！                      ║" -ForegroundColor Green
-Write-Host "  ╚══════════════════════════════════════════╝" -ForegroundColor Green
+Write-Host "  +==========================================+" -ForegroundColor Green
+Write-Host "  |          Update Complete!                |" -ForegroundColor Green
+Write-Host "  +==========================================+" -ForegroundColor Green
 Write-Host ""
 
 $newVersion = "unknown"

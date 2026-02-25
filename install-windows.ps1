@@ -23,7 +23,7 @@ param(
     [switch]$SkipWelcome    # Skip welcome screen
 )
 
-# ─── Constants ────────────────────────────────────────────────────────────────
+# --- Constants ----------------------------------------------------------------
 $SCRIPT_VERSION  = "1.0.6"
 $TASK_NAME       = "OpenClawSetup"
 $UBUNTU_DISTRO   = "Ubuntu-24.04"
@@ -43,7 +43,7 @@ $SCRIPT_DIR      = if ($MyInvocation.MyCommand.Path) {
 $LOG_FILE        = Join-Path $SCRIPT_DIR "install-log.txt"
 $STATE_FILE      = Join-Path $SCRIPT_DIR ".install-state.json"
 
-# ─── Colors / Logging ─────────────────────────────────────────────────────────
+# --- Colors / Logging ---------------------------------------------------------
 function Write-Log {
     param([string]$Message, [string]$Level = "INFO")
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
@@ -55,7 +55,7 @@ function Write-Title {
     param([string]$Text)
     Write-Host ""
     Write-Host "  $Text" -ForegroundColor Cyan
-    Write-Host "  $('─' * ($Text.Length))" -ForegroundColor DarkCyan
+    Write-Host "  $('-' * ($Text.Length))" -ForegroundColor DarkCyan
 }
 
 function Write-Step {
@@ -110,7 +110,7 @@ function Write-ProgressBar {
     )
     $filled = [math]::Floor($Width * $Percent / 100)
     $empty  = $Width - $filled
-    $bar    = ("█" * $filled) + ("░" * $empty)
+    $bar    = ("#" * $filled) + ("-" * $empty)
     $line   = "  $Label [$bar] ${Percent}%"
     Write-Host "`r$line" -NoNewline -ForegroundColor Cyan
 }
@@ -126,7 +126,7 @@ function Start-AnimatedProgress {
         [scriptblock]$Action,
         [string]$CompletedLabel = ""
     )
-    $spinner = @("⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏")
+    $spinner = @("|","/","-","\","|","/","-","\","|","/")
     $idx = 0
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
@@ -182,25 +182,25 @@ function Show-StepProgress {
     }
 }
 
-# ─── ASCII Art Logo ────────────────────────────────────────────────────────────
+# --- ASCII Art Logo ------------------------------------------------------------
 function Show-Logo {
     if ($SkipWelcome) { return }
     Clear-Host
     Write-Host ""
-    Write-Host "   ██████╗ ██████╗ ███████╗███╗   ██╗ ██████╗██╗      █████╗ ██╗    ██╗" -ForegroundColor Cyan
-    Write-Host "  ██╔═══██╗██╔══██╗██╔════╝████╗  ██║██╔════╝██║     ██╔══██╗██║    ██║" -ForegroundColor Cyan
-    Write-Host "  ██║   ██║██████╔╝█████╗  ██╔██╗ ██║██║     ██║     ███████║██║ █╗ ██║" -ForegroundColor Cyan
-    Write-Host "  ██║   ██║██╔═══╝ ██╔══╝  ██║╚██╗██║██║     ██║     ██╔══██║██║███╗██║" -ForegroundColor Cyan
-    Write-Host "  ╚██████╔╝██║     ███████╗██║ ╚████║╚██████╗███████╗██║  ██║╚███╔███╔╝" -ForegroundColor Cyan
-    Write-Host "   ╚═════╝ ╚═╝     ╚══════╝╚═╝  ╚═══╝ ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝" -ForegroundColor Cyan
+    Write-Host "    ___                    ____ _               " -ForegroundColor Cyan
+    Write-Host "   / _ \ _ __   ___ _ __ / ___| | __ ___      __" -ForegroundColor Cyan
+    Write-Host "  | | | | '_ \ / _ \ '_ | |   | |/ _' \ \ /\ / /" -ForegroundColor Cyan
+    Write-Host "  | |_| | |_) |  __/ | || |___| | (_| |\ V  V / " -ForegroundColor Cyan
+    Write-Host "   \___/| .__/ \___|_| |_\____|_|\__,_| \_/\_/  " -ForegroundColor Cyan
+    Write-Host "        |_|                                     " -ForegroundColor Cyan
     Write-Host ""
     Write-Host "                    🐾  OpenClaw Pro  —  Windows Installer" -ForegroundColor White
     Write-Host ""
-    Write-Host "  ─────────────────────────────────────────────────────────────────────" -ForegroundColor DarkGray
+    Write-Host "  ---------------------------------------------------------------------" -ForegroundColor DarkGray
     Write-Host ""
 }
 
-# ─── State persistence (for post-reboot resume) ───────────────────────────────
+# --- State persistence (for post-reboot resume) -------------------------------
 function Get-InstallState {
     if (Test-Path $STATE_FILE) {
         try {
@@ -225,7 +225,7 @@ function Remove-InstallState {
     if (Test-Path $STATE_FILE) { Remove-Item $STATE_FILE -Force }
 }
 
-# ─── Admin check ──────────────────────────────────────────────────────────────
+# --- Admin check --------------------------------------------------------------
 function Test-IsAdministrator {
     $current = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
     return $current.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -254,7 +254,7 @@ function Assert-Administrator {
     return
 }
 
-# ─── Windows version check ────────────────────────────────────────────────────
+# --- Windows version check ----------------------------------------------------
 function Test-WindowsVersion {
     $os = Get-WmiObject -Class Win32_OperatingSystem -ErrorAction SilentlyContinue
     if (-not $os) {
@@ -278,7 +278,7 @@ function Test-WindowsVersion {
     return $build
 }
 
-# ─── WSL2 detection ───────────────────────────────────────────────────────────
+# --- WSL2 detection -----------------------------------------------------------
 function Test-Wsl2Installed {
     # Check if wsl.exe exists
     $wslPath = Get-Command wsl -ErrorAction SilentlyContinue
@@ -337,7 +337,7 @@ function Get-UbuntuDistroName {
 }
 
 
-# ─── Docker Desktop detection ─────────────────────────────────────────────────
+# --- Docker Desktop detection -------------------------------------------------
 function Test-DockerDesktopInstalled {
     # Check if Docker Desktop is installed and running
     $dockerExe = Get-Command docker -ErrorAction SilentlyContinue
@@ -373,7 +373,7 @@ function Test-DockerDesktopRunning {
     return $false
 }
 
-# ─── Scheduled task for post-reboot resume ────────────────────────────────────
+# --- Scheduled task for post-reboot resume ------------------------------------
 function Register-ResumeTask {
     $psExe    = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
     $scriptPs = Join-Path $SCRIPT_DIR "install-windows.ps1"
@@ -403,7 +403,7 @@ function Remove-ResumeTask {
     Unregister-ScheduledTask -TaskName $TASK_NAME -Confirm:$false -ErrorAction SilentlyContinue
 }
 
-# ─── Phase 2: Install WSL2 ────────────────────────────────────────────────────
+# --- Phase 2: Install WSL2 ----------------------------------------------------
 function Install-Wsl2 {
     Write-Info "正在安装 WSL2 和 $UBUNTU_DISTRO..."
     Write-Info "首次安装约需 3-5 分钟（需要下载 Ubuntu 镜像）"
@@ -422,7 +422,7 @@ function Install-Wsl2 {
 
         # Show animated spinner during wsl --install
         $distro = $UBUNTU_DISTRO
-        $spinner = @("⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏")
+        $spinner = @("|","/","-","\","|","/","-","\","|","/")
         $idx = 0
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
@@ -511,7 +511,7 @@ function Install-Wsl2 {
     }
 }
 
-# ─── Phase 3: Configure Ubuntu + Install Docker ───────────────────────────────
+# --- Phase 3: Configure Ubuntu + Install Docker -------------------------------
 function Wait-WslReady {
     param([string]$DistroName, [int]$MaxWaitSeconds = 120)
 
@@ -595,7 +595,7 @@ echo "DOCKER_INSTALL_COMPLETE"
 
         # Run with real-time output parsing for step progress
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        $spinner = @("⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏")
+        $spinner = @("|","/","-","\","|","/","-","\","|","/")
         $sidx = 0
         $currentStep = 0
 
@@ -681,7 +681,7 @@ echo "DOCKER_INSTALL_COMPLETE"
     }
 }
 
-# ─── Phase 4: Deploy OpenClaw ─────────────────────────────────────────────────
+# --- Phase 4: Deploy OpenClaw -------------------------------------------------
 function Copy-DeployPackageToWsl {
     param([string]$DistroName)
 
@@ -830,7 +830,7 @@ echo ""
     }
 }
 
-# ─── Port availability check ──────────────────────────────────────────────────
+# --- Port availability check --------------------------------------------------
 function Test-PortAvailable {
     param([int]$Port)
     # Check 1: TcpListener on all interfaces (0.0.0.0)
@@ -922,7 +922,7 @@ function Find-AvailablePort {
     return $port
 }
 
-# ─── Robust Multi-threaded Chunked Download (多线程分块断点续传) ──────────────
+# --- Robust Multi-threaded Chunked Download (多线程分块断点续传) --------------
 # 将大文件拆成 2MB 小块，N 个线程并行下载，每块独立 HTTP Range 请求。
 # 断线只影响单个块的单个线程，自动重试。支持跨次运行续传（.progress 文件）。
 function Download-Robust {
@@ -939,12 +939,12 @@ function Download-Robust {
     $totalChunks = [int][math]::Ceiling($ExpectedSize / $chunkSize)
     $totalMB = [math]::Round($ExpectedSize / 1MB, 1)
 
-    # ── 进度文件：记录已完成的块号（支持跨次续传）──
+    # -- 进度文件：记录已完成的块号（支持跨次续传）--
     # 格式: 第一行 "SIZE:<ExpectedSize>" 用于校验版本，后续每行一个块号
     $progressFile = "${OutFile}.progress"
     $completedSet = [System.Collections.Concurrent.ConcurrentDictionary[int,byte]]::new()
 
-    # ── Step 1: 检查文件是否需要（重新）预分配 ──
+    # -- Step 1: 检查文件是否需要（重新）预分配 --
     $needPrealloc = $false
     if (-not (Test-Path $OutFile)) {
         $needPrealloc = $true
@@ -952,7 +952,7 @@ function Download-Robust {
         $needPrealloc = $true
     }
 
-    # ── Step 2: 读取进度文件，校验是否匹配当前文件 ──
+    # -- Step 2: 读取进度文件，校验是否匹配当前文件 --
     $progressValid = $false
     if ((Test-Path $progressFile) -and -not $needPrealloc) {
         $progressLines = Get-Content $progressFile -ErrorAction SilentlyContinue
@@ -975,7 +975,7 @@ function Download-Robust {
         }
     }
 
-    # ── Step 3: 需要预分配时，清空进度并告知用户 ──
+    # -- Step 3: 需要预分配时，清空进度并告知用户 --
     if ($needPrealloc) {
         if ((Test-Path $progressFile) -and $completedSet.Count -eq 0) {
             # 尝试读取旧进度块数以便提示
@@ -1012,7 +1012,7 @@ function Download-Robust {
         }
     }
 
-    # ── 构建待下载块队列 ──
+    # -- 构建待下载块队列 --
     $chunkQueue = [System.Collections.Concurrent.ConcurrentQueue[int]]::new()
     $pendingCount = 0
     for ($i = 0; $i -lt $totalChunks; $i++) {
@@ -1034,7 +1034,7 @@ function Download-Robust {
     $actualThreads = [math]::Min($Threads, $pendingCount)
     Write-Info "${actualThreads} 线程并行下载: ${pendingCount} 块 x ${ChunkSizeMB}MB (断线自动续传)"
 
-    # ── Worker 脚本（每个 Runspace 执行）──
+    # -- Worker 脚本（每个 Runspace 执行）--
     $workerScript = {
         param(
             [System.Collections.Concurrent.ConcurrentQueue[int]]$Queue,
@@ -1112,7 +1112,7 @@ function Download-Robust {
         }
     }
 
-    # ── 启动 RunspacePool ──
+    # -- 启动 RunspacePool --
     $pool = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspacePool(1, $actualThreads)
     $pool.Open()
 
@@ -1134,7 +1134,7 @@ function Download-Robust {
         $handles.Add(@{ PS = $ps; AR = $asyncResult }) | Out-Null
     }
 
-    # ── 主线程：监控进度 ──
+    # -- 主线程：监控进度 --
     $speedTimer = [System.Diagnostics.Stopwatch]::StartNew()
     $initialDone = $completedSet.Count - $pendingCount + $pendingCount   # = total - pending at start
     $initialDone = $totalChunks - $pendingCount
@@ -1164,7 +1164,7 @@ function Download-Robust {
     }
     Write-Host ""
 
-    # ── 回收 Runspace ──
+    # -- 回收 Runspace --
     foreach ($h in $handles) {
         try { $h.PS.EndInvoke($h.AR) } catch {}
         $h.PS.Dispose()
@@ -1172,7 +1172,7 @@ function Download-Robust {
     $pool.Close()
     $pool.Dispose()
 
-    # ── 失败块处理 ──
+    # -- 失败块处理 --
     if ($failedChunks.Count -gt 0) {
         $failList = @()
         foreach ($fc in $failedChunks) { $failList += $fc }
@@ -1181,7 +1181,7 @@ function Download-Robust {
         return $false
     }
 
-    # ── 最终验证 ──
+    # -- 最终验证 --
     $finalSize = (Get-Item $OutFile).Length
     if ($finalSize -eq $ExpectedSize) {
         Remove-Item $progressFile -Force -ErrorAction SilentlyContinue
@@ -1192,12 +1192,12 @@ function Download-Robust {
     }
 }
 
-# ─── Deploy Config: Interactive port/domain setup ─────────────────────────────
+# --- Deploy Config: Interactive port/domain setup -----------------------------
 function Get-DeployConfig {
     Write-Host ""
-    Write-Host "  ╔══════════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "  ║       🐾 OpenClaw Pro — 部署配置                ║" -ForegroundColor Cyan
-    Write-Host "  ╚══════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host "  +==================================================+" -ForegroundColor Cyan
+    Write-Host "  |       OpenClaw Pro -- Deploy Config              |" -ForegroundColor Cyan
+    Write-Host "  +==================================================+" -ForegroundColor Cyan
     Write-Host ""
 
     $config = @{
@@ -1431,7 +1431,7 @@ function Get-DeployConfig {
 
     # 显示配置摘要
     Write-Host ""
-    Write-Host "  ─────────────────────────────────────────────────" -ForegroundColor DarkGray
+    Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray
     Write-Host "  📋 端口映射:" -ForegroundColor White
     if ($config.HttpsEnabled) {
         Write-Host "     HTTP   $($config.HttpPort) → 容器 80  (证书验证+跳转)" -ForegroundColor Gray
@@ -1455,7 +1455,7 @@ function Get-DeployConfig {
         Write-Host "     Web面板 $($config.WebPort) → 容器 3000" -ForegroundColor Gray
         Write-Host "     SSH    $($config.SshPort) → 容器 22  (远程登录)" -ForegroundColor Gray
     }
-    Write-Host "  ─────────────────────────────────────────────────" -ForegroundColor DarkGray
+    Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray
     Write-Host ""
 
     # 统一防火墙策略（由用户选择是否自动开放）
@@ -1488,7 +1488,7 @@ function Get-DeployConfig {
     return $config
 }
 
-# ─── Phase 5: Cleanup + Summary ───────────────────────────────────────────────
+# --- Phase 5: Cleanup + Summary -----------------------------------------------
 function Show-Completion {
     param(
         [bool]$DeployLaunched,
@@ -1506,13 +1506,13 @@ function Show-Completion {
     Write-Host ""
     $completionTitle = if ($script:upgradeMode) { "升级完成" } else { "安装完成" }
     if ($DeployLaunched) {
-        Write-Host "  ══════════════════════════════════════════════════" -ForegroundColor Green
+        Write-Host "  ==================================================" -ForegroundColor Green
         Write-Host "                🎉  $completionTitle！" -ForegroundColor Green
-        Write-Host "  ══════════════════════════════════════════════════" -ForegroundColor Green
+        Write-Host "  ==================================================" -ForegroundColor Green
     } else {
-        Write-Host "  ══════════════════════════════════════════════════" -ForegroundColor Yellow
+        Write-Host "  ==================================================" -ForegroundColor Yellow
         Write-Host "             ⚠️  安装未完成" -ForegroundColor Yellow
-        Write-Host "  ══════════════════════════════════════════════════" -ForegroundColor Yellow
+        Write-Host "  ==================================================" -ForegroundColor Yellow
     }
     Write-Host ""
 
@@ -1559,7 +1559,7 @@ function Show-Completion {
         }
 
         Write-Host ""
-        Write-Host "  ─────────────────────────────────────────────────" -ForegroundColor DarkGray
+        Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray
         Write-Host ""
 
         # Windows 防火墙提醒（仅实际对外暴露的端口）
@@ -1615,7 +1615,7 @@ function Show-Completion {
         Write-Host "     数据目录 (home-data) 不受影响，升级后原有配置和数据保留。" -ForegroundColor DarkGray
     } else {
         Write-Host ""
-        Write-Host "  ─────────────────────────────────────────────────" -ForegroundColor DarkGray
+        Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray
         Write-Host ""
         Write-Host "  💡 可能的原因:" -ForegroundColor Cyan
         Write-Host "     • 端口被其他程序占用（重新运行脚本选择其他端口）" -ForegroundColor Gray
@@ -1656,15 +1656,15 @@ function Show-Completion {
 
 function Show-RebootMessage {
     Write-Host ""
-    Write-Host "  ══════════════════════════════════════════════════" -ForegroundColor Yellow
+    Write-Host "  ==================================================" -ForegroundColor Yellow
     Write-Host "             🔄  需要重启计算机" -ForegroundColor Yellow
-    Write-Host "  ══════════════════════════════════════════════════" -ForegroundColor Yellow
+    Write-Host "  ==================================================" -ForegroundColor Yellow
     Write-Host ""
     Write-Host "  WSL2 安装完成，需要重启才能继续。" -ForegroundColor White
     Write-Host ""
     Write-Host "  重启后安装程序将自动继续（已创建计划任务）。" -ForegroundColor White
     Write-Host ""
-    Write-Host "  ─────────────────────────────────────────────────" -ForegroundColor DarkGray
+    Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  [Y] 立即重启    [N] 稍后手动重启" -ForegroundColor Cyan
     Write-Host ""
@@ -1686,9 +1686,9 @@ function Show-Error {
     param([string]$Step, [string]$Detail, [string]$Suggestion)
 
     Write-Host ""
-    Write-Host "  ══════════════════════════════════════════════════" -ForegroundColor Red
+    Write-Host "  ==================================================" -ForegroundColor Red
     Write-Host "             ❌  安装失败" -ForegroundColor Red
-    Write-Host "  ══════════════════════════════════════════════════" -ForegroundColor Red
+    Write-Host "  ==================================================" -ForegroundColor Red
     Write-Host ""
     Write-Host "  失败步骤: $Step" -ForegroundColor Red
     if ($Detail) {
@@ -1705,7 +1705,7 @@ function Show-Error {
     Write-Host ""
 }
 
-# ─── Main ─────────────────────────────────────────────────────────────────────
+# --- Main ---------------------------------------------------------------------
 function Main {
     # Initialize log
     $now = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
@@ -1723,7 +1723,7 @@ function Main {
 
     $state = Get-InstallState
 
-    # ── Phase 1: Environment Detection ────────────────────────────────────────
+    # -- Phase 1: Environment Detection ----------------------------------------
     Write-Step 1 5 "检测环境..."
 
     Assert-Administrator
@@ -1754,24 +1754,24 @@ function Main {
         }
     }
 
-    # ── If neither Docker Desktop nor WSL is available, let user choose ──
+    # -- If neither Docker Desktop nor WSL is available, let user choose --
     if (-not $hasDockerDesktop -and -not $wslInstalled) {
         Write-Host ""
-        Write-Host "  ══════════════════════════════════════════════════" -ForegroundColor Yellow
+        Write-Host "  ==================================================" -ForegroundColor Yellow
         Write-Host "         未检测到 Docker Desktop 或 WSL2" -ForegroundColor Yellow
-        Write-Host "  ══════════════════════════════════════════════════" -ForegroundColor Yellow
+        Write-Host "  ==================================================" -ForegroundColor Yellow
         Write-Host ""
         Write-Host "  请选择安装方式:" -ForegroundColor White
         Write-Host ""
         Write-Host "  [A] 方案A: Docker Desktop (推荐)" -ForegroundColor Cyan
-        Write-Host "      ├─ 图形化管理界面，操作简单" -ForegroundColor Gray
-        Write-Host "      ├─ 自带 WSL2 后端，无需单独配置" -ForegroundColor Gray
-        Write-Host "      └─ 需要手动下载安装 Docker Desktop" -ForegroundColor Gray
+        Write-Host "      |- 图形化管理界面，操作简单" -ForegroundColor Gray
+        Write-Host "      |- 自带 WSL2 后端，无需单独配置" -ForegroundColor Gray
+        Write-Host "      \- 需要手动下载安装 Docker Desktop" -ForegroundColor Gray
         Write-Host ""
         Write-Host "  [B] 方案B: WSL2 + Docker Engine (自动)" -ForegroundColor Cyan
-        Write-Host "      ├─ 全自动安装，无需手动操作" -ForegroundColor Gray
-        Write-Host "      ├─ 轻量级，资源占用少" -ForegroundColor Gray
-        Write-Host "      └─ 安装后可能需要重启一次" -ForegroundColor Gray
+        Write-Host "      |- 全自动安装，无需手动操作" -ForegroundColor Gray
+        Write-Host "      |- 轻量级，资源占用少" -ForegroundColor Gray
+        Write-Host "      \- 安装后可能需要重启一次" -ForegroundColor Gray
         Write-Host ""
 
         $choice = ""
@@ -1785,7 +1785,7 @@ function Main {
         if ($choice -eq "A") {
             $dockerDesktopMode = $true
             Write-Host ""
-            Write-Host "  ────────────────────────────────────────────────" -ForegroundColor DarkGray
+            Write-Host "  ------------------------------------------------" -ForegroundColor DarkGray
             Write-Host ""
             Write-Host "  📥 请先安装 Docker Desktop:" -ForegroundColor White
             Write-Host ""
@@ -1802,7 +1802,7 @@ function Main {
             Write-Host "     5. 安装完毕后，重新运行本安装命令:" -ForegroundColor Yellow
             Write-Host "        irm $SCRIPT_URL | iex" -ForegroundColor Cyan
             Write-Host ""
-            Write-Host "  ────────────────────────────────────────────────" -ForegroundColor DarkGray
+            Write-Host "  ------------------------------------------------" -ForegroundColor DarkGray
             Write-Host ""
 
             # Try to open the browser automatically
@@ -1851,7 +1851,7 @@ function Main {
 
     Write-Log "State: wslInstalled=$wslInstalled, ubuntuPresent=$ubuntuPresent, dockerDesktopMode=$dockerDesktopMode"
 
-    # ── Phase 2: Install WSL2 if needed ───────────────────────────────────────
+    # -- Phase 2: Install WSL2 if needed ---------------------------------------
     if ($dockerDesktopMode) {
         # Docker Desktop mode — WSL is optional, Docker is already available
         Write-Step 2 5 "Docker Desktop 模式"
@@ -1890,7 +1890,7 @@ function Main {
         Write-OK "WSL2 + Ubuntu 均已安装，无需重复安装"
     }
 
-    # ── Phase 3: Configure Docker ──────────────────────────────────────────────
+    # -- Phase 3: Configure Docker ----------------------------------------------
     if ($dockerDesktopMode) {
         Write-Step 3 5 "Docker 已就绪"
         Write-OK "Docker Desktop 可用，跳过 Docker Engine 安装"
@@ -1945,7 +1945,7 @@ function Main {
         }
     }
 
-    # ── Phase 4: Deploy OpenClaw ───────────────────────────────────────────────
+    # -- Phase 4: Deploy OpenClaw -----------------------------------------------
     Write-Step 4 5 "部署 OpenClaw Pro..."
 
     if ($dockerDesktopMode) {
@@ -2192,7 +2192,7 @@ function Main {
                         $zipUrl = "https://github.com/cintia09/openclaw-pro/archive/refs/heads/main.zip"
                     }
 
-                    # ── Resume-capable download with Range header ──
+                    # -- Resume-capable download with Range header --
                     $existingSize = 0
                     if (Test-Path $zipFile) {
                         $existingSize = (Get-Item $zipFile).Length
@@ -2202,7 +2202,7 @@ function Main {
                     }
 
                     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-                    $spinner = @("⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏")
+                    $spinner = @("|","/","-","\","|","/","-","\","|","/")
                     $sidx = 0
                     $bufferSize = 65536  # 64KB
 
@@ -2263,7 +2263,7 @@ function Main {
                                 $dlMB = [math]::Round($totalDownloaded / 1MB, 1)
                                 $totMB = [math]::Round($totalSize / 1MB, 1)
                                 $barFill = [math]::Floor($pct / 5)
-                                $bar = "[" + ("█" * $barFill) + ("░" * (20 - $barFill)) + "]"
+                                $bar = "[" + ("#" * $barFill) + ("-" * (20 - $barFill)) + "]"
                                 Write-Host "`r  $frame $bar ${dlMB}MB / ${totMB}MB (${pct}%) $elapsed  " -NoNewline -ForegroundColor Cyan
                             } else {
                                 $dlMB = [math]::Round($totalDownloaded / 1MB, 1)
@@ -2284,7 +2284,7 @@ function Main {
                         Write-OK "下载完成 (${zipSize}MB)"
                     }
 
-                    # ── File integrity check ──
+                    # -- File integrity check --
                     Write-Info "正在验证文件完整性..."
                     try {
                         # 1. Basic size check
@@ -2391,7 +2391,7 @@ function Main {
         Remove-ResumeTask
         Remove-InstallState
 
-        # ── 检测已有容器 ──
+        # -- 检测已有容器 --
         $containerName = "openclaw-pro"   # 默认容器名
         $script:upgradeMode = $false
 
@@ -2456,7 +2456,7 @@ function Main {
                 }
                 Write-Info "将创建新容器: $containerName（数据目录: home-data-$idx，与代码目录平级）"
             } elseif ($choice -eq '2') {
-                # ── 升级模式：读取旧容器对应的配置，删除旧容器后复用相同配置 ──
+                # -- 升级模式：读取旧容器对应的配置，删除旧容器后复用相同配置 --
                 $upgradeContainerName = ""
                 if ($runningContainers.Count -eq 1) {
                     $upgradeContainerName = ($runningContainers[0] -split '\|')[0]
@@ -2635,7 +2635,7 @@ function Main {
             $imageReady = $false
             $forceRefreshImage = $false
 
-            # ── 尝试 0: 检查镜像是否已存在 ──
+            # -- 尝试 0: 检查镜像是否已存在 --
             $existingImage = & docker image inspect openclaw-pro 2>$null
             if ($LASTEXITCODE -eq 0) {
                 Write-OK "检测到本地镜像 openclaw-pro"
@@ -2720,7 +2720,7 @@ function Main {
                 }
             }
 
-            # ── 尝试 1: 下载预构建镜像 tar.gz（分块断点续传） ──
+            # -- 尝试 1: 下载预构建镜像 tar.gz（分块断点续传） --
             if (-not $imageReady) {
             Write-Info "检查 Release 预构建镜像..."
             try {
@@ -2763,7 +2763,7 @@ function Main {
                             return $LASTEXITCODE
                         } -ArgumentList $imageTar
 
-                        $spinner = @('⠁','⠃','⠇','⠏','⠟','⠿','⡿','⣿','⣾','⣼','⣸','⣰','⣠','⣀','⢀','⠀')
+                        $spinner = @('|','/','-','\','|','/','-','\','|','/','-','\','|','/','-','\')
                         $si = 0
                         $loadTimer = [System.Diagnostics.Stopwatch]::StartNew()
                         while ($loadJob.State -eq 'Running') {
@@ -2819,7 +2819,7 @@ function Main {
             }
             }  # end if (-not $imageReady) for download
 
-            # ── 尝试 2: 从 GHCR 拉取镜像 ──
+            # -- 尝试 2: 从 GHCR 拉取镜像 --
             if (-not $imageReady) {
                 $ghcrTag = if ($latestReleaseTag) { $latestReleaseTag } else { "latest" }
                 $ghcrImage = "ghcr.io/${GITHUB_REPO}:${ghcrTag}"
@@ -2848,7 +2848,7 @@ function Main {
                 }
             }
 
-            # ── 尝试 3: 本地构建 (fallback) ──
+            # -- 尝试 3: 本地构建 (fallback) --
             if (-not $imageReady) {
                 Write-Info "正在本地构建镜像...（首次约需 5-10 分钟）"
                 $buildOK = $false
@@ -3074,7 +3074,7 @@ function Main {
             }
             Write-Log "Wrote docker-config.json: domain=$($deployConfig.Domain)"
 
-            # ── 最终镜像可用性检查 ──
+            # -- 最终镜像可用性检查 --
             $finalImageCheck = & docker image inspect openclaw-pro 2>$null
             if ($LASTEXITCODE -ne 0) {
                 throw "镜像 openclaw-pro:latest 不可用 — 所有获取方式均已失败。请检查网络后重新运行安装脚本。"
@@ -3141,7 +3141,7 @@ function Main {
                 if ($deployConfig.HttpsEnabled) {
                     $certModeText = if ($deployConfig.CertMode -eq "internal") { "自签证书" } else { "Let's Encrypt" }
                     Write-Info "正在初始化 HTTPS 证书（${certModeText}）..."
-                    $spinner = @('⠁','⠃','⠇','⠏','⠟','⠿','⡿','⣿','⣾','⣼','⣸','⣰','⣠','⣀','⢀','⠀')
+                    $spinner = @('|','/','-','\','|','/','-','\','|','/','-','\','|','/','-','\')
                     $si = 0
                     $tlsReady = $false
                     for ($i = 1; $i -le 30; $i++) {
@@ -3241,7 +3241,7 @@ function Main {
                 Write-Host "     2. 或者重新运行安装脚本，选择其他端口" -ForegroundColor White
                 Write-Host "" 
             } elseif ($errMsg -match "No such image") {
-                # ── 镜像缺失 — 自动尝试 GHCR 拉取恢复 ──
+                # -- 镜像缺失 — 自动尝试 GHCR 拉取恢复 --
                 Write-Warn "本地镜像不存在，尝试自动从 GHCR 拉取..."
                 $ghcrRecovered = $false
                 try {
@@ -3332,7 +3332,7 @@ function Main {
             Write-OK "部署包已存在，跳过复制"
         }
 
-        # ── Phase 5: Cleanup + Launch ──────────────────────────────────────────
+        # -- Phase 5: Cleanup + Launch ------------------------------------------
         Write-Step 5 5 "启动 OpenClaw..."
 
         # Remove scheduled task if it exists
@@ -3358,7 +3358,7 @@ function Main {
     Read-Host "按回车关闭此窗口"
 }
 
-# ─── Entry Point ──────────────────────────────────────────────────────────────
+# --- Entry Point --------------------------------------------------------------
 try {
     Main
 } catch {
