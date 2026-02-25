@@ -590,6 +590,25 @@ try {
 if (-not $currentVersion) { $currentVersion = "unknown" }
 Write-Dim "当前版本: $currentVersion"
 
+# 检测当前镜像版本类型（lite / full）
+$currentEdition = "full"  # 默认假定完整版（向后兼容旧镜像）
+try {
+    if ($isRunning) {
+        $editionStr = (& docker exec $CONTAINER_NAME cat /etc/openclaw-edition 2>$null)
+        if ($editionStr -and $editionStr.Trim() -eq "lite") { $currentEdition = "lite" }
+    }
+    if ($currentEdition -eq "full") {
+        $tmpEd = Join-Path $env:TEMP "openclaw-edition.tmp"
+        & docker cp "${CONTAINER_NAME}:/etc/openclaw-edition" $tmpEd 2>$null
+        if (Test-Path $tmpEd) {
+            $edStr = (Get-Content $tmpEd -Raw).Trim()
+            if ($edStr -eq "lite") { $currentEdition = "lite" }
+            Remove-Item $tmpEd -Force -ErrorAction SilentlyContinue
+        }
+    }
+} catch {}
+Write-Dim "镜像类型: $currentEdition"
+
 # -- 5. 检查最新版本 --
 Write-Step "检查最新版本..."
 $latestVersion = ""
@@ -600,7 +619,8 @@ try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$GITHUB_REPO/releases/latest" -UseBasicParsing -TimeoutSec 15
     $latestVersion = $release.tag_name
-    $imageAsset = $release.assets | Where-Object { $_.name -eq "openclaw-pro-image.tar.gz" } | Select-Object -First 1
+    $updateAssetName = if ($currentEdition -eq "lite") { "openclaw-pro-image-lite.tar.gz" } else { "openclaw-pro-image.tar.gz" }
+    $imageAsset = $release.assets | Where-Object { $_.name -eq $updateAssetName } | Select-Object -First 1
     if ($imageAsset) {
         $downloadUrl = $imageAsset.browser_download_url
         $imageSize = [long]$imageAsset.size
@@ -628,7 +648,7 @@ Write-Step "下载最新镜像..."
 $downloadDir = Join-Path $env:TEMP "openclaw-update"
 if (-not (Test-Path $downloadDir)) { New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null }
 
-$tarPath = Join-Path $downloadDir "openclaw-pro-image.tar.gz"
+$tarPath = Join-Path $downloadDir $updateAssetName
 $downloaded = $false
 
 if ($downloadUrl -and $imageSize -gt 0) {

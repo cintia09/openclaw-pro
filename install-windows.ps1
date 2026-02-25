@@ -34,6 +34,7 @@ $DEFAULT_HTTP_PORT  = "80"
 $WSL_TARGET_DIR  = "/root/openclaw-pro"
 $GITHUB_REPO     = "cintia09/openclaw-pro"
 $IMAGE_NAME      = "openclaw-pro"
+$script:imageEdition = "lite"  # 默认精简版，用户可在安装时选择
 $SCRIPT_URL      = "https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1"
 $SCRIPT_DIR      = if ($MyInvocation.MyCommand.Path) {
     Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -1735,16 +1736,17 @@ function Show-Completion {
         Write-Host ""
         Write-Host "     方式1: 浏览器下载（推荐）" -ForegroundColor Yellow
         $manualTag = if ($script:latestReleaseTag) { $script:latestReleaseTag } elseif ($latestReleaseTag) { $latestReleaseTag } else { "v1.0.0" }
-        Write-Host "     https://github.com/$GITHUB_REPO/releases/download/${manualTag}/openclaw-pro-image.tar.gz" -ForegroundColor Cyan
+        Write-Host "     精简版 (~250MB): https://github.com/$GITHUB_REPO/releases/download/${manualTag}/openclaw-pro-image-lite.tar.gz" -ForegroundColor Cyan
+        Write-Host "     完整版 (~1.6GB): https://github.com/$GITHUB_REPO/releases/download/${manualTag}/openclaw-pro-image.tar.gz" -ForegroundColor Cyan
         Write-Host ""
         Write-Host "     方式2: aria2c 多线程下载（推荐，需先安装 aria2）" -ForegroundColor Yellow
-        Write-Host "     aria2c -x 8 -s 8 -k 2M --continue=true --retry-wait=3 --max-tries=0 https://github.com/$GITHUB_REPO/releases/download/${manualTag}/openclaw-pro-image.tar.gz" -ForegroundColor White
+        Write-Host "     aria2c -x 8 -s 8 -k 2M --continue=true --retry-wait=3 --max-tries=0 <上述URL>" -ForegroundColor White
         Write-Host ""
         Write-Host "     方式3: curl 命令行（网络不稳定时可能失败）" -ForegroundColor Yellow
-        Write-Host "     curl.exe -L -C - --retry 200 --retry-all-errors --retry-delay 3 -o openclaw-pro-image.tar.gz https://github.com/$GITHUB_REPO/releases/download/${manualTag}/openclaw-pro-image.tar.gz" -ForegroundColor White
+        Write-Host "     curl.exe -L -C - --retry 200 --retry-all-errors --retry-delay 3 -o <文件名> <上述URL>" -ForegroundColor White
         Write-Host ""
         Write-Host "     下载完成后执行:" -ForegroundColor Yellow
-        Write-Host "     docker load -i openclaw-pro-image.tar.gz" -ForegroundColor White
+        Write-Host "     docker load -i <下载的.tar.gz文件>" -ForegroundColor White
         Write-Host "     然后重新运行安装脚本即可（会自动检测已加载的镜像）" -ForegroundColor Gray
         }
     }
@@ -2823,8 +2825,29 @@ function Main {
             # -- 尝试 1: 下载预构建镜像 tar.gz（分块断点续传） --
             if (-not $imageReady) {
             Write-Info "检查 Release 预构建镜像..."
-            try {
+
+            # -- 镜像版本选择：精简版 (lite) vs 完整版 (full) --
+            Write-Host ""
+            Write-Host "  请选择镜像版本:" -ForegroundColor Cyan
+            Write-Host "     [1] 精简版（默认，~250MB，约 5 分钟完成安装）" -ForegroundColor White
+            Write-Host "         包含: Ubuntu + Node.js + Caddy + Web面板 + 常用工具 + Python3" -ForegroundColor DarkGray
+            Write-Host "         Chrome/noVNC/LightGBM/openclaw 等可后期通过 Web 面板安装" -ForegroundColor DarkGray
+            Write-Host "     [2] 完整版（~1.6GB，约 30 分钟完成安装）" -ForegroundColor White
+            Write-Host "         包含全部组件: Chrome 浏览器、noVNC、LightGBM、openclaw 等" -ForegroundColor DarkGray
+            Write-Host ""
+            Write-Host "  输入选择 [1/2，默认1]: " -NoNewline -ForegroundColor White
+            $editionChoice = (Read-Host).Trim()
+            if ($editionChoice -eq '2') {
+                $script:imageEdition = "full"
                 $assetName = "openclaw-pro-image.tar.gz"
+                Write-Info "已选择完整版镜像"
+            } else {
+                $script:imageEdition = "lite"
+                $assetName = "openclaw-pro-image-lite.tar.gz"
+                Write-Info "已选择精简版镜像"
+            }
+
+            try {
                 $imageTar = Join-Path $env:TEMP $assetName
 
                 $imageUrl = ""
@@ -3049,6 +3072,9 @@ function Main {
             # -- 尝试 2: 从 GHCR 拉取镜像 --
             if (-not $imageReady) {
                 $ghcrTag = if ($latestReleaseTag) { $latestReleaseTag } else { "latest" }
+                if ($script:imageEdition -eq "lite") {
+                    $ghcrTag = if ($latestReleaseTag) { "$latestReleaseTag-lite" } else { "lite" }
+                }
                 $ghcrImage = "ghcr.io/${GITHUB_REPO}:${ghcrTag}"
                 Write-Info "尝试从 GHCR 拉取镜像: $ghcrImage ..."
                 try {
@@ -3549,11 +3575,12 @@ function Main {
 
                 # 恢复方式 1: Download-Robust 多线程分块下载 Release tar.gz
                 $recoverTag = if ($latestReleaseTag) { $latestReleaseTag } else { "latest" }
-                $recoverTar = Join-Path $env:TEMP "openclaw-pro-image.tar.gz"
+                $recoverAssetName = if ($script:imageEdition -eq "full") { "openclaw-pro-image.tar.gz" } else { "openclaw-pro-image-lite.tar.gz" }
+                $recoverTar = Join-Path $env:TEMP $recoverAssetName
                 $releaseBaseUrl = if ($latestReleaseTag) {
-                    "https://github.com/$GITHUB_REPO/releases/download/$latestReleaseTag/openclaw-pro-image.tar.gz"
+                    "https://github.com/$GITHUB_REPO/releases/download/$latestReleaseTag/$recoverAssetName"
                 } else {
-                    "https://github.com/$GITHUB_REPO/releases/latest/download/openclaw-pro-image.tar.gz"
+                    "https://github.com/$GITHUB_REPO/releases/latest/download/$recoverAssetName"
                 }
                 # 代理镜像优先（国内直连 github.com 通常很慢或不通）
                 $recoverUrls = @(
@@ -3687,7 +3714,11 @@ function Main {
                 if (-not $recoverOK) {
                     Write-Info "Release 下载失败，尝试从 GHCR 拉取..."
                     try {
-                        $recoverImage = "ghcr.io/${GITHUB_REPO}:${recoverTag}"
+                        $recoverGhcrTag = $recoverTag
+                        if ($script:imageEdition -eq "lite") {
+                            $recoverGhcrTag = if ($latestReleaseTag) { "$latestReleaseTag-lite" } else { "lite" }
+                        }
+                        $recoverImage = "ghcr.io/${GITHUB_REPO}:${recoverGhcrTag}"
                         $pullOut = & docker pull $recoverImage 2>&1
                         $pullCode = $LASTEXITCODE
                         $pullOut | ForEach-Object {

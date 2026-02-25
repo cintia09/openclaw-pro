@@ -29,24 +29,35 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 构建镜像
-      - name: Build Docker image
+      # 构建完整版镜像
+      - name: Build full Docker image
         run: docker build --build-arg BUILD_VERSION=${{ github.ref_name }} -t openclaw-pro:latest .
+
+      # 构建精简版镜像
+      - name: Build lite Docker image
+        run: docker build --build-arg BUILD_VERSION=${{ github.ref_name }} -f Dockerfile.lite -t openclaw-pro:lite .
 
       # 推送到 GHCR (可选，给有条件访问的用户)
       - name: Tag and push to GHCR
         run: |
           docker tag openclaw-pro:latest ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           docker tag openclaw-pro:latest ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+          docker tag openclaw-pro:lite ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:lite
+          docker tag openclaw-pro:lite ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-lite
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:lite
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-lite
 
       # 导出镜像为 tar.gz (用户直接下载，无需 Docker Hub/GHCR)
-      - name: Export image as tar.gz
+      - name: Export images as tar.gz
         run: |
           docker save openclaw-pro:latest | gzip > openclaw-pro-image.tar.gz
           ls -lh openclaw-pro-image.tar.gz
           sha256sum openclaw-pro-image.tar.gz > openclaw-pro-image.tar.gz.sha256
+          docker save openclaw-pro:lite | gzip > openclaw-pro-image-lite.tar.gz
+          ls -lh openclaw-pro-image-lite.tar.gz
+          sha256sum openclaw-pro-image-lite.tar.gz > openclaw-pro-image-lite.tar.gz.sha256
 
       # 上传到 GitHub Release
       - name: Create Release and upload image
@@ -55,6 +66,10 @@ jobs:
           name: OpenClaw Pro ${{ github.ref_name }}
           body: |
             ## OpenClaw Pro Docker 镜像
+
+            ### 镜像版本
+            - **精简版** `openclaw-pro-image-lite.tar.gz` (~250MB) — 推荐，包含核心功能，Chrome/LightGBM 等可后期安装
+            - **完整版** `openclaw-pro-image.tar.gz` (~1.6GB) — 包含全部组件
 
             ### 一键安装 (Windows)
             ```powershell
@@ -67,8 +82,8 @@ jobs:
             ```
 
             ### 手动安装
-            1. 下载 `openclaw-pro-image.tar.gz`
-            2. `docker load < openclaw-pro-image.tar.gz`
+            1. 下载镜像文件（精简版或完整版）
+            2. `docker load < openclaw-pro-image-lite.tar.gz`
             3. HTTP 直连模式：
                `docker run -d --name openclaw-pro -p 18789:18789 -p 3000:3000 -v ./home-data:/root --restart unless-stopped openclaw-pro:latest`
 
@@ -82,3 +97,5 @@ jobs:
           files: |
             openclaw-pro-image.tar.gz
             openclaw-pro-image.tar.gz.sha256
+            openclaw-pro-image-lite.tar.gz
+            openclaw-pro-image-lite.tar.gz.sha256
