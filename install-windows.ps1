@@ -3045,6 +3045,28 @@ function Main {
             }
             Write-Log "Wrote docker-config.json: domain=$($deployConfig.Domain)"
 
+            # ── 最终镜像可用性检查 ──
+            $finalImageCheck = & docker image inspect openclaw-pro 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warn "镜像 openclaw-pro:latest 不存在，尝试从 GHCR 拉取..."
+                try {
+                    $ghcrTag = if ($latestReleaseTag) { $latestReleaseTag } else { "latest" }
+                    & docker pull "ghcr.io/${GITHUB_REPO}:${ghcrTag}" 2>&1 | ForEach-Object {
+                        Write-Host "  $_" -ForegroundColor DarkGray
+                    }
+                    if ($LASTEXITCODE -eq 0) {
+                        & docker tag "ghcr.io/${GITHUB_REPO}:${ghcrTag}" "openclaw-pro:latest" 2>$null
+                        Write-OK "GHCR 镜像拉取成功"
+                    }
+                } catch {}
+
+                # 再次检查
+                $finalImageCheck2 = & docker image inspect openclaw-pro 2>$null
+                if ($LASTEXITCODE -ne 0) {
+                    throw "镜像 openclaw-pro:latest 不可用，请重新运行安装脚本"
+                }
+            }
+
             # Build docker run arguments
             $runArgs = @(
                 "run", "-d",
