@@ -144,6 +144,26 @@ else
     echo "[start-services] sshd failed to start (non-critical, continuing)"
 fi
 
+# ── 初始化持久化环境 + 恢复用户安装的组件 ──
+# Python venv
+if [ ! -f "/root/.venv/bin/python3" ]; then
+    echo "[start-services] Initializing Python venv at /root/.venv ..."
+    python3 -m venv /root/.venv 2>/dev/null && \
+        /root/.venv/bin/pip install --upgrade pip -q 2>/dev/null || true
+fi
+
+# npm global prefix
+if [ ! -d "/root/.npm-global" ]; then
+    mkdir -p /root/.npm-global
+    npm config set prefix /root/.npm-global 2>/dev/null || true
+fi
+
+# 恢复用户安装的组件（从 post-install.json 清单）
+if [ -f /opt/post-install-restore.sh ]; then
+    echo "[start-services] Running post-install restore..."
+    bash /opt/post-install-restore.sh restore
+fi
+
 GATEWAY_PID=""
 BROWSER_ENABLED="false"
 CERT_MODE="letsencrypt"
@@ -151,7 +171,16 @@ NOVNC_PID=""
 CHROME_PID=""
 CADDY_PID=""
 
+HAS_OPENCLAW="false"
+if command -v openclaw >/dev/null 2>&1; then
+    HAS_OPENCLAW="true"
+fi
+
 start_gateway() {
+    if [ "$HAS_OPENCLAW" != "true" ]; then
+        echo "[start-services] openclaw CLI not installed, skipping Gateway"
+        return 0
+    fi
     echo "[start-services] Starting OpenClaw Gateway (foreground mode)..."
     nohup openclaw gateway run --allow-unconfigured >> "$LOG_DIR/gateway.log" 2>&1 &
     GATEWAY_PID=$!
@@ -269,8 +298,8 @@ echo "[start-services] All services started."
 while true; do
     sleep 30
 
-    # 检查 Gateway
-    if ! gateway_is_healthy; then
+    # 检查 Gateway（仅在 openclaw 已安装时）
+    if [ "$HAS_OPENCLAW" = "true" ] && ! gateway_is_healthy; then
         echo "[health] WARNING: Gateway process not found, restarting..."
         start_gateway
     fi

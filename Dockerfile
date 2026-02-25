@@ -1,6 +1,11 @@
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 
+# ── 持久化路径（/root 为 volume 挂载点，容器重建后数据保留）──
+ENV VIRTUAL_ENV=/root/.venv
+ENV NPM_CONFIG_PREFIX=/root/.npm-global
+ENV PATH="/root/.venv/bin:/root/.npm-global/bin:$PATH"
+
 # 系统工具
 RUN apt-get update && apt-get install -y \
     vim nano \
@@ -51,8 +56,9 @@ COPY web/ /opt/openclaw-web/
 RUN cd /opt/openclaw-web && npm install --omit=dev
 
 COPY start-services.sh /usr/local/bin/
+COPY post-install-restore.sh /opt/
 COPY Caddyfile.template /etc/caddy/
-RUN chmod +x /usr/local/bin/start-services.sh
+RUN chmod +x /usr/local/bin/start-services.sh /opt/post-install-restore.sh
 
 # 写入构建时版本（由 CI 的 tag 决定）
 ARG BUILD_VERSION=dev

@@ -1,6 +1,14 @@
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 
+# ── 持久化路径（/root 为 volume 挂载点，容器重建后数据保留）──
+# Python 虚拟环境
+ENV VIRTUAL_ENV=/root/.venv
+# npm 全局包
+ENV NPM_CONFIG_PREFIX=/root/.npm-global
+# PATH 优先使用持久化目录中的可执行文件
+ENV PATH="/root/.venv/bin:/root/.npm-global/bin:$PATH"
+
 # 系统工具（精简版：去掉 Chrome/noVNC/LightGBM/openclaw，后期通过 Web 面板按需安装）
 RUN apt-get update && apt-get install -y \
     vim nano \
@@ -31,8 +39,9 @@ COPY web/ /opt/openclaw-web/
 RUN cd /opt/openclaw-web && npm install --omit=dev
 
 COPY start-services.sh /usr/local/bin/
+COPY post-install-restore.sh /opt/
 COPY Caddyfile.template /etc/caddy/
-RUN chmod +x /usr/local/bin/start-services.sh
+RUN chmod +x /usr/local/bin/start-services.sh /opt/post-install-restore.sh
 
 # 写入构建时版本
 ARG BUILD_VERSION=dev
