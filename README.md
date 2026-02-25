@@ -13,7 +13,7 @@ curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.
 
 **Windows（PowerShell 管理员）：**
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $u='https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1'; try{$s=irm $u}catch{$f=\"$env:TEMP\oc.ps1\"; curl.exe -sL $u -o $f; $s=[IO.File]::ReadAllText($f,[Text.Encoding]::UTF8)}; iex $s"
+[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $u='https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1'; $s=$null; try{$s=irm $u}catch{}; if(-not $s){$wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString($u)}; iex $s
 ```
 
 自动完成：安装 WSL2/Docker → 克隆仓库 → 构建镜像 → 启动配置向导。
@@ -22,7 +22,7 @@ powershell -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::Security
 
 **Windows（PowerShell）：**
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $u='https://raw.githubusercontent.com/cintia09/openclaw-pro/main/update-windows.ps1'; try{$s=irm $u}catch{$f=\"$env:TEMP\oc.ps1\"; curl.exe -sL $u -o $f; $s=[IO.File]::ReadAllText($f,[Text.Encoding]::UTF8)}; iex $s"
+[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $u='https://raw.githubusercontent.com/cintia09/openclaw-pro/main/update-windows.ps1'; $s=$null; try{$s=irm $u}catch{}; if(-not $s){$wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString($u)}; iex $s
 ```
 
 > **目录说明：** curl 安装后，程序部署在当前目录下的 `openclaw-pro/`，运行时数据目录在 `openclaw-pro/home-data/`。
