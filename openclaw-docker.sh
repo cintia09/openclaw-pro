@@ -943,37 +943,18 @@ F2B
 
 # 显示再次运行面板
 show_running_panel() {
-    DOMAIN=""
-    if [ -f "$CONFIG_FILE" ]; then
-        DOMAIN=$(jq -r '.domain // empty' "$CONFIG_FILE" 2>/dev/null)
-    fi
-
     echo ""
     echo -e "${CYAN}╔══════════════════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║${NC}            ${BOLD}🐾 OpenClaw Pro v1.0${NC}                  ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}                                                  ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}  状态: ${GREEN}● 运行中${NC}    容器: ${BOLD}$CONTAINER_NAME${NC}        ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}                                                  ${CYAN}║${NC}"
-    local SSH_PORT_DISPLAY
-    SSH_PORT_DISPLAY=$(jq -r '.ssh_port // 2222' "$CONFIG_FILE" 2>/dev/null)
-    if [ -n "$DOMAIN" ]; then
-        HTTPS_PORT=$(jq -r '.https_port // 8443' "$CONFIG_FILE" 2>/dev/null)
-        echo -e "${CYAN}║${NC}  🌐 Web管理: ${BLUE}https://${DOMAIN}:${HTTPS_PORT}${NC}"
-        echo -e "${CYAN}║${NC}  📋 OpenClaw: ${BLUE}https://${DOMAIN}:${HTTPS_PORT}/gateway${NC}"
-    else
-        GW_PORT=$(jq -r '.port // 18789' "$CONFIG_FILE" 2>/dev/null)
-        WEB_PORT=$(jq -r '.web_port // 3000' "$CONFIG_FILE" 2>/dev/null)
-        echo -e "${CYAN}║${NC}  🌐 Web管理: ${BLUE}http://localhost:${WEB_PORT}${NC}              ${CYAN}║${NC}"
-        echo -e "${CYAN}║${NC}  📋 OpenClaw: ${BLUE}http://localhost:${GW_PORT}${NC}           ${CYAN}║${NC}"
-    fi
-    echo -e "${CYAN}║${NC}  🔑 SSH:     ${BLUE}ssh root@localhost -p ${SSH_PORT_DISPLAY}${NC}"
-    echo -e "${CYAN}║${NC}                                                  ${CYAN}║${NC}"
-    echo -e "${CYAN}║${NC}  ${YELLOW}[C]${NC} 配置  ${YELLOW}[回车/10秒]${NC} 直接进入              ${CYAN}║${NC}"
+    echo -e "${CYAN}║${NC}  ${YELLOW}[C]${NC} 配置菜单  ${YELLOW}[回车/5秒]${NC} 进入容器           ${CYAN}║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════╝${NC}"
     echo ""
 
-    # 10秒倒计时
-    read -t 10 -n 1 CHOICE 2>/dev/null || CHOICE=""
+    # 5秒倒计时
+    read -t 5 -n 1 CHOICE 2>/dev/null || CHOICE=""
     echo ""
 
     if [[ "$CHOICE" == "c" || "$CHOICE" == "C" ]]; then
