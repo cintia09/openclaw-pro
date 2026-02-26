@@ -234,6 +234,14 @@ ensure_image() {
         # 镜像已存在，检查是否有新版本
         local local_tag remote_tag
         local_tag=$(get_local_image_tag)
+        # 回退：从容器内读取版本号
+        if [ -z "$local_tag" ]; then
+            local_tag=$(docker exec "$CONTAINER_NAME" cat /etc/openclaw-version 2>/dev/null || true)
+            # 补写 tag 文件供下次使用
+            if [ -n "$local_tag" ]; then
+                save_image_tag "$local_tag"
+            fi
+        fi
         remote_tag=$(get_latest_release_tag)
 
         if [ -n "$remote_tag" ] && [ -n "$local_tag" ] && [ "$remote_tag" != "$local_tag" ]; then
@@ -251,7 +259,8 @@ ensure_image() {
                 return 0
             fi
         elif [ -n "$remote_tag" ] && [ -z "$local_tag" ]; then
-            info "本地镜像版本未知，远端最新: $remote_tag"
+            # 仍无法确定本地版本，记下远端版本供参考
+            save_image_tag "$remote_tag"
             return 0
         else
             return 0
