@@ -28,6 +28,30 @@ success() { echo -e "${GREEN}[OK]${NC} $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
 error()   { echo -e "${RED}[ERROR]${NC} $*"; }
 
+# 容器启动后修复：检查并补装缺失依赖、修复 sshd 配置
+fix_container_env() {
+    local cname="${1:-$CONTAINER_NAME}"
+    # 修复 sshd StrictModes（volume mount 导致 /root 属主为实机 UID）
+    docker exec "$cname" bash -c '
+        if ! grep -q "^StrictModes no" /etc/ssh/sshd_config; then
+            echo "StrictModes no" >> /etc/ssh/sshd_config
+            pkill -HUP sshd 2>/dev/null || true
+        fi
+    ' 2>/dev/null || true
+    # 检查并安装 envsubst（Caddy 配置模板渲染依赖）
+    if ! docker exec "$cname" command -v envsubst &>/dev/null; then
+        info "容器缺少 envsubst，正在安装..."
+        docker exec "$cname" bash -c 'apt-get update -qq && apt-get install -y -qq gettext-base' &>/dev/null
+        if docker exec "$cname" command -v envsubst &>/dev/null; then
+            success "envsubst 已安装，正在重启服务..."
+            docker restart "$cname" &>/dev/null
+            sleep 3
+        else
+            warn "envsubst 安装失败，HTTPS 反向代理可能无法工作"
+        fi
+    fi
+}
+
 # 检查 jq 是否安装（配置管理需要）
 ensure_jq() {
     if command -v jq &>/dev/null; then
@@ -952,13 +976,8 @@ F2B
     sleep 2
     echo "root:${ROOT_PASS}" | docker exec -i "$CONTAINER_NAME" chpasswd
 
-    # 修复 sshd: volume mount 导致 /root 属主为实机 UID，必须关闭 StrictModes
-    docker exec "$CONTAINER_NAME" bash -c '
-        if ! grep -q "^StrictModes no" /etc/ssh/sshd_config; then
-            echo "StrictModes no" >> /etc/ssh/sshd_config
-            pkill -HUP sshd 2>/dev/null || true
-        fi
-    '
+    # 容器环境修复（sshd StrictModes + 缺失依赖如 envsubst）
+    fix_container_env
 
     # SSH key 注入：将実机公钥自动复制到容器（密码登录已禁用，仅允许 key 登录）
     local host_pubkey=""
@@ -1040,13 +1059,7 @@ cmd_run() {
             info "容器已停止，正在启动..."
             docker start "$CONTAINER_NAME"
             sleep 2
-            # 确保 sshd StrictModes 关闭（volume mount /root 属主问题）
-            docker exec "$CONTAINER_NAME" bash -c '
-                if ! grep -q "^StrictModes no" /etc/ssh/sshd_config; then
-                    echo "StrictModes no" >> /etc/ssh/sshd_config
-                    pkill -HUP sshd 2>/dev/null || true
-                fi
-            ' 2>/dev/null || true
+            fix_container_env
             success "容器已启动"
             show_command_hint
             docker exec -it "$CONTAINER_NAME" bash -l
@@ -1072,12 +1085,7 @@ cmd_run() {
                 info "启动容器 $first_container ..."
                 docker start "$first_container"
                 sleep 2
-                docker exec "$first_container" bash -c '
-                    if ! grep -q "^StrictModes no" /etc/ssh/sshd_config; then
-                        echo "StrictModes no" >> /etc/ssh/sshd_config
-                        pkill -HUP sshd 2>/dev/null || true
-                    fi
-                ' 2>/dev/null || true
+                fix_container_env "$first_container"
                 success "容器已启动"
                 sleep 2
                 show_command_hint
@@ -1274,12 +1282,7 @@ cmd_update() {
         info "容器已停止，正在启动..."
         docker start "$CONTAINER_NAME" 2>/dev/null || true
         sleep 3
-        docker exec "$CONTAINER_NAME" bash -c '
-            if ! grep -q "^StrictModes no" /etc/ssh/sshd_config; then
-                echo "StrictModes no" >> /etc/ssh/sshd_config
-                pkill -HUP sshd 2>/dev/null || true
-            fi
-        ' 2>/dev/null || true
+        fix_container_env
     fi
 
     # 智能检测更新类型（对齐 Windows 逻辑: Dockerfile hash 检查）
@@ -1528,14 +1531,9 @@ _do_full_update() {
         --restart unless-stopped \
         "$IMAGE_NAME"
 
-    # 修复 sshd: volume mount 导致 /root 属主为实机 UID，必须关闭 StrictModes
+    # 容器环境修复
     sleep 1
-    docker exec "$CONTAINER_NAME" bash -c '
-        if ! grep -q "^StrictModes no" /etc/ssh/sshd_config; then
-            echo "StrictModes no" >> /etc/ssh/sshd_config
-            pkill -HUP sshd 2>/dev/null || true
-        fi
-    ' 2>/dev/null || true
+    fix_container_env
 
     # 等待服务就绪
     info "等待服务就绪..."
