@@ -340,14 +340,48 @@ first_time_setup() {
     echo -e "  ${BLUE}安装后可在 Web 管理面板中修改所有配置。${NC}"
     echo ""
 
-    # 1. Root密码（唯一必填项）
+    # 1. Root密码（唯一必填项，强密码检查）
+    echo -e "  ${CYAN}密码要求: 至少8位，包含大写字母、小写字母、数字和特殊字符${NC}"
+    echo ""
     while true; do
         read -sp "$(echo -e "${YELLOW}设置容器 root 密码 (必填):${NC} ")" ROOT_PASS
         echo ""
-        if [ -n "$ROOT_PASS" ]; then
-            break
+        if [ -z "$ROOT_PASS" ]; then
+            error "密码不能为空"
+            continue
         fi
-        error "密码不能为空"
+        # 强密码校验
+        local pw_errors=""
+        if [ ${#ROOT_PASS} -lt 8 ]; then
+            pw_errors="${pw_errors}\n  ✗ 长度不足8位（当前${#ROOT_PASS}位）"
+        fi
+        if ! echo "$ROOT_PASS" | grep -q '[A-Z]'; then
+            pw_errors="${pw_errors}\n  ✗ 缺少大写字母"
+        fi
+        if ! echo "$ROOT_PASS" | grep -q '[a-z]'; then
+            pw_errors="${pw_errors}\n  ✗ 缺少小写字母"
+        fi
+        if ! echo "$ROOT_PASS" | grep -q '[0-9]'; then
+            pw_errors="${pw_errors}\n  ✗ 缺少数字"
+        fi
+        if ! echo "$ROOT_PASS" | grep -q '[^A-Za-z0-9]'; then
+            pw_errors="${pw_errors}\n  ✗ 缺少特殊字符（如 !@#$%^&*）"
+        fi
+        if [ -n "$pw_errors" ]; then
+            echo -e "${RED}[ERROR] 密码强度不足:${NC}${pw_errors}"
+            echo ""
+            continue
+        fi
+        # 确认密码
+        read -sp "$(echo -e "${YELLOW}确认密码:${NC} ")" ROOT_PASS2
+        echo ""
+        if [ "$ROOT_PASS" != "$ROOT_PASS2" ]; then
+            error "两次输入不一致，请重试"
+            echo ""
+            continue
+        fi
+        success "密码设置成功"
+        break
     done
 
     # 默认配置值（尽量少问）
