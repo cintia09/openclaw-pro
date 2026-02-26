@@ -68,7 +68,8 @@
             </div>
           </div>
           <div class="muted small" style="margin-top:6px">
-            Windows 更新命令：<code style="background:#223;padding:2px 6px;border-radius:4px">irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/update-windows.ps1 | iex</code>
+            Linux 更新命令：<code style="background:#223;padding:2px 6px;border-radius:4px;user-select:all">./openclaw-docker.sh update</code>
+            <span class="muted" style="margin-left:12px">Windows：<code style="background:#223;padding:2px 6px;border-radius:4px;user-select:all">irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/update-windows.ps1 | iex</code></span>
           </div>
         </div>
 
@@ -536,8 +537,11 @@
             </div>
             <div class="muted small" style="margin-top:10px">
               <b>热更新</b>：直接从 GitHub 拉取最新的 Web 前端、配置模板等文件，无需下载镜像/重建容器。<br/>
-              <b>完整更新</b>：如需更新系统包、Node.js 等底层依赖，请使用以下命令：<br/>
-              <code style="background:#223;padding:4px 8px;border-radius:4px;display:inline-block;margin-top:4px;user-select:all">irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/update-windows.ps1 | iex</code>
+              <b>完整更新</b>：如需更新系统包、Node.js 等底层依赖，请在宿主机执行：<br/>
+              <div style="margin-top:4px">
+                <span style="color:#6ee7b7">Linux：</span><code style="background:#223;padding:4px 8px;border-radius:4px;user-select:all">./openclaw-docker.sh update</code><br/>
+                <span style="color:#93c5fd">Windows：</span><code style="background:#223;padding:4px 8px;border-radius:4px;display:inline-block;margin-top:4px;user-select:all">irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/update-windows.ps1 | iex</code>
+              </div>
             </div>
           </div>
 
