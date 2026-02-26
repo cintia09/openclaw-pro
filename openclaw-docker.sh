@@ -576,6 +576,7 @@ show_install_summary() {
     local domain="$4"
     local tz="$5"
     local ssh_port="${6:-2222}"
+    local cert_mode="${7:-}"
 
     echo ""
     echo -e "${GREEN}╔══════════════════════════════════════════════════════════════════╗${NC}"
@@ -583,21 +584,31 @@ show_install_summary() {
     echo -e "${GREEN}╠══════════════════════════════════════════════════════════════════╣${NC}"
     echo -e "${GREEN}║${NC}                                                                  ${GREEN}║${NC}"
     echo -e "${GREEN}║${NC}  ${BOLD}端口映射：${NC}                                                    ${GREEN}║${NC}"
-    if [ -n "$domain" ]; then
-        echo -e "${GREEN}║${NC}    HTTP  ${YELLOW}${http_port}${NC}  → 证书验证 + 跳转HTTPS               ${GREEN}║${NC}"
-        echo -e "${GREEN}║${NC}    HTTPS ${YELLOW}${https_port}${NC} → 主入口（反代 Gateway）              ${GREEN}║${NC}"
+
+    if [ -n "$domain" ] && [ "$cert_mode" = "letsencrypt" ]; then
+        # 域名 + Let's Encrypt
+        echo -e "${GREEN}║${NC}    HTTP  ${YELLOW}${http_port}${NC} → 容器 80（证书验证 + 跳转HTTPS）          ${GREEN}║${NC}"
+        echo -e "${GREEN}║${NC}    HTTPS ${YELLOW}${https_port}${NC} → 容器 443（主入口）                     ${GREEN}║${NC}"
         echo -e "${GREEN}║${NC}    SSH   ${YELLOW}${ssh_port}${NC} → 容器 22（远程登录）                  ${GREEN}║${NC}"
         echo -e "${GREEN}║${NC}    Gateway ${YELLOW}127.0.0.1:${gw_port}${NC} → 容器内部（不对外）     ${GREEN}║${NC}"
-        echo -e "${GREEN}║${NC}                                                                  ${GREEN}║${NC}"
-        echo -e "${GREEN}║${NC}  ${BOLD}访问地址：${NC}                                                    ${GREEN}║${NC}"
+    elif [ -n "$domain" ]; then
+        # IP + 自签名
+        echo -e "${GREEN}║${NC}    HTTPS ${YELLOW}${https_port}${NC} → 容器 443（自签证书）                 ${GREEN}║${NC}"
+        echo -e "${GREEN}║${NC}    SSH   ${YELLOW}${ssh_port}${NC} → 容器 22（远程登录）                  ${GREEN}║${NC}"
+        echo -e "${GREEN}║${NC}    Gateway ${YELLOW}127.0.0.1:${gw_port}${NC} → 容器内部（不对外）     ${GREEN}║${NC}"
+    else
+        # HTTP 直连
+        echo -e "${GREEN}║${NC}    Gateway ${YELLOW}${gw_port}${NC} → 容器 18789（主入口）               ${GREEN}║${NC}"
+        echo -e "${GREEN}║${NC}    Web面板 ${YELLOW}${https_port}${NC} → 容器 3000（管理面板）             ${GREEN}║${NC}"
+        echo -e "${GREEN}║${NC}    SSH    ${YELLOW}${ssh_port}${NC} → 容器 22（远程登录）                ${GREEN}║${NC}"
+    fi
+
+    echo -e "${GREEN}║${NC}                                                                  ${GREEN}║${NC}"
+    echo -e "${GREEN}║${NC}  ${BOLD}访问地址：${NC}                                                    ${GREEN}║${NC}"
+    if [ -n "$domain" ]; then
         echo -e "${GREEN}║${NC}    🌐 主站:     ${CYAN}https://${domain}:${https_port}${NC}"
         echo -e "${GREEN}║${NC}    🔧 管理面板: ${CYAN}https://${domain}:${https_port}/admin${NC}"
     else
-        echo -e "${GREEN}║${NC}    Gateway ${YELLOW}${gw_port}${NC} → 主入口                           ${GREEN}║${NC}"
-        echo -e "${GREEN}║${NC}    Web面板 ${YELLOW}${web_port}${NC} → 管理面板（直连）                    ${GREEN}║${NC}"
-        echo -e "${GREEN}║${NC}    SSH    ${YELLOW}${ssh_port}${NC} → 容器 22（远程登录）                ${GREEN}║${NC}"
-        echo -e "${GREEN}║${NC}                                                                  ${GREEN}║${NC}"
-        echo -e "${GREEN}║${NC}  ${BOLD}访问地址：${NC}                                                    ${GREEN}║${NC}"
         echo -e "${GREEN}║${NC}    🌐 主站:     ${CYAN}http://<服务器IP>:${gw_port}${NC}"
         echo -e "${GREEN}║${NC}    🔧 管理面板: ${CYAN}http://<服务器IP>:${https_port}${NC}"
     fi
@@ -615,8 +626,10 @@ show_install_summary() {
 
     # WSL2提醒
     if is_wsl2; then
-        if [ -n "$domain" ]; then
+        if [ -n "$domain" ] && [ "$cert_mode" = "letsencrypt" ]; then
             show_wsl2_firewall_warning "$http_port" "$https_port"
+        elif [ -n "$domain" ]; then
+            show_wsl2_firewall_warning "$https_port" "$https_port"
         else
             show_wsl2_firewall_warning "$gw_port" "$https_port"
         fi
@@ -933,9 +946,9 @@ F2B
 
     # 显示安装完成摘要
     if [ -n "$DOMAIN" ]; then
-        show_install_summary "$GW_PORT" "$HTTP_PORT" "$HTTPS_PORT" "$DOMAIN" "$TZ_VAL" "$SSH_PORT"
+        show_install_summary "$GW_PORT" "$HTTP_PORT" "$HTTPS_PORT" "$DOMAIN" "$TZ_VAL" "$SSH_PORT" "$CERT_MODE"
     else
-        show_install_summary "$GW_PORT" "$HTTP_PORT" "$WEB_PORT" "$DOMAIN" "$TZ_VAL" "$SSH_PORT"
+        show_install_summary "$GW_PORT" "$HTTP_PORT" "$WEB_PORT" "" "$TZ_VAL" "$SSH_PORT" ""
     fi
 
     # 进入容器
