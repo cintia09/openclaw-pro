@@ -543,17 +543,45 @@ app.get('/api/update/check', async (req, res) => {
   }
 
   try {
-    const resp = await fetchWithFallback(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
-      headers: { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'openclaw-pro' },
-      timeout: 10000
-    });
+    let release = null;
+    let latestVersion = '';
+    let releaseUrl = `https://github.com/${GITHUB_REPO}/releases`;
+    let releaseName = '';
+    let publishedAt = '';
 
-    if (!resp.ok) {
-      return res.json({ currentVersion, latestVersion: null, error: `GitHub API: ${resp.status}` });
+    // --- 方式1: GitHub API ---
+    try {
+      const resp = await fetchWithFallback(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
+        headers: { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'openclaw-pro' },
+        timeout: 10000
+      });
+      if (resp.ok) {
+        release = await resp.json();
+        latestVersion = release.tag_name || '';
+        publishedAt = release.published_at || '';
+        releaseUrl = release.html_url || releaseUrl;
+        releaseName = release.name || latestVersion;
+      }
+    } catch {}
+
+    // --- 方式2: raw.githubusercontent.com 读 version.txt (API 不可达时的后备) ---
+    if (!latestVersion) {
+      try {
+        const rawResp = await fetchWithFallback(`${GITHUB_RAW_BASE}/main/version.txt`, {
+          headers: { 'User-Agent': 'openclaw-pro' },
+          timeout: 8000
+        });
+        if (rawResp.ok) {
+          latestVersion = (await rawResp.text()).trim();
+          releaseName = latestVersion;
+          console.log(`[update] GitHub API unavailable, got version from version.txt: ${latestVersion}`);
+        }
+      } catch {}
     }
 
-    const release = await resp.json();
-    const latestVersion = release.tag_name || '';
+    if (!latestVersion) {
+      return res.json({ currentVersion, latestVersion: null, error: '无法连接 GitHub（API 和 raw 均不可达）' });
+    }
     const hasUpdate = currentVersion !== 'unknown' && currentVersion !== 'dev'
       && latestVersion && latestVersion !== currentVersion;
 
@@ -561,9 +589,9 @@ app.get('/api/update/check', async (req, res) => {
       currentVersion,
       latestVersion,
       hasUpdate,
-      publishedAt: release.published_at,
-      releaseUrl: release.html_url,
-      releaseName: release.name || latestVersion,
+      publishedAt,
+      releaseUrl,
+      releaseName,
       hotUpdateOnly: false,
       dockerfileChanged: false
     };
@@ -595,7 +623,7 @@ app.get('/api/update/check', async (req, res) => {
       result.hasUpdate = true;
     }
 
-    updateCache = { data: { latestVersion, hasUpdate: result.hasUpdate, publishedAt: release.published_at, releaseUrl: release.html_url, releaseName: release.name || latestVersion, hotUpdateOnly: result.hotUpdateOnly, dockerfileChanged: result.dockerfileChanged }, checkedAt: Date.now() };
+    updateCache = { data: { latestVersion, hasUpdate: result.hasUpdate, publishedAt, releaseUrl, releaseName, hotUpdateOnly: result.hotUpdateOnly, dockerfileChanged: result.dockerfileChanged }, checkedAt: Date.now() };
     res.json(result);
   } catch (e) {
     res.json({ currentVersion, latestVersion: null, error: e.message });
@@ -687,18 +715,32 @@ app.post('/api/update/hotpatch', async (req, res) => {
       }
     }
 
-    // Update version file
+    // Update version file (try API first, fallback to version.txt)
     try {
-      const versionResp = await fetchWithFallback(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
-        headers: { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'openclaw-pro' },
-        timeout: 10000
-      });
-      if (versionResp.ok) {
-        const rel = await versionResp.json();
-        if (rel.tag_name) {
-          fs.writeFileSync(VERSION_FILE, rel.tag_name + '\n');
-          log(`版本号更新为: ${rel.tag_name}`);
+      let newVersion = '';
+      try {
+        const versionResp = await fetchWithFallback(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
+          headers: { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'openclaw-pro' },
+          timeout: 10000
+        });
+        if (versionResp.ok) {
+          const rel = await versionResp.json();
+          if (rel.tag_name) newVersion = rel.tag_name;
         }
+      } catch {}
+      if (!newVersion) {
+        // Fallback: read version.txt from raw (already in HOTPATCH_FILES or fetch directly)
+        try {
+          const rawVer = await fetchWithFallback(`${GITHUB_RAW_BASE}/main/version.txt`, {
+            headers: { 'User-Agent': 'openclaw-pro' },
+            timeout: 8000
+          });
+          if (rawVer.ok) newVersion = (await rawVer.text()).trim();
+        } catch {}
+      }
+      if (newVersion) {
+        fs.writeFileSync(VERSION_FILE, newVersion + '\n');
+        log(`版本号更新为: ${newVersion}`);
       }
     } catch {}
 

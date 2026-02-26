@@ -266,7 +266,12 @@ async function checkForUpdate(force = false) {
       if (hpBtn) hpBtn.style.display = 'none';
       if (fullNote) fullNote.style.display = 'none';
     } else {
-      statusEl.textContent = u.error || '检查失败';
+      // Friendly error: don't show raw curl commands to user
+      let errMsg = u.error || '检查失败';
+      if (errMsg.includes('curl fallback failed') || errMsg.includes('fetch')) {
+        errMsg = '⚠️ 无法连接 GitHub（网络不可达）';
+      }
+      statusEl.innerHTML = `<span style="color:#f87171">${errMsg}</span>`;
       if (linkEl) linkEl.style.display = 'none';
       const hpBtn = $('btn-hotpatch');
       if (hpBtn) hpBtn.style.display = 'none';
