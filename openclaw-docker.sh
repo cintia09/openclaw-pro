@@ -510,34 +510,37 @@ find_free_port() {
     echo "$port"
 }
 
-# 端口选择：检测→告知→5秒给用户自定义机会
-# 用法: pick_port <默认端口> <备用起始端口> <端口描述>
+# 端口选择：先问用户 → 留空则自动检测可用端口
+# 用法: ask_port <默认端口> <备用起始端口> <端口描述>
 # 返回值写入全局变量 PICKED_PORT
-pick_port() {
+ask_port() {
     local default_port="$1"
     local fallback_start="$2"
     local desc="$3"
 
+    # 先计算推荐端口（默认端口可用则用它，否则自动寻找）
+    local recommended="$default_port"
     if is_port_used "$default_port"; then
-        local auto_port
-        auto_port=$(find_free_port "$fallback_start")
-        echo -e "${YELLOW}[WARN]${NC} 端口 ${RED}${default_port}${NC} 已被占用，已自动选择端口 ${GREEN}${auto_port}${NC}（${desc}）"
-        echo -e "      ${CYAN}5秒内按 C 可手动输入端口，否则使用 ${auto_port}...${NC}"
+        recommended=$(find_free_port "$fallback_start")
+    fi
 
-        local choice=""
-        read -t 5 -n 1 choice 2>/dev/null || true
-        echo ""
+    local input=""
+    read -p "$(echo -e "  ${CYAN}${desc}${NC} 端口 [${GREEN}${recommended}${NC}，回车自动]: ")" input 2>/dev/null || true
 
-        if [[ "$choice" == "c" || "$choice" == "C" ]]; then
-            read -p "$(echo -e "${YELLOW}请输入自定义端口 [${auto_port}]: ${NC}")" custom_port
-            custom_port="${custom_port:-$auto_port}"
-            PICKED_PORT="$custom_port"
+    if [ -z "$input" ]; then
+        PICKED_PORT="$recommended"
+    elif [[ "$input" =~ ^[0-9]+$ ]]; then
+        if is_port_used "$input"; then
+            warn "端口 $input 已被占用，自动切换到 $recommended"
+            PICKED_PORT="$recommended"
         else
-            PICKED_PORT="$auto_port"
+            PICKED_PORT="$input"
         fi
     else
-        PICKED_PORT="$default_port"
+        warn "输入无效，使用推荐端口 $recommended"
+        PICKED_PORT="$recommended"
     fi
+    echo -e "    → ${desc}: ${GREEN}${PICKED_PORT}${NC}"
 }
 
 # 检测是否在 WSL2 环境
@@ -675,7 +678,7 @@ first_time_setup() {
         break
     done
 
-    # 默认配置值（尽量少问）
+    # 默认配置值
     GW_PORT=18789
     WEB_PORT=3000
     SSH_PORT=2222
@@ -684,85 +687,32 @@ first_time_setup() {
     PICKED_PORT=""
     HTTP_PORT=0
     HTTPS_PORT=0
+    CERT_MODE="letsencrypt"
 
+    # ============================================
+    # 第一步：确定部署模式（域名/IP/HTTP直连）
+    # ============================================
     echo ""
-    echo -e "${BLUE}[INFO]${NC} 正在检测端口占用情况..."
+    echo -e "${BOLD}━━━ 部署模式 ━━━${NC}"
+    echo -e "  ${CYAN}[1]${NC} HTTP 直连（默认，内网/本地测试用）"
+    echo -e "  ${CYAN}[2]${NC} 域名 + Let's Encrypt 自动 HTTPS（推荐公网）"
+    echo -e "  ${CYAN}[3]${NC} IP + 自签名 HTTPS（内网 HTTPS）"
+    local mode_choice=""
+    read -p "$(echo -e "请选择部署模式 [${GREEN}1${NC}/2/3]: ")" mode_choice 2>/dev/null || true
+    echo ""
 
-    # Gateway 端口
-    pick_port 18789 18790 "Gateway"
-    GW_PORT="$PICKED_PORT"
-
-    # SSH 端口（对齐 Windows: 2222→容器22）
-    pick_port 2222 2223 "SSH"
-    SSH_PORT="$PICKED_PORT"
-
-    # HTTPS（可选）
-    read -p "HTTPS域名（可选，留空跳过，也可输入IP地址）: " DOMAIN
-
-    CERT_MODE="letsencrypt"  # 默认证书模式
-
-    if [ -n "$DOMAIN" ]; then
-        # 检测输入是否为 IP 地址（对齐 Windows 自动检测逻辑）
-        if echo "$DOMAIN" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
-            CERT_MODE="internal"
-            info "检测到 IP 地址，将使用自签证书 HTTPS 模式"
-            echo -e "  ${YELLOW}访问时浏览器会提示「不安全」，点击「继续访问」即可${NC}"
-            echo -e "  ${YELLOW}如需受信任证书，请使用域名并选择 Let's Encrypt${NC}"
-        fi
-
-        if [ "$CERT_MODE" = "internal" ]; then
-            # IP+自签名: 只需 HTTPS 端口，不需要 80（无 ACME 验证）
-            pick_port 8443 8444 "HTTPS"
-            HTTPS_PORT="$PICKED_PORT"
-        else
-            # 域名模式: 需要 80（Let's Encrypt ACME 验证 + HTTP→HTTPS 跳转）
-            pick_port 80 8080 "HTTP"
-            HTTP_PORT="$PICKED_PORT"
-
-            pick_port 8443 8444 "HTTPS"
-            HTTPS_PORT="$PICKED_PORT"
-        fi
-
-        # 非 IP 模式才让用户选择证书模式
-        if [ "$CERT_MODE" != "internal" ]; then
-            # 证书模式选择（参考 Windows Get-DeployConfig）
-            echo ""
-            echo -e "${BOLD}━━━ HTTPS 证书模式 ━━━${NC}"
-            echo -e "  ${CYAN}[1]${NC} Let's Encrypt 自动证书（推荐，需域名解析到本机）"
-            echo -e "  ${CYAN}[2]${NC} 内置自签证书（内网/测试用，浏览器会提示不安全）"
-            local cert_choice=""
-            read -t 15 -p "请选择 [1/2，默认1，15秒超时自动选择1]: " cert_choice 2>/dev/null || true
-            echo ""
-            if [ "$cert_choice" = "2" ]; then
-                CERT_MODE="internal"
-                info "将使用内置自签证书"
+    case "$mode_choice" in
+        2)
+            read -p "请输入域名（如 git.example.com）: " DOMAIN 2>/dev/null || true
+            if [ -z "$DOMAIN" ]; then
+                warn "未输入域名，回退到 HTTP 直连模式"
+                CERT_MODE=""
             else
                 CERT_MODE="letsencrypt"
-                info "将使用 Let's Encrypt 自动证书"
+                info "模式: 域名 + Let's Encrypt (${DOMAIN})"
             fi
-        fi
-
-        # HTTPS 模式端口映射
-        if [ "$CERT_MODE" = "internal" ]; then
-            # IP+自签名: 仅 HTTPS + 内部服务 + SSH
-            PORT_ARGS="-p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000 -p ${SSH_PORT}:22"
-        else
-            # 域名+LE: HTTP(ACME) + HTTPS + 内部服务 + SSH
-            PORT_ARGS="-p ${HTTP_PORT}:80 -p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000 -p ${SSH_PORT}:22"
-        fi
-    else
-        # 域名为空 — 提供 IP 自签名 HTTPS 选项（对齐 Windows）
-        echo ""
-        echo -e "  ${BOLD}🔒 是否启用 HTTPS（自签证书 + 本机 IP）？${NC}"
-        echo -e "  ${YELLOW}无需域名，Caddy 自动为本机 IP 生成自签名证书${NC}"
-        echo -e "  ${YELLOW}浏览器会提示「不安全」，点击「继续访问」即可${NC}"
-        echo ""
-        echo -e "  ${CYAN}[1]${NC} 不需要，使用 HTTP 直连（默认）"
-        echo -e "  ${CYAN}[2]${NC} 启用 IP 自签名 HTTPS"
-        local ip_https_choice=""
-        read -t 15 -p "请选择 [1/2，默认1，15秒超时自动选择1]: " ip_https_choice 2>/dev/null || true
-        echo ""
-        if [ "$ip_https_choice" = "2" ]; then
+            ;;
+        3)
             # 自动检测本机 IP（排除 docker/虚拟网卡）
             local local_ip=""
             local_ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
@@ -773,7 +723,7 @@ first_time_setup() {
             if [ -n "$local_ip" ]; then
                 echo -e "  检测到本机 IP: ${CYAN}${local_ip}${NC}"
                 read -p "  使用此 IP？按回车确认，或输入其他 IP: " custom_ip 2>/dev/null || true
-                if echo "$custom_ip" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
+                if [ -n "$custom_ip" ] && echo "$custom_ip" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
                     local_ip="$custom_ip"
                 fi
             else
@@ -783,74 +733,59 @@ first_time_setup() {
             if echo "$local_ip" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
                 DOMAIN="$local_ip"
                 CERT_MODE="internal"
-                success "已启用 IP 自签名 HTTPS: $local_ip"
-
-                pick_port 8443 8444 "HTTPS"
-                HTTPS_PORT="$PICKED_PORT"
-
-                PORT_ARGS="-p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000 -p ${SSH_PORT}:22"
+                info "模式: IP 自签名 HTTPS (${DOMAIN})"
+                echo -e "  ${YELLOW}访问时浏览器会提示「不安全」，点击「继续访问」即可${NC}"
             else
-                warn "IP 格式无效，将使用 HTTP 直连模式"
+                warn "IP 格式无效，回退到 HTTP 直连模式"
+                CERT_MODE=""
             fi
-        fi
+            ;;
+        *)
+            info "模式: HTTP 直连"
+            CERT_MODE=""
+            ;;
+    esac
 
-        # 如果未选择 IP HTTPS，使用 HTTP 直连模式
-        if [ -z "$DOMAIN" ]; then
-            pick_port 3000 3001 "Web管理面板"
-            WEB_PORT="$PICKED_PORT"
-            PORT_ARGS="-p ${GW_PORT}:18789 -p ${WEB_PORT}:3000 -p ${SSH_PORT}:22"
-        fi
-    fi
-
-    # ---- 端口映射汇总 + 手动修改机会 ----
+    # ============================================
+    # 第二步：根据模式逐个询问端口
+    # ============================================
     echo ""
-    echo -e "${BOLD}━━━ 端口映射汇总 ━━━${NC}"
-    echo -e "  ${CYAN}Gateway${NC}  ${GW_PORT} → 容器 18789"
-    echo -e "  ${CYAN}SSH${NC}      ${SSH_PORT} → 容器 22"
+    echo -e "${BOLD}━━━ 端口配置（回车使用推荐值，输入数字自定义）━━━${NC}"
+
+    # 所有模式都需要 Gateway 和 SSH
+    ask_port 18789 18790 "Gateway"
+    GW_PORT="$PICKED_PORT"
+
+    ask_port 2222 2223 "SSH"
+    SSH_PORT="$PICKED_PORT"
+
     if [ -n "$DOMAIN" ] && [ "$CERT_MODE" = "letsencrypt" ]; then
-        echo -e "  ${CYAN}HTTP${NC}     ${HTTP_PORT} → 容器 80   (ACME验证+跳转)"
-        echo -e "  ${CYAN}HTTPS${NC}    ${HTTPS_PORT} → 容器 443"
-    elif [ -n "$DOMAIN" ]; then
-        echo -e "  ${CYAN}HTTPS${NC}    ${HTTPS_PORT} → 容器 443  (自签证书)"
+        # 域名+LE: HTTP(80) + HTTPS(443) + 内部GW/Web
+        ask_port 80 8080 "HTTP(ACME验证)"
+        HTTP_PORT="$PICKED_PORT"
+
+        ask_port 8443 8444 "HTTPS"
+        HTTPS_PORT="$PICKED_PORT"
+
+        PORT_ARGS="-p ${HTTP_PORT}:80 -p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000 -p ${SSH_PORT}:22"
+
+    elif [ -n "$DOMAIN" ] && [ "$CERT_MODE" = "internal" ]; then
+        # IP+自签名: HTTPS(443) + 内部GW/Web
+        ask_port 8443 8444 "HTTPS"
+        HTTPS_PORT="$PICKED_PORT"
+
+        PORT_ARGS="-p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000 -p ${SSH_PORT}:22"
+
     else
-        echo -e "  ${CYAN}Web面板${NC}  ${WEB_PORT} → 容器 3000"
-    fi
-    echo ""
-    local port_ok=""
-    read -t 10 -p "$(echo -e "按回车确认，或输入 ${YELLOW}C${NC} 自定义端口 [10秒超时自动确认]: ")" port_ok 2>/dev/null || true
-    echo ""
-    if [[ "$port_ok" == "c" || "$port_ok" == "C" ]]; then
-        echo -e "  ${CYAN}按回车保留当前值，输入新端口号覆盖${NC}"
-        # Gateway
-        read -p "  Gateway 端口 [$GW_PORT]: " _p 2>/dev/null || true
-        [[ -n "$_p" && "$_p" =~ ^[0-9]+$ ]] && GW_PORT="$_p"
-        # SSH
-        read -p "  SSH 端口 [$SSH_PORT]: " _p 2>/dev/null || true
-        [[ -n "$_p" && "$_p" =~ ^[0-9]+$ ]] && SSH_PORT="$_p"
+        # HTTP 直连: GW + Web + SSH
+        ask_port 3000 3001 "Web管理面板"
+        WEB_PORT="$PICKED_PORT"
 
-        if [ -n "$DOMAIN" ] && [ "$CERT_MODE" = "letsencrypt" ]; then
-            read -p "  HTTP 端口 [$HTTP_PORT]: " _p 2>/dev/null || true
-            [[ -n "$_p" && "$_p" =~ ^[0-9]+$ ]] && HTTP_PORT="$_p"
-            read -p "  HTTPS 端口 [$HTTPS_PORT]: " _p 2>/dev/null || true
-            [[ -n "$_p" && "$_p" =~ ^[0-9]+$ ]] && HTTPS_PORT="$_p"
-        elif [ -n "$DOMAIN" ]; then
-            read -p "  HTTPS 端口 [$HTTPS_PORT]: " _p 2>/dev/null || true
-            [[ -n "$_p" && "$_p" =~ ^[0-9]+$ ]] && HTTPS_PORT="$_p"
-        else
-            read -p "  Web面板 端口 [$WEB_PORT]: " _p 2>/dev/null || true
-            [[ -n "$_p" && "$_p" =~ ^[0-9]+$ ]] && WEB_PORT="$_p"
-        fi
-
-        # 重新构建 PORT_ARGS
-        if [ -n "$DOMAIN" ] && [ "$CERT_MODE" = "letsencrypt" ]; then
-            PORT_ARGS="-p ${HTTP_PORT}:80 -p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000 -p ${SSH_PORT}:22"
-        elif [ -n "$DOMAIN" ]; then
-            PORT_ARGS="-p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000 -p ${SSH_PORT}:22"
-        else
-            PORT_ARGS="-p ${GW_PORT}:18789 -p ${WEB_PORT}:3000 -p ${SSH_PORT}:22"
-        fi
-        success "端口已更新"
+        PORT_ARGS="-p ${GW_PORT}:18789 -p ${WEB_PORT}:3000 -p ${SSH_PORT}:22"
     fi
+
+    echo ""
+    success "端口配置完成"
 
     # 保存配置
     mkdir -p "$HOME_DIR/.openclaw"
