@@ -18,6 +18,7 @@ NC='\033[0m'
 CONTAINER_NAME="openclaw-pro"
 IMAGE_NAME="openclaw-pro"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TMP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)/tmp"
 HOME_DIR="$SCRIPT_DIR/home-data"
 CONFIG_FILE="$HOME_DIR/.openclaw/docker-config.json"
 
@@ -59,8 +60,8 @@ ensure_docker() {
     success "Docker 安装完成"
 }
 
-# 日志持久化
-LOG_DIR="$SCRIPT_DIR/logs"
+# 日志持久化（与 Windows 一致，放在 openclaw-pro 同级 tmp 目录）
+LOG_DIR="$TMP_DIR"
 LOG_FILE="$LOG_DIR/openclaw-docker.log"
 mkdir -p "$LOG_DIR" 2>/dev/null || true
 log_msg() {
@@ -187,7 +188,7 @@ ensure_image() {
 
     # 方式1: 本地已有导出的 tar.gz（手动下载或 install.sh 已下载）
     local local_tar=""
-    for f in "$SCRIPT_DIR/$asset_name" "$SCRIPT_DIR/$IMAGE_TARBALL"; do
+    for f in "$TMP_DIR/$asset_name" "$TMP_DIR/$IMAGE_TARBALL" "$SCRIPT_DIR/$asset_name" "$SCRIPT_DIR/$IMAGE_TARBALL"; do
         if [ -f "$f" ]; then
             local_tar="$f"
             break
@@ -229,7 +230,8 @@ ensure_image() {
 # 支持: 多代理镜像源、aria2c多线程、curl断点续传、文件大小校验
 download_release_image() {
     local asset_name="${1:-$IMAGE_TARBALL}"
-    local target="$SCRIPT_DIR/$asset_name"
+    local target="$TMP_DIR/$asset_name"
+    mkdir -p "$TMP_DIR" 2>/dev/null || true
 
     # 获取下载链接和预期大小
     local asset_info download_url expected_size=0
@@ -285,7 +287,7 @@ download_release_image() {
         for url in "${download_urls[@]}"; do
             echo "$url" >> "$aria_input"
             echo "  out=$asset_name" >> "$aria_input"
-            echo "  dir=$SCRIPT_DIR" >> "$aria_input"
+            echo "  dir=$TMP_DIR" >> "$aria_input"
             echo "" >> "$aria_input"
         done
 
@@ -300,7 +302,7 @@ download_release_image() {
             --allow-overwrite=true \
             --console-log-level=notice \
             --summary-interval=5 \
-            -d "$SCRIPT_DIR" \
+            -d "$TMP_DIR" \
             -o "$asset_name" \
             -i "$aria_input" 2>&1 | tail -5; then
             rm -f "$aria_input"
@@ -351,12 +353,12 @@ download_release_image() {
     echo ""
     echo -e "  ${YELLOW}💡 手动下载方法:${NC}"
     echo -e "  ${CYAN}1. 浏览器打开: https://github.com/${GITHUB_REPO}/releases/latest${NC}"
-    echo -e "  ${CYAN}2. 下载 ${asset_name} 到 ${SCRIPT_DIR}/${NC}"
+    echo -e "  ${CYAN}2. 下载 ${asset_name} 到 ${TMP_DIR}/${NC}"
     echo -e "  ${CYAN}3. 重新运行: ./openclaw-docker.sh run${NC}"
     echo ""
     if command -v aria2c &>/dev/null; then
         echo -e "  ${CYAN}或使用 aria2c:${NC}"
-        echo -e "  ${CYAN}aria2c -x 8 -s 8 -k 2M --continue=true -d $SCRIPT_DIR ${download_urls[0]}${NC}"
+        echo -e "  ${CYAN}aria2c -x 8 -s 8 -k 2M --continue=true -d $TMP_DIR ${download_urls[0]}${NC}"
     else
         echo -e "  ${CYAN}💡 安装 aria2c 可获得8线程下载: sudo apt-get install -y aria2${NC}"
     fi
