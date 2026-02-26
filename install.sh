@@ -92,8 +92,17 @@ fi
 # ---- 3.5 aria2c: optional hint (never force install) ----
 if ! command -v aria2c &>/dev/null; then
   echo "💡 提示: 安装 aria2c 可获得 8 线程加速下载（可选，非必须）"
-  echo "   apt: sudo apt-get install -y aria2"
-  echo "   dnf: sudo dnf install -y aria2"
+  if command -v apt-get &>/dev/null; then
+    echo "   sudo apt-get install -y aria2"
+  elif command -v dnf &>/dev/null; then
+    echo "   sudo dnf install -y aria2"
+  elif command -v yum &>/dev/null; then
+    echo "   sudo yum install -y aria2"
+  elif command -v pacman &>/dev/null; then
+    echo "   sudo pacman -S aria2"
+  elif command -v brew &>/dev/null; then
+    echo "   brew install aria2"
+  fi
   echo "   当前将使用 curl 断点续传下载，也能正常工作。"
   echo ""
 fi
