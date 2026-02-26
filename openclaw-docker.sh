@@ -77,12 +77,13 @@ IMAGE_TARBALL="openclaw-pro-image.tar.gz"
 IMAGE_EDITION="full"  # 默认完整版，用户可在首次安装时选择
 
 # 代理镜像列表（对齐 Windows Download-Robust，国内直连 github.com 通常很慢）
+# 先尝试直连，再逐个尝试代理；每个源快速探测可达性后再下载
 PROXY_PREFIXES=(
     "https://ghfast.top/"
-    "https://mirror.ghproxy.com/"
     "https://gh-proxy.com/"
-    "https://github.moeyy.xyz/"
     "https://ghproxy.net/"
+    "https://mirror.ghproxy.com/"
+    "https://github.moeyy.xyz/"
 )
 
 # 获取远端最新 Release tag
@@ -123,16 +124,28 @@ except: pass
     fi
 }
 
+# 快速探测 URL 是否可达（HEAD 请求，5秒超时）
+# 返回 0=可达 1=不可达
+_probe_url() {
+    local url="$1"
+    local http_code
+    http_code=$(curl -sI -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 8 -L "$url" 2>/dev/null || echo "000")
+    # 2xx/3xx/4xx(GitHub returns 403 for direct asset but redirect works) 都算可达
+    [[ "$http_code" =~ ^[2345] ]] && return 0
+    return 1
+}
+
 # 构建带代理镜像的下载URL列表
 # 参数: 原始 GitHub URL
-# 输出: 代理URLs（优先）+ 直连URL
+# 输出: 直连URL（优先尝试）+ 代理URLs
 build_download_urls() {
     local base_url="$1"
     local urls=()
+    # 直连优先：很多环境可以直连 GitHub（只是慢而已）
+    urls+=("$base_url")
     for prefix in "${PROXY_PREFIXES[@]}"; do
         urls+=("${prefix}${base_url}")
     done
-    urls+=("$base_url")
     echo "${urls[@]}"
 }
 
@@ -295,8 +308,8 @@ download_release_image() {
             -x 8 -s 8 -k 2M \
             --continue=true \
             --retry-wait=3 \
-            --max-tries=20 \
-            --connect-timeout=15 \
+            --max-tries=5 \
+            --connect-timeout=10 \
             --timeout=30 \
             --auto-file-renaming=false \
             --allow-overwrite=true \
@@ -325,16 +338,24 @@ download_release_image() {
         attempt=$((attempt + 1))
         local short_url
         short_url=$(echo "$url" | head -c 80)
-        info "[$attempt/${#download_urls[@]}] 尝试: ${short_url}..."
+
+        # 快速探测源是否可达（避免在坏源上浪费大量重试时间）
+        info "[$attempt/${#download_urls[@]}] 探测: ${short_url}..."
+        if ! _probe_url "$url"; then
+            warn "此源不可达，跳过"
+            log_msg "curl probe failed: $url"
+            continue
+        fi
+        info "[$attempt/${#download_urls[@]}] 下载中: ${short_url}..."
         log_msg "curl attempt $attempt: $url"
 
         if curl -fL \
             -C - \
-            --retry 10 \
+            --retry 3 \
             --retry-all-errors \
             --retry-delay 3 \
-            --retry-max-time 600 \
-            --connect-timeout 15 \
+            --retry-max-time 120 \
+            --connect-timeout 10 \
             --max-time 1800 \
             --progress-bar \
             -o "$target" \
