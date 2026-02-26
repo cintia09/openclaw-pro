@@ -667,40 +667,99 @@ first_time_setup() {
     GW_PORT="$PICKED_PORT"
 
     # HTTPS（可选）
-    read -p "HTTPS域名（可选，留空=不启用HTTPS）: " DOMAIN
+    read -p "HTTPS域名（可选，留空=不启用HTTPS，也可输入IP地址）: " DOMAIN
 
     CERT_MODE="letsencrypt"  # 默认证书模式
 
     if [ -n "$DOMAIN" ]; then
+        # 检测输入是否为 IP 地址（对齐 Windows 自动检测逻辑）
+        if echo "$DOMAIN" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
+            CERT_MODE="internal"
+            info "检测到 IP 地址，将使用自签证书 HTTPS 模式"
+            echo -e "  ${YELLOW}访问时浏览器会提示「不安全」，点击「继续访问」即可${NC}"
+            echo -e "  ${YELLOW}如需受信任证书，请使用域名并选择 Let's Encrypt${NC}"
+        fi
+
         pick_port 80 8080 "HTTP"
         HTTP_PORT="$PICKED_PORT"
 
         pick_port 8443 8444 "HTTPS"
         HTTPS_PORT="$PICKED_PORT"
 
-        # 证书模式选择（参考 Windows Get-DeployConfig）
-        echo ""
-        echo -e "${BOLD}━━━ HTTPS 证书模式 ━━━${NC}"
-        echo -e "  ${CYAN}[1]${NC} Let's Encrypt 自动证书（推荐，需域名解析到本机）"
-        echo -e "  ${CYAN}[2]${NC} 内置自签证书（内网/测试用，浏览器会提示不安全）"
-        local cert_choice=""
-        read -t 15 -p "请选择 [1/2，默认1，15秒超时自动选择1]: " cert_choice 2>/dev/null || true
-        echo ""
-        if [ "$cert_choice" = "2" ]; then
-            CERT_MODE="internal"
-            info "将使用内置自签证书"
-        else
-            CERT_MODE="letsencrypt"
-            info "将使用 Let's Encrypt 自动证书"
+        # 非 IP 模式才让用户选择证书模式
+        if [ "$CERT_MODE" != "internal" ]; then
+            # 证书模式选择（参考 Windows Get-DeployConfig）
+            echo ""
+            echo -e "${BOLD}━━━ HTTPS 证书模式 ━━━${NC}"
+            echo -e "  ${CYAN}[1]${NC} Let's Encrypt 自动证书（推荐，需域名解析到本机）"
+            echo -e "  ${CYAN}[2]${NC} 内置自签证书（内网/测试用，浏览器会提示不安全）"
+            local cert_choice=""
+            read -t 15 -p "请选择 [1/2，默认1，15秒超时自动选择1]: " cert_choice 2>/dev/null || true
+            echo ""
+            if [ "$cert_choice" = "2" ]; then
+                CERT_MODE="internal"
+                info "将使用内置自签证书"
+            else
+                CERT_MODE="letsencrypt"
+                info "将使用 Let's Encrypt 自动证书"
+            fi
         fi
 
         # HTTPS 模式：80/443 对外；Gateway/Web 仅本机（通过 Caddy 反代访问）
         PORT_ARGS="-p ${HTTP_PORT}:80 -p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000"
     else
-        # 内网/直连模式：Gateway + Web 面板直接暴露
-        pick_port 3000 3001 "Web管理面板"
-        WEB_PORT="$PICKED_PORT"
-        PORT_ARGS="-p ${GW_PORT}:18789 -p ${WEB_PORT}:3000"
+        # 域名为空 — 提供 IP 自签名 HTTPS 选项（对齐 Windows）
+        echo ""
+        echo -e "  ${BOLD}🔒 是否启用 HTTPS（自签证书 + 本机 IP）？${NC}"
+        echo -e "  ${YELLOW}无需域名，Caddy 自动为本机 IP 生成自签名证书${NC}"
+        echo -e "  ${YELLOW}浏览器会提示「不安全」，点击「继续访问」即可${NC}"
+        echo ""
+        echo -e "  ${CYAN}[1]${NC} 不需要，使用 HTTP 直连（默认）"
+        echo -e "  ${CYAN}[2]${NC} 启用 IP 自签名 HTTPS"
+        local ip_https_choice=""
+        read -t 15 -p "请选择 [1/2，默认1，15秒超时自动选择1]: " ip_https_choice 2>/dev/null || true
+        echo ""
+        if [ "$ip_https_choice" = "2" ]; then
+            # 自动检测本机 IP（排除 docker/虚拟网卡）
+            local local_ip=""
+            local_ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
+            if [ -z "$local_ip" ]; then
+                local_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+            fi
+
+            if [ -n "$local_ip" ]; then
+                echo -e "  检测到本机 IP: ${CYAN}${local_ip}${NC}"
+                read -p "  使用此 IP？按回车确认，或输入其他 IP: " custom_ip 2>/dev/null || true
+                if echo "$custom_ip" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
+                    local_ip="$custom_ip"
+                fi
+            else
+                read -p "  请输入本机 IP 地址: " local_ip 2>/dev/null || true
+            fi
+
+            if echo "$local_ip" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
+                DOMAIN="$local_ip"
+                CERT_MODE="internal"
+                success "已启用 IP 自签名 HTTPS: $local_ip"
+
+                pick_port 80 8080 "HTTP"
+                HTTP_PORT="$PICKED_PORT"
+
+                pick_port 8443 8444 "HTTPS"
+                HTTPS_PORT="$PICKED_PORT"
+
+                PORT_ARGS="-p ${HTTP_PORT}:80 -p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000"
+            else
+                warn "IP 格式无效，将使用 HTTP 直连模式"
+            fi
+        fi
+
+        # 如果未选择 IP HTTPS，使用 HTTP 直连模式
+        if [ -z "$DOMAIN" ]; then
+            pick_port 3000 3001 "Web管理面板"
+            WEB_PORT="$PICKED_PORT"
+            PORT_ARGS="-p ${GW_PORT}:18789 -p ${WEB_PORT}:3000"
+        fi
     fi
 
     # 保存配置
