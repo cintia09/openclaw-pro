@@ -260,9 +260,16 @@ async function checkForUpdate(force = false) {
     } else if (u.latestVersion) {
       statusEl.innerHTML = '<span style="color:#888">✅ 已是最新</span>';
       if (linkEl) linkEl.style.display = 'none';
+      // Hide hot update button and full update note when already up to date
+      const hpBtn = $('btn-hotpatch');
+      const fullNote = $('settings-full-update-note');
+      if (hpBtn) hpBtn.style.display = 'none';
+      if (fullNote) fullNote.style.display = 'none';
     } else {
       statusEl.textContent = u.error || '检查失败';
       if (linkEl) linkEl.style.display = 'none';
+      const hpBtn = $('btn-hotpatch');
+      if (hpBtn) hpBtn.style.display = 'none';
     }
   }
 
