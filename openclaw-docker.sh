@@ -182,7 +182,7 @@ ensure_image() {
             echo -e "  ${CYAN}[1]${NC} 使用本地镜像（默认）"
             echo -e "  ${CYAN}[2]${NC} 下载最新镜像"
             local img_choice=""
-            read -t 10 -p "请选择 [1/2，默认1，10秒超时自动选择1]: " img_choice 2>/dev/null || true
+            read -t 10 -p "请选择 [1/2，默认1，10秒超时自动选择1]: " img_choice || true
             echo ""
             if [ "$img_choice" = "2" ]; then
                 info "将下载最新镜像..."
@@ -525,7 +525,7 @@ ask_port() {
     fi
 
     local input=""
-    read -p "$(echo -e "  ${CYAN}${desc}${NC} 端口 [${GREEN}${recommended}${NC}，回车自动]: ")" input 2>/dev/null || true
+    read -p "$(echo -e "  ${CYAN}${desc}${NC} 端口 [${GREEN}${recommended}${NC}，回车自动]: ")" input || true
 
     if [ -z "$input" ]; then
         PICKED_PORT="$recommended"
@@ -698,12 +698,12 @@ first_time_setup() {
     echo -e "  ${CYAN}[2]${NC} 域名 + Let's Encrypt 自动 HTTPS（推荐公网）"
     echo -e "  ${CYAN}[3]${NC} IP + 自签名 HTTPS（内网 HTTPS）"
     local mode_choice=""
-    read -p "$(echo -e "请选择部署模式 [${GREEN}1${NC}/2/3]: ")" mode_choice 2>/dev/null || true
+    read -p "$(echo -e "请选择部署模式 [${GREEN}1${NC}/2/3]: ")" mode_choice || true
     echo ""
 
     case "$mode_choice" in
         2)
-            read -p "请输入域名（如 git.example.com）: " DOMAIN 2>/dev/null || true
+            read -p "请输入域名（如 git.example.com）: " DOMAIN || true
             if [ -z "$DOMAIN" ]; then
                 warn "未输入域名，回退到 HTTP 直连模式"
                 CERT_MODE=""
@@ -722,12 +722,12 @@ first_time_setup() {
 
             if [ -n "$local_ip" ]; then
                 echo -e "  检测到本机 IP: ${CYAN}${local_ip}${NC}"
-                read -p "  使用此 IP？按回车确认，或输入其他 IP: " custom_ip 2>/dev/null || true
+                read -p "  使用此 IP？按回车确认，或输入其他 IP: " custom_ip || true
                 if [ -n "$custom_ip" ] && echo "$custom_ip" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
                     local_ip="$custom_ip"
                 fi
             else
-                read -p "  请输入本机 IP 地址: " local_ip 2>/dev/null || true
+                read -p "  请输入本机 IP 地址: " local_ip || true
             fi
 
             if echo "$local_ip" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
@@ -816,7 +816,7 @@ EOF
         echo -e "  ${CYAN}[1]${NC} 是，自动开启 ufw + fail2ban（推荐公网服务器）"
         echo -e "  ${CYAN}[2]${NC} 否，跳过（内网/已有防火墙策略）"
         local fw_choice=""
-        read -t 15 -p "请选择 [1/2，默认1，15秒超时自动选择1]: " fw_choice 2>/dev/null || true
+        read -t 15 -p "请选择 [1/2，默认1，15秒超时自动选择1]: " fw_choice || true
         echo ""
         if [ "$fw_choice" = "2" ]; then
             do_firewall="n"
@@ -889,7 +889,7 @@ F2B
     echo -e "  ${CYAN}[2]${NC} 完整版（~1.6GB，约30分钟下载）"
     echo -e "      包含全部组件: Chrome、noVNC、LightGBM、openclaw 等"
     local edition_choice=""
-    read -t 15 -p "请选择 [1/2，默认1，15秒超时自动选择1]: " edition_choice 2>/dev/null || true
+    read -t 15 -p "请选择 [1/2，默认1，15秒超时自动选择1]: " edition_choice || true
     echo ""
     if [ "$edition_choice" = "2" ]; then
         IMAGE_EDITION="full"
@@ -1010,7 +1010,7 @@ cmd_run() {
             echo -e "  ${CYAN}[1]${NC} 清除旧容器，重新配置（默认）"
             echo -e "  ${CYAN}[2]${NC} 启动已有容器"
             local choice=""
-            read -t 10 -p "请选择 [1/2，默认1，10秒超时自动选择1]: " choice 2>/dev/null || true
+            read -t 10 -p "请选择 [1/2，默认1，10秒超时自动选择1]: " choice || true
             echo ""
             if [ "$choice" = "2" ]; then
                 local first_container
@@ -1233,7 +1233,7 @@ cmd_update() {
     echo ""
     local default_choice
     default_choice=$($recommend_full && echo "2" || echo "1")
-    read -p "请选择 [1/2，默认$default_choice]: " update_choice 2>/dev/null || true
+    read -p "请选择 [1/2，默认$default_choice]: " update_choice || true
     update_choice="${update_choice:-$default_choice}"
 
     if [ "$update_choice" = "1" ]; then
