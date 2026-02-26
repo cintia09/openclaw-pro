@@ -1377,7 +1377,7 @@ cmd_update() {
                 fi
                 # 检查是否有任何更新可用
                 local update_available
-                update_available=$(echo "$check_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print('true' if d.get('hasUpdate', d.get('updateAvailable', True)) else 'false')" 2>/dev/null || echo "true")
+                update_available=$(echo "$check_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print('false' if d.get('hasUpdate') is False or d.get('updateAvailable') is False else 'true')" 2>/dev/null || echo "true")
                 remote_ver=$(echo "$check_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('remoteVersion', d.get('latestVersion', '')))" 2>/dev/null || true)
                 if [ "$update_available" = "false" ]; then
                     has_update=false
@@ -1463,6 +1463,20 @@ _do_hotpatch() {
 
     for i in $(seq 1 180); do
         sleep 1
+        # 超过 60 秒提示可能是网络问题
+        if [ "$i" -eq 60 ] && ! $was_running; then
+            echo ""
+            warn "热更新等待超过 60 秒，可能是容器内无法访问 GitHub"
+            echo -e "  提示: 容器内需要能访问 github.com 才能拉取更新"
+            echo -e "  如需完整更新（从宿主机下载镜像），请选择 ${CYAN}$0 update${NC} → 选项2"
+            local abort_choice=""
+            read -t 5 -p "继续等待？[Y/n，5秒超时继续]: " abort_choice || true
+            echo ""
+            if [[ "$abort_choice" =~ ^[nN] ]]; then
+                warn "已取消热更新"
+                return 1
+            fi
+        fi
         local status_json
         status_json=$(docker exec "$CONTAINER_NAME" curl -sf http://127.0.0.1:3000/api/update/hotpatch/status 2>/dev/null || true)
         if [ -z "$status_json" ]; then
