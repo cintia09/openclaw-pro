@@ -28,6 +28,17 @@ success() { echo -e "${GREEN}[OK]${NC} $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
 error()   { echo -e "${RED}[ERROR]${NC} $*"; }
 
+# 构建代理环境变量参数（自动继承宿主机代理配置到容器）
+build_proxy_args() {
+    PROXY_ARGS=""
+    for var in http_proxy HTTP_PROXY https_proxy HTTPS_PROXY no_proxy NO_PROXY; do
+        local val="${!var:-}"
+        if [ -n "$val" ]; then
+            PROXY_ARGS="$PROXY_ARGS -e $var=$val"
+        fi
+    done
+}
+
 # 容器启动后修复：检查并补装缺失依赖、修复 sshd 配置
 fix_container_env() {
     local cname="${1:-$CONTAINER_NAME}"
@@ -973,6 +984,7 @@ F2B
     ssh-keygen -R "[127.0.0.1]:${SSH_PORT}" 2>/dev/null || true
 
     # 创建容器
+    build_proxy_args
     info "创建容器..."
     docker create \
         --name "$CONTAINER_NAME" \
@@ -992,6 +1004,7 @@ F2B
         -e "TZ=$TZ_VAL" \
         -e "CERT_MODE=$CERT_MODE" \
         -e "DOMAIN=$DOMAIN" \
+        $PROXY_ARGS \
         --restart unless-stopped \
         "$IMAGE_NAME"
 
@@ -1533,6 +1546,7 @@ _do_full_update() {
     ssh-keygen -R "[127.0.0.1]:${ssh_port}" 2>/dev/null || true
 
     # 启动新容器
+    build_proxy_args
     info "启动新容器..."
     docker run -d \
         --name "$CONTAINER_NAME" \
@@ -1552,6 +1566,7 @@ _do_full_update() {
         -e "TZ=$tz" \
         -e "CERT_MODE=$cert_mode" \
         -e "DOMAIN=$domain" \
+        $PROXY_ARGS \
         --restart unless-stopped \
         "$IMAGE_NAME"
 
