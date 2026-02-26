@@ -710,11 +710,18 @@ first_time_setup() {
             echo -e "  ${YELLOW}如需受信任证书，请使用域名并选择 Let's Encrypt${NC}"
         fi
 
-        pick_port 80 8080 "HTTP"
-        HTTP_PORT="$PICKED_PORT"
+        if [ "$CERT_MODE" = "internal" ]; then
+            # IP+自签名: 只需 HTTPS 端口，不需要 80（无 ACME 验证）
+            pick_port 8443 8444 "HTTPS"
+            HTTPS_PORT="$PICKED_PORT"
+        else
+            # 域名模式: 需要 80（Let's Encrypt ACME 验证 + HTTP→HTTPS 跳转）
+            pick_port 80 8080 "HTTP"
+            HTTP_PORT="$PICKED_PORT"
 
-        pick_port 8443 8444 "HTTPS"
-        HTTPS_PORT="$PICKED_PORT"
+            pick_port 8443 8444 "HTTPS"
+            HTTPS_PORT="$PICKED_PORT"
+        fi
 
         # 非 IP 模式才让用户选择证书模式
         if [ "$CERT_MODE" != "internal" ]; then
@@ -735,8 +742,14 @@ first_time_setup() {
             fi
         fi
 
-        # HTTPS 模式：80/443 对外；Gateway/Web 仅本机（通过 Caddy 反代访问）
-        PORT_ARGS="-p ${HTTP_PORT}:80 -p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000 -p ${SSH_PORT}:22"
+        # HTTPS 模式端口映射
+        if [ "$CERT_MODE" = "internal" ]; then
+            # IP+自签名: 仅 HTTPS + 内部服务 + SSH
+            PORT_ARGS="-p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000 -p ${SSH_PORT}:22"
+        else
+            # 域名+LE: HTTP(ACME) + HTTPS + 内部服务 + SSH
+            PORT_ARGS="-p ${HTTP_PORT}:80 -p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000 -p ${SSH_PORT}:22"
+        fi
     else
         # 域名为空 — 提供 IP 自签名 HTTPS 选项（对齐 Windows）
         echo ""
@@ -772,13 +785,10 @@ first_time_setup() {
                 CERT_MODE="internal"
                 success "已启用 IP 自签名 HTTPS: $local_ip"
 
-                pick_port 80 8080 "HTTP"
-                HTTP_PORT="$PICKED_PORT"
-
                 pick_port 8443 8444 "HTTPS"
                 HTTPS_PORT="$PICKED_PORT"
 
-                PORT_ARGS="-p ${HTTP_PORT}:80 -p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000 -p ${SSH_PORT}:22"
+                PORT_ARGS="-p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000 -p ${SSH_PORT}:22"
             else
                 warn "IP 格式无效，将使用 HTTP 直连模式"
             fi
@@ -790,6 +800,56 @@ first_time_setup() {
             WEB_PORT="$PICKED_PORT"
             PORT_ARGS="-p ${GW_PORT}:18789 -p ${WEB_PORT}:3000 -p ${SSH_PORT}:22"
         fi
+    fi
+
+    # ---- 端口映射汇总 + 手动修改机会 ----
+    echo ""
+    echo -e "${BOLD}━━━ 端口映射汇总 ━━━${NC}"
+    echo -e "  ${CYAN}Gateway${NC}  ${GW_PORT} → 容器 18789"
+    echo -e "  ${CYAN}SSH${NC}      ${SSH_PORT} → 容器 22"
+    if [ -n "$DOMAIN" ] && [ "$CERT_MODE" = "letsencrypt" ]; then
+        echo -e "  ${CYAN}HTTP${NC}     ${HTTP_PORT} → 容器 80   (ACME验证+跳转)"
+        echo -e "  ${CYAN}HTTPS${NC}    ${HTTPS_PORT} → 容器 443"
+    elif [ -n "$DOMAIN" ]; then
+        echo -e "  ${CYAN}HTTPS${NC}    ${HTTPS_PORT} → 容器 443  (自签证书)"
+    else
+        echo -e "  ${CYAN}Web面板${NC}  ${WEB_PORT} → 容器 3000"
+    fi
+    echo ""
+    local port_ok=""
+    read -t 10 -p "$(echo -e "按回车确认，或输入 ${YELLOW}C${NC} 自定义端口 [10秒超时自动确认]: ")" port_ok 2>/dev/null || true
+    echo ""
+    if [[ "$port_ok" == "c" || "$port_ok" == "C" ]]; then
+        echo -e "  ${CYAN}按回车保留当前值，输入新端口号覆盖${NC}"
+        # Gateway
+        read -p "  Gateway 端口 [$GW_PORT]: " _p 2>/dev/null || true
+        [[ -n "$_p" && "$_p" =~ ^[0-9]+$ ]] && GW_PORT="$_p"
+        # SSH
+        read -p "  SSH 端口 [$SSH_PORT]: " _p 2>/dev/null || true
+        [[ -n "$_p" && "$_p" =~ ^[0-9]+$ ]] && SSH_PORT="$_p"
+
+        if [ -n "$DOMAIN" ] && [ "$CERT_MODE" = "letsencrypt" ]; then
+            read -p "  HTTP 端口 [$HTTP_PORT]: " _p 2>/dev/null || true
+            [[ -n "$_p" && "$_p" =~ ^[0-9]+$ ]] && HTTP_PORT="$_p"
+            read -p "  HTTPS 端口 [$HTTPS_PORT]: " _p 2>/dev/null || true
+            [[ -n "$_p" && "$_p" =~ ^[0-9]+$ ]] && HTTPS_PORT="$_p"
+        elif [ -n "$DOMAIN" ]; then
+            read -p "  HTTPS 端口 [$HTTPS_PORT]: " _p 2>/dev/null || true
+            [[ -n "$_p" && "$_p" =~ ^[0-9]+$ ]] && HTTPS_PORT="$_p"
+        else
+            read -p "  Web面板 端口 [$WEB_PORT]: " _p 2>/dev/null || true
+            [[ -n "$_p" && "$_p" =~ ^[0-9]+$ ]] && WEB_PORT="$_p"
+        fi
+
+        # 重新构建 PORT_ARGS
+        if [ -n "$DOMAIN" ] && [ "$CERT_MODE" = "letsencrypt" ]; then
+            PORT_ARGS="-p ${HTTP_PORT}:80 -p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000 -p ${SSH_PORT}:22"
+        elif [ -n "$DOMAIN" ]; then
+            PORT_ARGS="-p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000 -p ${SSH_PORT}:22"
+        else
+            PORT_ARGS="-p ${GW_PORT}:18789 -p ${WEB_PORT}:3000 -p ${SSH_PORT}:22"
+        fi
+        success "端口已更新"
     fi
 
     # 保存配置
@@ -843,15 +903,19 @@ EOF
             ufw default allow outgoing 2>/dev/null || true
             ufw allow 22/tcp
 
-            if [ -n "$DOMAIN" ]; then
+            if [ -n "$DOMAIN" ] && [ "$CERT_MODE" = "letsencrypt" ]; then
                 ufw allow "${HTTP_PORT}/tcp"
                 ufw allow "${HTTPS_PORT}/tcp"
-                success "ufw 将放行: 22/${HTTP_PORT}/${HTTPS_PORT}"
+                success "ufw 将放行: 22/${HTTP_PORT}/${HTTPS_PORT}/${SSH_PORT}"
+            elif [ -n "$DOMAIN" ]; then
+                ufw allow "${HTTPS_PORT}/tcp"
+                success "ufw 将放行: 22/${HTTPS_PORT}/${SSH_PORT}"
             else
                 ufw allow "${GW_PORT}/tcp"
                 ufw allow "${WEB_PORT}/tcp"
-                success "ufw 将放行: 22/${GW_PORT}/${WEB_PORT}"
+                success "ufw 将放行: 22/${GW_PORT}/${WEB_PORT}/${SSH_PORT}"
             fi
+            ufw allow "${SSH_PORT}/tcp"
 
             ufw --force enable
             success "ufw 防火墙已启用"
@@ -1362,8 +1426,11 @@ _do_full_update() {
 
     # 构建端口映射
     local PORT_ARGS=""
-    if [ -n "$domain" ]; then
+    if [ -n "$domain" ] && [ "$cert_mode" = "letsencrypt" ]; then
         PORT_ARGS="-p ${http_port}:80 -p ${https_port}:443 -p 127.0.0.1:${gw_port}:18789 -p 127.0.0.1:${web_port}:3000 -p ${ssh_port}:22"
+    elif [ -n "$domain" ]; then
+        # IP+自签名: 不需要 80
+        PORT_ARGS="-p ${https_port}:443 -p 127.0.0.1:${gw_port}:18789 -p 127.0.0.1:${web_port}:3000 -p ${ssh_port}:22"
     else
         PORT_ARGS="-p ${gw_port}:18789 -p ${web_port}:3000 -p ${ssh_port}:22"
     fi
