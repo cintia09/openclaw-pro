@@ -92,6 +92,22 @@ fix_container_env() {
             chmod 0440 /etc/sudoers.d/keep-proxy
         fi
     ' 2>/dev/null || true
+    # 添加国内 apt 镜像源（备选，不替换原始源）
+    docker exec "$cname" bash -c '
+        if [ ! -f /etc/apt/sources.list.d/cn-mirrors.list ]; then
+            codename=$(. /etc/os-release && echo "${UBUNTU_CODENAME:-noble}")
+            cat > /etc/apt/sources.list.d/cn-mirrors.list <<MIRRORS
+# 阿里云镜像（国内加速）
+deb http://mirrors.aliyun.com/ubuntu/ ${codename} main restricted universe multiverse
+deb http://mirrors.aliyun.com/ubuntu/ ${codename}-updates main restricted universe multiverse
+deb http://mirrors.aliyun.com/ubuntu/ ${codename}-security main restricted universe multiverse
+# 清华镜像
+deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu/ ${codename} main restricted universe multiverse
+deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu/ ${codename}-updates main restricted universe multiverse
+deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu/ ${codename}-security main restricted universe multiverse
+MIRRORS
+        fi
+    ' 2>/dev/null || true
 }
 
 # 检查 jq 是否安装（配置管理需要）
