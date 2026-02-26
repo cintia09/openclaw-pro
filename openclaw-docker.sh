@@ -59,15 +59,80 @@ ensure_docker() {
     success "Docker 安装完成"
 }
 
+# 日志持久化
+LOG_DIR="$SCRIPT_DIR/logs"
+LOG_FILE="$LOG_DIR/openclaw-docker.log"
+mkdir -p "$LOG_DIR" 2>/dev/null || true
+log_msg() {
+    local ts
+    ts=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$ts] $*" >> "$LOG_FILE" 2>/dev/null || true
+}
+
 # GitHub Release 配置
 GITHUB_REPO="cintia09/openclaw-pro"
 GHCR_IMAGE="ghcr.io/${GITHUB_REPO}"
 IMAGE_TARBALL="openclaw-pro-image.tar.gz"
+IMAGE_EDITION="full"  # 默认完整版，用户可在首次安装时选择
+
+# 代理镜像列表（对齐 Windows Download-Robust，国内直连 github.com 通常很慢）
+PROXY_PREFIXES=(
+    "https://ghfast.top/"
+    "https://mirror.ghproxy.com/"
+    "https://gh-proxy.com/"
+    "https://github.moeyy.xyz/"
+    "https://ghproxy.net/"
+)
 
 # 获取远端最新 Release tag
 get_latest_release_tag() {
     local api_url="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
-    curl -sL "$api_url" 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"\([^"]*\)".*/\1/' || true
+    local tag
+    tag=$(curl -sL --max-time 15 "$api_url" 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"\([^"]*\)".*/\1/' || true)
+    log_msg "get_latest_release_tag: $tag"
+    echo "$tag"
+}
+
+# 获取 Release asset 的下载URL和文件大小
+# 返回格式: URL|SIZE
+get_release_asset_info() {
+    local asset_name="${1:-$IMAGE_TARBALL}"
+    local api_url="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
+    local response
+    response=$(curl -sL --max-time 15 "$api_url" 2>/dev/null) || true
+    if [ -z "$response" ]; then
+        return 1
+    fi
+    local url size
+    url=$(echo "$response" | grep -o '"browser_download_url":\s*"[^"]*'"$asset_name"'"' | head -1 | sed 's/.*"\(http[^"]*\)"/\1/')
+    size=$(echo "$response" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    for a in data.get('assets', []):
+        if a['name'] == '$asset_name':
+            print(a['size'])
+            break
+except: pass
+" 2>/dev/null || true)
+    if [ -n "$url" ]; then
+        echo "${url}|${size:-0}"
+    else
+        return 1
+    fi
+}
+
+# 构建带代理镜像的下载URL列表
+# 参数: 原始 GitHub URL
+# 输出: 代理URLs（优先）+ 直连URL
+build_download_urls() {
+    local base_url="$1"
+    local urls=()
+    for prefix in "${PROXY_PREFIXES[@]}"; do
+        urls+=("${prefix}${base_url}")
+    done
+    urls+=("$base_url")
+    echo "${urls[@]}"
 }
 
 # 读取本地镜像版本标记
@@ -87,6 +152,11 @@ save_image_tag() {
 
 # 获取镜像（优先下载预构建，回退到本地构建）
 ensure_image() {
+    local asset_name="$IMAGE_TARBALL"
+    if [ "$IMAGE_EDITION" = "lite" ]; then
+        asset_name="openclaw-pro-image-lite.tar.gz"
+    fi
+
     if docker image inspect "$IMAGE_NAME" &>/dev/null; then
         # 镜像已存在，检查是否有新版本
         local local_tag remote_tag
@@ -102,6 +172,7 @@ ensure_image() {
             echo ""
             if [ "$img_choice" = "2" ]; then
                 info "将下载最新镜像..."
+                log_msg "User chose to download new image: $remote_tag (was $local_tag)"
                 docker rmi "$IMAGE_NAME" 2>/dev/null || true
             else
                 return 0
@@ -115,77 +186,270 @@ ensure_image() {
     fi
 
     # 方式1: 本地已有导出的 tar.gz（手动下载或 install.sh 已下载）
-    if [ -f "$SCRIPT_DIR/$IMAGE_TARBALL" ]; then
-        info "发现本地镜像包 $IMAGE_TARBALL，正在导入..."
-        if docker load < "$SCRIPT_DIR/$IMAGE_TARBALL"; then
+    local local_tar=""
+    for f in "$SCRIPT_DIR/$asset_name" "$SCRIPT_DIR/$IMAGE_TARBALL"; do
+        if [ -f "$f" ]; then
+            local_tar="$f"
+            break
+        fi
+    done
+    if [ -n "$local_tar" ]; then
+        info "发现本地镜像包 $(basename "$local_tar")，正在导入..."
+        log_msg "Loading local tarball: $local_tar"
+        if docker load < "$local_tar"; then
             success "镜像导入完成"
             return 0
         fi
         warn "镜像导入失败，尝试其他方式..."
     fi
 
-    # 方式2: 从 GHCR 拉取
+    # 方式2: 从 GitHub Release 下载 tar.gz（多源代理+断点续传）
+    if download_release_image "$asset_name"; then
+        return 0
+    fi
+
+    # 方式3: 从 GHCR 拉取
     info "尝试从 GHCR 拉取镜像..."
     if docker pull "$GHCR_IMAGE:latest" 2>/dev/null; then
         docker tag "$GHCR_IMAGE:latest" "$IMAGE_NAME:latest" 2>/dev/null
         success "镜像拉取完成 (GHCR)"
         return 0
     fi
-    warn "GHCR 拉取失败，尝试从 GitHub Release 下载..."
-
-    # 方式3: 从 GitHub Release 下载 tar.gz
-    if download_release_image; then
-        return 0
-    fi
+    warn "GHCR 拉取失败..."
 
     # 方式4: 本地构建（最后手段）
     warn "预构建镜像获取失败，将从 Dockerfile 本地构建（需要较长时间）..."
     info "构建 Docker 镜像..."
+    log_msg "Falling back to docker build"
     docker build -t "$IMAGE_NAME" "$SCRIPT_DIR"
     success "镜像构建完成"
 }
 
-# 从 GitHub Release 下载镜像 tar.gz
+# 从 GitHub Release 下载镜像 tar.gz（对齐 Windows Download-Robust）
+# 支持: 多代理镜像源、aria2c多线程、curl断点续传、文件大小校验
 download_release_image() {
-    local api_url="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
-    local download_url=""
+    local asset_name="${1:-$IMAGE_TARBALL}"
+    local target="$SCRIPT_DIR/$asset_name"
 
-    # 获取下载链接
-    if command -v curl &>/dev/null; then
-        download_url=$(curl -sL "$api_url" 2>/dev/null | \
-            grep -o '"browser_download_url":\s*"[^"]*openclaw-pro-image\.tar\.gz"' | \
-            head -1 | sed 's/.*"\(http[^"]*\)"/\1/')
+    # 获取下载链接和预期大小
+    local asset_info download_url expected_size=0
+    asset_info=$(get_release_asset_info "$asset_name" 2>/dev/null) || true
+    if [ -n "$asset_info" ]; then
+        download_url=$(echo "$asset_info" | cut -d'|' -f1)
+        expected_size=$(echo "$asset_info" | cut -d'|' -f2)
     fi
 
+    # 回退: 构造直链
     if [ -z "$download_url" ]; then
-        warn "无法获取 Release 下载链接"
-        return 1
-    fi
-
-    local target="$SCRIPT_DIR/$IMAGE_TARBALL"
-    info "正在从 GitHub Release 下载镜像 (~1.6GB)..."
-    info "下载地址: $download_url"
-
-    if curl -fL -C - --retry 5 --retry-delay 3 --progress-bar -o "$target" "$download_url"; then
-        info "下载完成，正在导入镜像..."
-        if docker load < "$target"; then
-            # 记录镜像版本标记
-            local release_tag
-            release_tag=$(get_latest_release_tag)
-            if [ -n "$release_tag" ]; then
-                save_image_tag "$release_tag"
-            fi
-            success "镜像导入完成 (GitHub Release)"
-            # 保留 tar.gz 以便后续离线使用，用户可手动删除
-            return 0
+        local latest_tag
+        latest_tag=$(get_latest_release_tag)
+        if [ -n "$latest_tag" ]; then
+            download_url="https://github.com/${GITHUB_REPO}/releases/download/${latest_tag}/${asset_name}"
+        else
+            download_url="https://github.com/${GITHUB_REPO}/releases/latest/download/${asset_name}"
         fi
-        warn "镜像导入失败"
-        rm -f "$target"
+        warn "无法通过 API 获取下载链接，使用直链: $download_url"
+    fi
+
+    local size_mb="?"
+    if [ "$expected_size" -gt 0 ] 2>/dev/null; then
+        size_mb=$(echo "$expected_size" | awk '{printf "%.1f", $1/1048576}')
+        info "发现预构建镜像 (${size_mb}MB)"
+    fi
+    log_msg "download_release_image: url=$download_url size=$expected_size asset=$asset_name"
+
+    # 检查本地已有完整文件（跳过下载）
+    if [ -f "$target" ] && [ "$expected_size" -gt 0 ] 2>/dev/null; then
+        local local_size
+        local_size=$(stat -c%s "$target" 2>/dev/null || stat -f%z "$target" 2>/dev/null || echo 0)
+        if [ "$local_size" = "$expected_size" ]; then
+            info "检测到已下载的完整镜像文件 (${size_mb}MB)，跳过下载"
+            log_msg "Skipping download: local file matches expected size"
+        else
+            info "本地文件不完整 (${local_size}/${expected_size})，继续下载..."
+        fi
+    fi
+
+    # 构建多源下载URL列表
+    local -a download_urls
+    IFS=' ' read -r -a download_urls <<< "$(build_download_urls "$download_url")"
+
+    # 方式A: 优先使用 aria2c（多线程分块下载，对齐 Windows 8线程）
+    if command -v aria2c &>/dev/null; then
+        info "使用 aria2c 多线程下载 (8线程, 自动断点续传)..."
+        log_msg "Using aria2c for download"
+
+        # 构建 aria2c input file（多源）
+        local aria_input
+        aria_input=$(mktemp /tmp/aria2-input.XXXXXX)
+        for url in "${download_urls[@]}"; do
+            echo "$url" >> "$aria_input"
+            echo "  out=$asset_name" >> "$aria_input"
+            echo "  dir=$SCRIPT_DIR" >> "$aria_input"
+            echo "" >> "$aria_input"
+        done
+
+        if aria2c \
+            -x 8 -s 8 -k 2M \
+            --continue=true \
+            --retry-wait=3 \
+            --max-tries=20 \
+            --connect-timeout=15 \
+            --timeout=30 \
+            --auto-file-renaming=false \
+            --allow-overwrite=true \
+            --console-log-level=notice \
+            --summary-interval=5 \
+            -d "$SCRIPT_DIR" \
+            -o "$asset_name" \
+            -i "$aria_input" 2>&1 | tail -5; then
+            rm -f "$aria_input"
+            # 文件大小校验
+            if _validate_download "$target" "$expected_size"; then
+                _load_and_tag_image "$target"
+                return $?
+            fi
+        fi
+        rm -f "$aria_input"
+        warn "aria2c 下载未完成，回退到 curl..."
+    fi
+
+    # 方式B: curl 逐源尝试（带代理镜像、断点续传、重试）
+    info "正在下载镜像 (~${size_mb}MB)..."
+    info "使用代理镜像加速，支持断点续传 (Ctrl+C 中断后重运行自动恢复)"
+
+    local attempt=0
+    for url in "${download_urls[@]}"; do
+        attempt=$((attempt + 1))
+        local short_url
+        short_url=$(echo "$url" | head -c 80)
+        info "[$attempt/${#download_urls[@]}] 尝试: ${short_url}..."
+        log_msg "curl attempt $attempt: $url"
+
+        if curl -fL \
+            -C - \
+            --retry 10 \
+            --retry-all-errors \
+            --retry-delay 3 \
+            --retry-max-time 600 \
+            --connect-timeout 15 \
+            --max-time 1800 \
+            --progress-bar \
+            -o "$target" \
+            "$url" 2>&1; then
+            # 文件大小校验
+            if _validate_download "$target" "$expected_size"; then
+                _load_and_tag_image "$target"
+                return $?
+            fi
+        fi
+        warn "此源下载失败，切换下一个..."
+    done
+
+    warn "所有下载源均失败"
+    log_msg "All download sources failed"
+    echo ""
+    echo -e "  ${YELLOW}💡 手动下载方法:${NC}"
+    echo -e "  ${CYAN}1. 浏览器打开: https://github.com/${GITHUB_REPO}/releases/latest${NC}"
+    echo -e "  ${CYAN}2. 下载 ${asset_name} 到 ${SCRIPT_DIR}/${NC}"
+    echo -e "  ${CYAN}3. 重新运行: ./openclaw-docker.sh run${NC}"
+    echo ""
+    if command -v aria2c &>/dev/null; then
+        echo -e "  ${CYAN}或使用 aria2c:${NC}"
+        echo -e "  ${CYAN}aria2c -x 8 -s 8 -k 2M --continue=true -d $SCRIPT_DIR ${download_urls[0]}${NC}"
+    else
+        echo -e "  ${CYAN}💡 安装 aria2c 可获得8线程下载: sudo apt-get install -y aria2${NC}"
+    fi
+    echo ""
+    return 1
+}
+
+# 验证下载文件完整性
+_validate_download() {
+    local file="$1"
+    local expected_size="$2"
+
+    if [ ! -f "$file" ]; then
+        warn "下载文件不存在"
         return 1
     fi
 
-    warn "下载失败"
-    rm -f "$target"
+    local actual_size
+    actual_size=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null || echo 0)
+
+    # 基本大小检查（至少 1MB）
+    if [ "$actual_size" -lt 1048576 ]; then
+        warn "文件过小 (${actual_size} bytes)，可能下载不完整"
+        rm -f "$file"
+        return 1
+    fi
+
+    # 精确大小校验
+    if [ "$expected_size" -gt 0 ] 2>/dev/null; then
+        if [ "$actual_size" != "$expected_size" ]; then
+            local actual_mb expected_mb
+            actual_mb=$(echo "$actual_size" | awk '{printf "%.1f", $1/1048576}')
+            expected_mb=$(echo "$expected_size" | awk '{printf "%.1f", $1/1048576}')
+            warn "文件大小不匹配: ${actual_mb}MB / ${expected_mb}MB"
+            log_msg "Size mismatch: actual=$actual_size expected=$expected_size"
+            # 不删除——保留以便续传
+            return 1
+        fi
+        local actual_mb
+        actual_mb=$(echo "$actual_size" | awk '{printf "%.1f", $1/1048576}')
+        success "文件大小校验通过 (${actual_mb}MB)"
+    fi
+
+    # gzip 魔数检查
+    local magic
+    magic=$(xxd -l 2 "$file" 2>/dev/null | awk '{print $2}')
+    if [ "$magic" != "1f8b" ]; then
+        warn "文件不是有效的 gzip 格式（可能被CDN拦截返回HTML）"
+        log_msg "Invalid gzip magic: $magic"
+        rm -f "$file"
+        return 1
+    fi
+
+    log_msg "Download validated: size=$actual_size"
+    return 0
+}
+
+# 加载 tar.gz 到 Docker 并打 tag
+_load_and_tag_image() {
+    local tarball="$1"
+    info "下载完成，正在导入镜像..."
+    log_msg "Loading image from $tarball"
+
+    if docker load < "$tarball"; then
+        # 确保 tag 为 openclaw-pro:latest
+        # docker load 可能只有 ghcr.io/... 的 tag
+        if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
+            local loaded_ref
+            loaded_ref=$(docker images --format '{{.Repository}}:{{.Tag}}' | grep -i openclaw | head -1)
+            if [ -n "$loaded_ref" ]; then
+                docker tag "$loaded_ref" "$IMAGE_NAME:latest" 2>/dev/null || true
+            fi
+        fi
+
+        # 记录镜像版本标记
+        local release_tag
+        release_tag=$(get_latest_release_tag)
+        if [ -n "$release_tag" ]; then
+            save_image_tag "$release_tag"
+        fi
+        # 保存镜像 digest
+        local img_id
+        img_id=$(docker image inspect "$IMAGE_NAME" --format '{{.Id}}' 2>/dev/null || true)
+        if [ -n "$img_id" ]; then
+            echo "$img_id" > "$HOME_DIR/.openclaw/image-digest.txt" 2>/dev/null || true
+        fi
+
+        success "镜像导入完成 (GitHub Release)"
+        log_msg "Image loaded successfully: $img_id"
+        return 0
+    fi
+    warn "镜像导入失败 (docker load)"
+    log_msg "docker load failed for $tarball"
     return 1
 }
 
@@ -525,6 +789,26 @@ F2B
       fi  # do_firewall
     fi
 
+    # 镜像版本选择（对齐 Windows 安装器的 lite/full 选择）
+    echo ""
+    echo -e "${BOLD}━━━ 镜像版本选择 ━━━${NC}"
+    echo -e "  ${CYAN}[1]${NC} 精简版（推荐，~250MB，约5分钟下载）"
+    echo -e "      包含: Ubuntu + Node.js + Caddy + Web面板 + Python3"
+    echo -e "      Chrome/noVNC/LightGBM 等可后期通过 Web 面板安装"
+    echo -e "  ${CYAN}[2]${NC} 完整版（~1.6GB，约30分钟下载）"
+    echo -e "      包含全部组件: Chrome、noVNC、LightGBM、openclaw 等"
+    local edition_choice=""
+    read -t 15 -p "请选择 [1/2，默认1，15秒超时自动选择1]: " edition_choice 2>/dev/null || true
+    echo ""
+    if [ "$edition_choice" = "2" ]; then
+        IMAGE_EDITION="full"
+        info "已选择完整版镜像"
+    else
+        IMAGE_EDITION="lite"
+        info "已选择精简版镜像"
+    fi
+    log_msg "Image edition: $IMAGE_EDITION"
+
     # 获取镜像（配置完成后再下载，与 Windows 安装器流程对齐）
     ensure_image
 
@@ -752,17 +1036,318 @@ cmd_logs() {
     docker logs --tail 100 -f "$CONTAINER_NAME"
 }
 
+# 更新命令（对齐 Windows update-windows.ps1）
+# 智能检测 → 热更新 / 完整更新
+cmd_update() {
+    ensure_docker
+    ensure_jq
+    log_msg "cmd_update started"
+
+    # 检查容器是否存在
+    if ! docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+        error "未找到容器 '$CONTAINER_NAME'"
+        echo -e "  请使用 ${CYAN}$0 run${NC} 创建容器"
+        return 1
+    fi
+
+    # 确保容器运行中
+    if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+        info "容器已停止，正在启动..."
+        docker start "$CONTAINER_NAME" 2>/dev/null || true
+        sleep 3
+    fi
+
+    # 智能检测更新类型（对齐 Windows 逻辑: Dockerfile hash 检查）
+    local recommend_full=false
+    local recommend_msg=""
+    if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+        info "检测更新类型..."
+        # 检查容器内是否有 Dockerfile hash 文件
+        if ! docker exec "$CONTAINER_NAME" test -f /etc/openclaw-dockerfile-hash 2>/dev/null; then
+            recommend_full=true
+            recommend_msg="检测到旧版镜像，建议完整更新以获取最新系统包"
+        else
+            # 通过 API 检查远程 Dockerfile hash
+            local check_json
+            check_json=$(docker exec "$CONTAINER_NAME" curl -sf --max-time 15 http://127.0.0.1:3000/api/update/check?force=1 2>/dev/null || true)
+            if [ -n "$check_json" ]; then
+                local df_changed
+                df_changed=$(echo "$check_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print('true' if d.get('dockerfileChanged') else 'false')" 2>/dev/null || echo "false")
+                if [ "$df_changed" = "true" ]; then
+                    recommend_full=true
+                    recommend_msg="检测到 Dockerfile 已变更，建议完整更新"
+                fi
+            fi
+        fi
+    fi
+
+    # 显示更新菜单
+    echo ""
+    echo -e "${BOLD}━━━ OpenClaw Pro 更新 ━━━${NC}"
+    if [ -n "$recommend_msg" ]; then
+        echo -e "  ${YELLOW}⚠️  $recommend_msg${NC}"
+    fi
+    echo ""
+    if $recommend_full; then
+        echo -e "  ${CYAN}[1]${NC} ⚡ 热更新"
+        echo -e "      只更新 Web 面板、配置模板等文件，无需下载镜像/重启容器"
+        echo ""
+        echo -e "  ${YELLOW}[2]${NC} 📦 完整更新（推荐）"
+        echo -e "      下载完整镜像并重建容器（保留所有数据和配置）"
+    else
+        echo -e "  ${YELLOW}[1]${NC} ⚡ 热更新（推荐）"
+        echo -e "      只更新 Web 面板、配置模板等文件，无需下载镜像/重启容器"
+        echo ""
+        echo -e "  ${CYAN}[2]${NC} 📦 完整更新"
+        echo -e "      下载完整镜像并重建容器（保留所有数据和配置）"
+    fi
+    echo ""
+    local default_choice
+    default_choice=$($recommend_full && echo "2" || echo "1")
+    read -p "请选择 [1/2，默认$default_choice]: " update_choice 2>/dev/null || true
+    update_choice="${update_choice:-$default_choice}"
+
+    if [ "$update_choice" = "1" ]; then
+        _do_hotpatch
+    else
+        _do_full_update
+    fi
+}
+
+# 热更新（触发容器内 hotpatch API）
+_do_hotpatch() {
+    info "执行热更新..."
+    log_msg "hotpatch started"
+
+    # 确保容器在运行
+    if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+        error "容器未运行"
+        return 1
+    fi
+
+    # 触发 hotpatch
+    local result
+    result=$(docker exec "$CONTAINER_NAME" curl -s -X POST http://127.0.0.1:3000/api/update/hotpatch -H "Content-Type: application/json" -d '{"branch":"main"}' 2>/dev/null || true)
+
+    if [ -z "$result" ]; then
+        error "无法连接到 Web 面板 API"
+        return 1
+    fi
+
+    info "热更新已触发，等待完成..."
+
+    # 轮询状态（对齐 Windows 的 hotpatch 轮询逻辑）
+    local done=false was_running=false
+    local post_ok=false idle_count=0 fail_count=0
+    echo "$result" | grep -q '"success"\|"ok"' && post_ok=true
+
+    for i in $(seq 1 180); do
+        sleep 1
+        local status_json
+        status_json=$(docker exec "$CONTAINER_NAME" curl -sf http://127.0.0.1:3000/api/update/hotpatch/status 2>/dev/null || true)
+        if [ -z "$status_json" ]; then
+            fail_count=$((fail_count + 1))
+            if ($was_running || $post_ok) && [ "$fail_count" -ge 5 ]; then
+                info "Web 面板正在重启..."
+                sleep 5
+                success "热更新完成（Web 面板已重启）"
+                done=true
+                break
+            fi
+            printf "."
+            continue
+        fi
+        fail_count=0
+
+        local status
+        status=$(echo "$status_json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || true)
+
+        case "$status" in
+            running)
+                was_running=true
+                printf "."
+                ;;
+            done)
+                echo ""
+                success "热更新完成"
+                done=true
+                break
+                ;;
+            error)
+                echo ""
+                error "热更新失败"
+                local err_log
+                err_log=$(echo "$status_json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('log',''))" 2>/dev/null || true)
+                [ -n "$err_log" ] && echo "$err_log" | tail -5
+                done=true
+                break
+                ;;
+            idle)
+                if $was_running; then
+                    echo ""
+                    success "热更新完成（服务已重启）"
+                    done=true
+                    break
+                fi
+                if $post_ok; then
+                    idle_count=$((idle_count + 1))
+                    [ "$idle_count" -ge 8 ] && { echo ""; success "热更新完成"; done=true; break; }
+                fi
+                printf "."
+                ;;
+        esac
+    done
+    echo ""
+
+    if ! $done; then
+        error "热更新超时"
+    fi
+    log_msg "hotpatch done=$done"
+}
+
+# 完整更新（对齐 Windows update-windows.ps1 的完整更新流程）
+_do_full_update() {
+    log_msg "full update started"
+
+    # 读取现有容器配置
+    info "读取容器配置..."
+    local config_json=""
+    if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+        config_json=$(docker exec "$CONTAINER_NAME" cat /root/.openclaw/docker-config.json 2>/dev/null || true)
+    fi
+    if [ -z "$config_json" ] && [ -f "$CONFIG_FILE" ]; then
+        config_json=$(cat "$CONFIG_FILE" 2>/dev/null || true)
+    fi
+    if [ -z "$config_json" ]; then
+        error "无法读取容器配置，请使用 $0 rebuild + $0 run"
+        return 1
+    fi
+
+    # 解析配置
+    local domain gw_port web_port http_port https_port cert_mode tz
+    domain=$(echo "$config_json" | jq -r '.domain // empty' 2>/dev/null)
+    gw_port=$(echo "$config_json" | jq -r '.port // 18789' 2>/dev/null)
+    web_port=$(echo "$config_json" | jq -r '.web_port // 3000' 2>/dev/null)
+    http_port=$(echo "$config_json" | jq -r '.http_port // 0' 2>/dev/null)
+    https_port=$(echo "$config_json" | jq -r '.https_port // 0' 2>/dev/null)
+    cert_mode=$(echo "$config_json" | jq -r '.cert_mode // "letsencrypt"' 2>/dev/null)
+    tz=$(echo "$config_json" | jq -r '.timezone // "Asia/Shanghai"' 2>/dev/null)
+
+    info "域名: ${domain:-无}"
+    info "端口: Gateway=$gw_port Web=$web_port HTTP=$http_port HTTPS=$https_port"
+
+    # 获取当前版本
+    local current_ver
+    current_ver=$(docker exec "$CONTAINER_NAME" cat /etc/openclaw-version 2>/dev/null || echo "unknown")
+    info "当前版本: $current_ver"
+
+    # 检查最新版本
+    local latest_tag
+    latest_tag=$(get_latest_release_tag)
+    if [ -n "$latest_tag" ] && [ "$latest_tag" = "$current_ver" ]; then
+        warn "当前已是最新版本 ($current_ver)"
+        read -p "仍然要重新安装吗？[y/N] " force_update
+        if [[ ! "$force_update" =~ ^[yY] ]]; then
+            return 0
+        fi
+    elif [ -n "$latest_tag" ]; then
+        info "最新版本: $latest_tag"
+    fi
+
+    # 下载最新镜像
+    info "下载最新镜像..."
+    ensure_image
+
+    # 停止并删除旧容器
+    info "停止旧容器..."
+    docker stop "$CONTAINER_NAME" 2>/dev/null || true
+    docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+    success "旧容器已删除"
+
+    # 构建端口映射
+    local PORT_ARGS=""
+    if [ -n "$domain" ]; then
+        PORT_ARGS="-p ${http_port}:80 -p ${https_port}:443 -p 127.0.0.1:${gw_port}:18789 -p 127.0.0.1:${web_port}:3000"
+    else
+        PORT_ARGS="-p ${gw_port}:18789 -p ${web_port}:3000"
+    fi
+
+    # 启动新容器
+    info "启动新容器..."
+    docker run -d \
+        --name "$CONTAINER_NAME" \
+        --hostname openclaw \
+        --cap-drop ALL \
+        --cap-add CHOWN \
+        --cap-add SETUID \
+        --cap-add SETGID \
+        --cap-add NET_BIND_SERVICE \
+        --cap-add KILL \
+        --cap-add DAC_OVERRIDE \
+        --security-opt no-new-privileges \
+        -v "$HOME_DIR:/root" \
+        $PORT_ARGS \
+        -e "TZ=$tz" \
+        -e "CERT_MODE=$cert_mode" \
+        -e "DOMAIN=$domain" \
+        --restart unless-stopped \
+        "$IMAGE_NAME"
+
+    # 等待服务就绪
+    info "等待服务就绪..."
+    local ready=false
+    for i in $(seq 1 30); do
+        sleep 2
+        local health
+        health=$(docker exec "$CONTAINER_NAME" curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/ 2>/dev/null || true)
+        if [ "$health" = "200" ] || [ "$health" = "302" ] || [ "$health" = "401" ]; then
+            ready=true
+            break
+        fi
+        printf "."
+    done
+    echo ""
+
+    local new_ver
+    new_ver=$(docker exec "$CONTAINER_NAME" cat /etc/openclaw-version 2>/dev/null || echo "unknown")
+
+    if $ready; then
+        success "所有服务已就绪"
+    else
+        warn "服务仍在启动中，请稍等几秒再访问"
+    fi
+
+    echo ""
+    echo -e "${GREEN}╔══════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║${NC}         ${BOLD}🎉 更新完成！${NC}                        ${GREEN}║${NC}"
+    echo -e "${GREEN}╠══════════════════════════════════════════════╣${NC}"
+    echo -e "${GREEN}║${NC}  版本: ${YELLOW}${current_ver}${NC} → ${GREEN}${new_ver}${NC}"
+    if [ -n "$domain" ]; then
+        local url="https://${domain}"
+        [ "$https_port" != "443" ] && url="${url}:${https_port}"
+        echo -e "${GREEN}║${NC}  🔗 URL: ${CYAN}${url}${NC}"
+    else
+        echo -e "${GREEN}║${NC}  🔗 Gateway: ${CYAN}http://localhost:${gw_port}${NC}"
+        echo -e "${GREEN}║${NC}  🔗 管理面板: ${CYAN}http://localhost:${web_port}${NC}"
+    fi
+    echo -e "${GREEN}╚══════════════════════════════════════════════╝${NC}"
+    echo ""
+    log_msg "full update complete: $current_ver -> $new_ver"
+}
+
 # ---- 主入口 ----
 case "${1:-run}" in
-    run)     cmd_run ;;
-    stop)    cmd_stop ;;
-    status)  cmd_status ;;
-    config)  cmd_config ;;
-    shell)   cmd_shell ;;
-    rebuild) cmd_rebuild ;;
-    logs)    cmd_logs ;;
+    run)      cmd_run ;;
+    stop)     cmd_stop ;;
+    status)   cmd_status ;;
+    config)   cmd_config ;;
+    shell)    cmd_shell ;;
+    rebuild)  cmd_rebuild ;;
+    logs)     cmd_logs ;;
+    update)   cmd_update ;;
+    hotpatch) _do_hotpatch ;;
     *)
-        echo -e "${BOLD}用法:${NC} $0 {run|stop|status|config|shell|rebuild|logs}"
+        echo -e "${BOLD}用法:${NC} $0 {run|stop|status|config|shell|rebuild|update|logs}"
         echo ""
         echo "  run      启动容器（首次运行进入配置向导）"
         echo "  stop     停止容器"
@@ -770,6 +1355,8 @@ case "${1:-run}" in
         echo "  config   修改配置"
         echo "  shell    进入容器终端"
         echo "  rebuild  重建镜像"
+        echo "  update   更新（热更新/完整更新）"
+        echo "  hotpatch 仅热更新（Web面板等文件）"
         echo "  logs     查看日志"
         exit 1
         ;;

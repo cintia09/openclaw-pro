@@ -74,6 +74,18 @@ if ! command -v docker &>/dev/null; then
   sudo systemctl enable --now docker 2>/dev/null || true
 fi
 
+# ---- 3.5 Install aria2c for multi-threaded download (optional) ----
+if ! command -v aria2c &>/dev/null; then
+  echo "📦 Installing aria2c for faster image download..."
+  if command -v apt-get &>/dev/null; then
+    sudo apt-get install -y -qq aria2 2>/dev/null || true
+  elif command -v dnf &>/dev/null; then
+    sudo dnf install -y -q aria2 2>/dev/null || true
+  elif command -v yum &>/dev/null; then
+    sudo yum install -y -q aria2 2>/dev/null || true
+  fi
+fi
+
 # ---- 4. Launch interactive setup or show instructions ----
 # Image download is handled by openclaw-docker.sh run (after interactive config),
 # aligned with Windows installer flow: Config → Image → Container
