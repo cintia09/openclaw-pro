@@ -977,9 +977,8 @@ show_command_hint() {
     script_name=$(basename "$0")
     ssh_port_val=$(jq -r '.ssh_port // 2222' "$CONFIG_FILE" 2>/dev/null || echo 2222)
     echo -e "${CYAN}────────────────────────────────────────────────${NC}"
-    echo -e "  🔑 SSH: ${BLUE}ssh root@localhost -p ${ssh_port_val}${NC}"
-    echo -e "  ${YELLOW}注意: 密码登录已禁用，需配置 SSH Key：${NC}"
-    echo -e "    ${CYAN}ssh-copy-id -p ${ssh_port_val} root@localhost${NC}"
+    echo -e "  🔑 SSH: ${BLUE}ssh root@localhost -p ${ssh_port_val}${NC} (仅Key登录)"
+    echo -e "  添加公钥: ${CYAN}./${script_name} sshkey [~/.ssh/id_rsa.pub]${NC}"
     echo -e "  退出容器后可用: ${BOLD}./${script_name}${NC} <命令>"
     echo -e "  ${YELLOW}stop${NC} 停止  ${YELLOW}status${NC} 状态  ${YELLOW}config${NC} 配置  ${YELLOW}update${NC} 更新"
     echo -e "  ${YELLOW}remove${NC} 删除容器  ${YELLOW}clean${NC} 完全清理  ${YELLOW}logs${NC} 日志"
@@ -1194,6 +1193,35 @@ cmd_clean() {
 
 cmd_logs() {
     docker logs --tail 100 -f "$CONTAINER_NAME"
+}
+
+cmd_sshkey() {
+    local keyfile="${2:-}"
+    if [ -z "$keyfile" ]; then
+        # 自动查找实机公钥
+        for f in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_rsa.pub" "$HOME/.ssh/id_ecdsa.pub"; do
+            if [ -f "$f" ]; then
+                keyfile="$f"
+                break
+            fi
+        done
+    fi
+
+    if [ -z "$keyfile" ] || [ ! -f "$keyfile" ]; then
+        error "未找到 SSH 公钥文件"
+        echo -e "  用法: ${CYAN}$0 sshkey [/path/to/id_rsa.pub]${NC}"
+        echo -e "  或先生成: ${CYAN}ssh-keygen -t ed25519${NC}"
+        return 1
+    fi
+
+    info "注入公钥: $keyfile"
+    docker exec "$CONTAINER_NAME" bash -c "mkdir -p /root/.ssh && chmod 700 /root/.ssh"
+    docker exec -i "$CONTAINER_NAME" bash -c 'cat >> /root/.ssh/authorized_keys && sort -u -o /root/.ssh/authorized_keys /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys' < "$keyfile"
+    success "SSH 公钥已注入容器"
+
+    local ssh_port_val
+    ssh_port_val=$(jq -r '.ssh_port // 2222' "$CONFIG_FILE" 2>/dev/null || echo 2222)
+    echo -e "  现在可以连接: ${CYAN}ssh root@localhost -p ${ssh_port_val}${NC}"
 }
 
 # 更新命令（对齐 Windows update-windows.ps1）
@@ -1506,6 +1534,7 @@ case "${1:-run}" in
     status)   cmd_status ;;
     config)   cmd_config ;;
     shell)    cmd_shell ;;
+    sshkey)   cmd_sshkey "$@" ;;
     rebuild)  cmd_rebuild ;;
     remove)   cmd_remove ;;
     clean)    cmd_clean ;;
@@ -1520,6 +1549,7 @@ case "${1:-run}" in
         echo "  stop     停止容器"
         echo "  status   查看状态"
         echo "  shell    进入容器终端"
+        echo "  sshkey   注入 SSH 公钥到容器"
         echo ""
         echo -e "${BOLD}管理命令:${NC}"
         echo "  config   修改配置（密码/端口/域名/时区）"
