@@ -938,7 +938,19 @@ F2B
     fi
 
     # 进入容器
+    show_command_hint
     docker exec -it "$CONTAINER_NAME" bash -l
+}
+
+# 进入容器前的命令提示
+show_command_hint() {
+    local script_name
+    script_name=$(basename "$0")
+    echo -e "${CYAN}────────────────────────────────────────────────${NC}"
+    echo -e "  退出容器后可用: ${BOLD}./${script_name}${NC} <命令>"
+    echo -e "  ${YELLOW}stop${NC} 停止  ${YELLOW}status${NC} 状态  ${YELLOW}config${NC} 配置  ${YELLOW}update${NC} 更新"
+    echo -e "  ${YELLOW}remove${NC} 删除容器  ${YELLOW}clean${NC} 完全清理  ${YELLOW}logs${NC} 日志"
+    echo -e "${CYAN}────────────────────────────────────────────────${NC}"
 }
 
 # 显示再次运行面板
@@ -960,6 +972,7 @@ show_running_panel() {
     if [[ "$CHOICE" == "c" || "$CHOICE" == "C" ]]; then
         cmd_config
     else
+        show_command_hint
         docker exec -it "$CONTAINER_NAME" bash -l
     fi
 }
@@ -985,6 +998,7 @@ cmd_run() {
             docker start "$CONTAINER_NAME"
             success "容器已启动"
             sleep 2
+            show_command_hint
             docker exec -it "$CONTAINER_NAME" bash -l
         fi
     else
@@ -1009,6 +1023,7 @@ cmd_run() {
                 docker start "$first_container"
                 success "容器已启动"
                 sleep 2
+                show_command_hint
                 docker exec -it "$first_container" bash -l
                 return
             else
@@ -1092,6 +1107,7 @@ cmd_config() {
 
 cmd_shell() {
     if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+        show_command_hint
         docker exec -it "$CONTAINER_NAME" bash -l
     else
         error "容器未运行，请先执行: $0 run"
