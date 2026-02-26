@@ -1060,16 +1060,37 @@ show_command_hint() {
 
 # 容器已运行时的入口
 show_running_panel() {
+    local current_ver update_hint=""
+    current_ver=$(docker exec "$CONTAINER_NAME" cat /etc/openclaw-version 2>/dev/null || echo "")
+
+    # 轻量级更新检查（最多等 5 秒，不阻塞）
+    local check_json
+    check_json=$(docker exec "$CONTAINER_NAME" curl -sf --max-time 5 http://127.0.0.1:3000/api/update/check 2>/dev/null || true)
+    if [ -n "$check_json" ]; then
+        local has_upd remote_ver df_changed
+        has_upd=$(echo "$check_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print('true' if d.get('hasUpdate', d.get('updateAvailable', False)) else 'false')" 2>/dev/null || echo "false")
+        remote_ver=$(echo "$check_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('remoteVersion', d.get('latestVersion', '')))" 2>/dev/null || true)
+        df_changed=$(echo "$check_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print('true' if d.get('dockerfileChanged') else 'false')" 2>/dev/null || echo "false")
+        if [ "$has_upd" = "true" ] || [ "$df_changed" = "true" ]; then
+            update_hint="${YELLOW}⬆ 有新版本可用${remote_ver:+ ($remote_ver)}${NC}  运行 ${CYAN}./openclaw-docker.sh update${NC} 更新"
+        fi
+    fi
+
     echo ""
-    echo -e "  ${GREEN}●${NC} 容器 ${BOLD}${CONTAINER_NAME}${NC} 已运行中"
-    echo -e "  ${YELLOW}[C]${NC} 配置菜单  ${YELLOW}[回车/3秒]${NC} 直接进入容器"
+    echo -e "  ${GREEN}●${NC} 容器 ${BOLD}${CONTAINER_NAME}${NC} 已运行中${current_ver:+  (${current_ver})}"
+    if [ -n "$update_hint" ]; then
+        echo -e "  $update_hint"
+    fi
+    echo -e "  ${YELLOW}[C]${NC} 配置菜单  ${YELLOW}[U]${NC} 更新  ${YELLOW}[回车/10秒]${NC} 进入容器"
     echo ""
 
-    read -t 3 -n 1 CHOICE 2>/dev/null || CHOICE=""
+    read -t 10 -n 1 CHOICE 2>/dev/null || CHOICE=""
     echo ""
 
     if [[ "$CHOICE" == "c" || "$CHOICE" == "C" ]]; then
         cmd_config
+    elif [[ "$CHOICE" == "u" || "$CHOICE" == "U" ]]; then
+        cmd_update
     else
         show_command_hint
         docker exec -it "$CONTAINER_NAME" bash -l
