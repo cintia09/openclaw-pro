@@ -1028,6 +1028,7 @@ F2B
         --cap-add NET_BIND_SERVICE \
         --cap-add KILL \
         --cap-add DAC_OVERRIDE \
+        --cap-add FOWNER \
         --cap-add SYS_CHROOT \
         --cap-add AUDIT_WRITE \
         --security-opt no-new-privileges \
@@ -1650,6 +1651,7 @@ _do_full_update() {
         --cap-add NET_BIND_SERVICE \
         --cap-add KILL \
         --cap-add DAC_OVERRIDE \
+        --cap-add FOWNER \
         --cap-add SYS_CHROOT \
         --cap-add AUDIT_WRITE \
         --security-opt no-new-privileges \
