@@ -19,7 +19,7 @@ CONTAINER_NAME="openclaw-pro"
 IMAGE_NAME="openclaw-pro"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TMP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)/tmp"
-HOME_DIR="$SCRIPT_DIR/home-data"
+HOME_DIR="$(cd "$SCRIPT_DIR/.." && pwd)/home-data"
 CONFIG_FILE="$HOME_DIR/.openclaw/docker-config.json"
 
 # ---- 工具函数 ----
