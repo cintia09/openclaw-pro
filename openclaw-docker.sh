@@ -41,25 +41,37 @@ fix_container_env() {
     # 检查并安装 envsubst（Caddy 配置模板渲染依赖）
     if ! docker exec "$cname" command -v envsubst &>/dev/null; then
         info "容器缺少 envsubst，正在补装..."
-        # 优先尝试 apt-get（容器联网时）
+        local installed=false
+        # 方法1: apt-get（容器可正常联网时）
         docker exec "$cname" bash -c 'apt-get update -qq 2>/dev/null && apt-get install -y -qq gettext-base 2>/dev/null' &>/dev/null
-        if ! docker exec "$cname" command -v envsubst &>/dev/null; then
-            # 容器无法联网，从宿主机拷贝
+        docker exec "$cname" command -v envsubst &>/dev/null && installed=true
+        # 方法2: curl 直接下载 deb（企业透明代理环境，apt不通但curl能通）
+        if ! $installed; then
+            docker exec "$cname" bash -c '
+                curl -fsSL --connect-timeout 10 -o /tmp/gettext-base.deb \
+                    http://archive.ubuntu.com/ubuntu/pool/main/g/gettext/gettext-base_0.21-14ubuntu2_amd64.deb 2>/dev/null \
+                && dpkg -i /tmp/gettext-base.deb 2>/dev/null \
+                && rm -f /tmp/gettext-base.deb
+            ' &>/dev/null
+            docker exec "$cname" command -v envsubst &>/dev/null && installed=true
+        fi
+        # 方法3: 从宿主机拷贝二进制
+        if ! $installed; then
             local host_envsubst
             host_envsubst=$(command -v envsubst 2>/dev/null || true)
             if [ -n "$host_envsubst" ]; then
-                info "容器无法联网，从宿主机拷贝 envsubst..."
+                info "从宿主机拷贝 envsubst..."
                 docker cp "$host_envsubst" "$cname":/usr/bin/envsubst
-            else
-                warn "envsubst 安装失败（容器无网络且宿主机也缺少）"
-                warn "请手动安装: sudo dnf install -y gettext  # 然后重新运行"
-                return
+                docker exec "$cname" command -v envsubst &>/dev/null && installed=true
             fi
         fi
-        if docker exec "$cname" command -v envsubst &>/dev/null; then
+        if $installed; then
             success "envsubst 就绪，重启容器使 Caddy 生效..."
             docker restart "$cname" &>/dev/null
             sleep 3
+        else
+            warn "envsubst 安装失败，请手动处理"
+            warn "容器内执行: curl -fSL -o /tmp/g.deb http://archive.ubuntu.com/ubuntu/pool/main/g/gettext/gettext-base_0.21-14ubuntu2_amd64.deb && dpkg -i /tmp/g.deb"
         fi
     fi
 }
