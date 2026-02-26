@@ -943,20 +943,21 @@ F2B
     sleep 2
     echo "root:${ROOT_PASS}" | docker exec -i "$CONTAINER_NAME" chpasswd
 
-    # 配置 sshd 允许密码登录（镜像默认 prohibit-password）
-    docker exec "$CONTAINER_NAME" bash -c '
-        sed -i "s/^#\?PermitRootLogin.*/PermitRootLogin yes/" /etc/ssh/sshd_config
-        sed -i "s/^#\?PasswordAuthentication.*/PasswordAuthentication yes/" /etc/ssh/sshd_config
-        # 重启 sshd（兼容不同发行版）
-        if command -v supervisorctl &>/dev/null; then
-            supervisorctl restart sshd 2>/dev/null || true
-        elif [ -f /run/sshd.pid ]; then
-            kill -HUP $(cat /run/sshd.pid) 2>/dev/null || true
-        else
-            pkill -HUP sshd 2>/dev/null || true
+    # SSH key 注入：将実机公钥自动复制到容器（密码登录已禁用，仅允许 key 登录）
+    local host_pubkey=""
+    for keyfile in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_rsa.pub" "$HOME/.ssh/id_ecdsa.pub"; do
+        if [ -f "$keyfile" ]; then
+            host_pubkey=$(cat "$keyfile")
+            break
         fi
-    '
-    success "容器已创建并启动"
+    done
+    if [ -n "$host_pubkey" ]; then
+        docker exec "$CONTAINER_NAME" bash -c "mkdir -p /root/.ssh && chmod 700 /root/.ssh && echo '$host_pubkey' >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && sort -u -o /root/.ssh/authorized_keys /root/.ssh/authorized_keys"
+        success "容器已创建并启动（已自动注入实机SH公钥）"
+    else
+        success "容器已创建并启动"
+        warn "未找到实机 SSH 公钥，请进入容器后手动配置 authorized_keys"
+    fi
 
     # 显示安装完成摘要
     if [ -n "$DOMAIN" ]; then
@@ -977,6 +978,8 @@ show_command_hint() {
     ssh_port_val=$(jq -r '.ssh_port // 2222' "$CONFIG_FILE" 2>/dev/null || echo 2222)
     echo -e "${CYAN}────────────────────────────────────────────────${NC}"
     echo -e "  🔑 SSH: ${BLUE}ssh root@localhost -p ${ssh_port_val}${NC}"
+    echo -e "  ${YELLOW}注意: 密码登录已禁用，需配置 SSH Key：${NC}"
+    echo -e "    ${CYAN}ssh-copy-id -p ${ssh_port_val} root@localhost${NC}"
     echo -e "  退出容器后可用: ${BOLD}./${script_name}${NC} <命令>"
     echo -e "  ${YELLOW}stop${NC} 停止  ${YELLOW}status${NC} 状态  ${YELLOW}config${NC} 配置  ${YELLOW}update${NC} 更新"
     echo -e "  ${YELLOW}remove${NC} 删除容器  ${YELLOW}clean${NC} 完全清理  ${YELLOW}logs${NC} 日志"
@@ -1093,13 +1096,7 @@ cmd_config() {
         1)
             read -sp "新密码: " NEW_PASS; echo ""
             echo "root:${NEW_PASS}" | docker exec -i "$CONTAINER_NAME" chpasswd
-            # 确保 sshd 允许密码登录
-            docker exec "$CONTAINER_NAME" bash -c '
-                sed -i "s/^#\?PermitRootLogin.*/PermitRootLogin yes/" /etc/ssh/sshd_config
-                sed -i "s/^#\?PasswordAuthentication.*/PasswordAuthentication yes/" /etc/ssh/sshd_config
-                pkill -HUP sshd 2>/dev/null || true
-            '
-            success "密码已修改"
+            success "密码已修改（仅用于 docker exec / 容器内 su，SSH 仅允许 Key 登录）"
             ;;
         2)
             read -p "新端口: " NEW_PORT
