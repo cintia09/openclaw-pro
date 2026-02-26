@@ -16,6 +16,10 @@ RUN apt-get update && apt-get install -y \
     dnsmasq \
     && rm -rf /var/lib/apt/lists/*
 
+# sudo 保留代理环境变量（企业代理环境下 sudo apt-get 需要）
+RUN echo 'Defaults env_keep += "http_proxy https_proxy HTTP_PROXY HTTPS_PROXY no_proxy NO_PROXY"' > /etc/sudoers.d/keep-proxy \
+    && chmod 0440 /etc/sudoers.d/keep-proxy
+
 # Node.js 22
 RUN curl -fsSL --retry 3 --retry-delay 3 https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs && rm -rf /var/lib/apt/lists/*

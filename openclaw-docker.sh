@@ -85,6 +85,13 @@ fix_container_env() {
             warn "容器内执行: curl -fSL -o /tmp/g.deb http://archive.ubuntu.com/ubuntu/pool/main/g/gettext/gettext-base_0.21-14ubuntu2_amd64.deb && dpkg -i /tmp/g.deb"
         fi
     fi
+    # 确保 sudo 保留代理环境变量
+    docker exec "$cname" bash -c '
+        if [ ! -f /etc/sudoers.d/keep-proxy ]; then
+            echo '"'"'Defaults env_keep += "http_proxy https_proxy HTTP_PROXY HTTPS_PROXY no_proxy NO_PROXY"'"'"' > /etc/sudoers.d/keep-proxy
+            chmod 0440 /etc/sudoers.d/keep-proxy
+        fi
+    ' 2>/dev/null || true
 }
 
 # 检查 jq 是否安装（配置管理需要）
