@@ -929,6 +929,8 @@ F2B
         --cap-add NET_BIND_SERVICE \
         --cap-add KILL \
         --cap-add DAC_OVERRIDE \
+        --cap-add SYS_CHROOT \
+        --cap-add AUDIT_WRITE \
         --security-opt no-new-privileges \
         -v "$HOME_DIR:/root" \
         $PORT_ARGS \
@@ -942,6 +944,14 @@ F2B
     docker start "$CONTAINER_NAME"
     sleep 2
     echo "root:${ROOT_PASS}" | docker exec -i "$CONTAINER_NAME" chpasswd
+
+    # 修复 sshd: volume mount 导致 /root 属主为实机 UID，必须关闭 StrictModes
+    docker exec "$CONTAINER_NAME" bash -c '
+        if ! grep -q "^StrictModes no" /etc/ssh/sshd_config; then
+            echo "StrictModes no" >> /etc/ssh/sshd_config
+            pkill -HUP sshd 2>/dev/null || true
+        fi
+    '
 
     # SSH key 注入：将実机公钥自动复制到容器（密码登录已禁用，仅允许 key 登录）
     local host_pubkey=""
@@ -1022,8 +1032,15 @@ cmd_run() {
             ensure_image
             info "容器已停止，正在启动..."
             docker start "$CONTAINER_NAME"
-            success "容器已启动"
             sleep 2
+            # 确保 sshd StrictModes 关闭（volume mount /root 属主问题）
+            docker exec "$CONTAINER_NAME" bash -c '
+                if ! grep -q "^StrictModes no" /etc/ssh/sshd_config; then
+                    echo "StrictModes no" >> /etc/ssh/sshd_config
+                    pkill -HUP sshd 2>/dev/null || true
+                fi
+            ' 2>/dev/null || true
+            success "容器已启动"
             show_command_hint
             docker exec -it "$CONTAINER_NAME" bash -l
         fi
@@ -1047,6 +1064,13 @@ cmd_run() {
                 first_container=$(echo "$stopped_containers" | head -1 | cut -d'|' -f1)
                 info "启动容器 $first_container ..."
                 docker start "$first_container"
+                sleep 2
+                docker exec "$first_container" bash -c '
+                    if ! grep -q "^StrictModes no" /etc/ssh/sshd_config; then
+                        echo "StrictModes no" >> /etc/ssh/sshd_config
+                        pkill -HUP sshd 2>/dev/null || true
+                    fi
+                ' 2>/dev/null || true
                 success "容器已启动"
                 sleep 2
                 show_command_hint
@@ -1243,6 +1267,12 @@ cmd_update() {
         info "容器已停止，正在启动..."
         docker start "$CONTAINER_NAME" 2>/dev/null || true
         sleep 3
+        docker exec "$CONTAINER_NAME" bash -c '
+            if ! grep -q "^StrictModes no" /etc/ssh/sshd_config; then
+                echo "StrictModes no" >> /etc/ssh/sshd_config
+                pkill -HUP sshd 2>/dev/null || true
+            fi
+        ' 2>/dev/null || true
     fi
 
     # 智能检测更新类型（对齐 Windows 逻辑: Dockerfile hash 检查）
@@ -1476,6 +1506,8 @@ _do_full_update() {
         --cap-add NET_BIND_SERVICE \
         --cap-add KILL \
         --cap-add DAC_OVERRIDE \
+        --cap-add SYS_CHROOT \
+        --cap-add AUDIT_WRITE \
         --security-opt no-new-privileges \
         -v "$HOME_DIR:/root" \
         $PORT_ARGS \
@@ -1484,6 +1516,15 @@ _do_full_update() {
         -e "DOMAIN=$domain" \
         --restart unless-stopped \
         "$IMAGE_NAME"
+
+    # 修复 sshd: volume mount 导致 /root 属主为实机 UID，必须关闭 StrictModes
+    sleep 1
+    docker exec "$CONTAINER_NAME" bash -c '
+        if ! grep -q "^StrictModes no" /etc/ssh/sshd_config; then
+            echo "StrictModes no" >> /etc/ssh/sshd_config
+            pkill -HUP sshd 2>/dev/null || true
+        fi
+    ' 2>/dev/null || true
 
     # 等待服务就绪
     info "等待服务就绪..."
