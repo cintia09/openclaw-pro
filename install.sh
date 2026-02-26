@@ -7,11 +7,26 @@ REPO="https://github.com/cintia09/openclaw-pro.git"
 GITHUB_REPO="cintia09/openclaw-pro"
 IMAGE_NAME="openclaw-pro"
 IMAGE_TARBALL="openclaw-pro-image.tar.gz"
-INSTALL_DIR="${OPENCLAW_INSTALL_DIR:-$(pwd)/openclaw-pro}"
 
 echo "🐾 OpenClaw Pro Installer"
 echo "========================="
 echo ""
+
+# ---- 0. Detect install directory (align with Windows SCRIPT_DIR detection) ----
+# Priority: env var > existing install under pwd > existing install under pwd/openclaw-pro > new install
+if [ -n "${OPENCLAW_INSTALL_DIR:-}" ]; then
+  INSTALL_DIR="$OPENCLAW_INSTALL_DIR"
+elif [ -f "$(pwd)/openclaw-docker.sh" ] && [ -d "$(pwd)/.git" ]; then
+  # Already inside an openclaw-pro directory
+  INSTALL_DIR="$(pwd)"
+  echo "📂 检测到当前目录已是 OpenClaw Pro 安装目录"
+elif [ -f "$(pwd)/openclaw-pro/openclaw-docker.sh" ]; then
+  # openclaw-pro subdirectory already exists
+  INSTALL_DIR="$(pwd)/openclaw-pro"
+  echo "📂 检测到已有安装: $INSTALL_DIR"
+else
+  INSTALL_DIR="$(pwd)/openclaw-pro"
+fi
 
 # ---- 1. Check / install git ----
 if ! command -v git &>/dev/null; then
@@ -74,16 +89,13 @@ if ! command -v docker &>/dev/null; then
   sudo systemctl enable --now docker 2>/dev/null || true
 fi
 
-# ---- 3.5 Install aria2c for multi-threaded download (optional) ----
+# ---- 3.5 aria2c: optional hint (never force install) ----
 if ! command -v aria2c &>/dev/null; then
-  echo "📦 Installing aria2c for faster image download..."
-  if command -v apt-get &>/dev/null; then
-    sudo apt-get install -y -qq aria2 2>/dev/null || true
-  elif command -v dnf &>/dev/null; then
-    sudo dnf install -y -q aria2 2>/dev/null || true
-  elif command -v yum &>/dev/null; then
-    sudo yum install -y -q aria2 2>/dev/null || true
-  fi
+  echo "💡 提示: 安装 aria2c 可获得 8 线程加速下载（可选，非必须）"
+  echo "   apt: sudo apt-get install -y aria2"
+  echo "   dnf: sudo dnf install -y aria2"
+  echo "   当前将使用 curl 断点续传下载，也能正常工作。"
+  echo ""
 fi
 
 # ---- 4. Launch interactive setup or show instructions ----
