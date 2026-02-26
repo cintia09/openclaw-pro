@@ -571,6 +571,7 @@ show_install_summary() {
     local https_port="$3"
     local domain="$4"
     local tz="$5"
+    local ssh_port="${6:-2222}"
 
     echo ""
     echo -e "${GREEN}╔══════════════════════════════════════════════════════════════════╗${NC}"
@@ -581,6 +582,7 @@ show_install_summary() {
     if [ -n "$domain" ]; then
         echo -e "${GREEN}║${NC}    HTTP  ${YELLOW}${http_port}${NC}  → 证书验证 + 跳转HTTPS               ${GREEN}║${NC}"
         echo -e "${GREEN}║${NC}    HTTPS ${YELLOW}${https_port}${NC} → 主入口（反代 Gateway）              ${GREEN}║${NC}"
+        echo -e "${GREEN}║${NC}    SSH   ${YELLOW}${ssh_port}${NC} → 容器 22（远程登录）                  ${GREEN}║${NC}"
         echo -e "${GREEN}║${NC}    Gateway ${YELLOW}127.0.0.1:${gw_port}${NC} → 容器内部（不对外）     ${GREEN}║${NC}"
         echo -e "${GREEN}║${NC}                                                                  ${GREEN}║${NC}"
         echo -e "${GREEN}║${NC}  ${BOLD}访问地址：${NC}                                                    ${GREEN}║${NC}"
@@ -588,12 +590,14 @@ show_install_summary() {
         echo -e "${GREEN}║${NC}    🔧 管理面板: ${CYAN}https://${domain}:${https_port}/admin${NC}"
     else
         echo -e "${GREEN}║${NC}    Gateway ${YELLOW}${gw_port}${NC} → 主入口                           ${GREEN}║${NC}"
-        echo -e "${GREEN}║${NC}    Web面板 ${YELLOW}${https_port}${NC} → 管理面板（直连）                    ${GREEN}║${NC}"
+        echo -e "${GREEN}║${NC}    Web面板 ${YELLOW}${web_port}${NC} → 管理面板（直连）                    ${GREEN}║${NC}"
+        echo -e "${GREEN}║${NC}    SSH    ${YELLOW}${ssh_port}${NC} → 容器 22（远程登录）                ${GREEN}║${NC}"
         echo -e "${GREEN}║${NC}                                                                  ${GREEN}║${NC}"
         echo -e "${GREEN}║${NC}  ${BOLD}访问地址：${NC}                                                    ${GREEN}║${NC}"
         echo -e "${GREEN}║${NC}    🌐 主站:     ${CYAN}http://<服务器IP>:${gw_port}${NC}"
         echo -e "${GREEN}║${NC}    🔧 管理面板: ${CYAN}http://<服务器IP>:${https_port}${NC}"
     fi
+    echo -e "${GREEN}║${NC}    🔑 SSH:      ${CYAN}ssh root@localhost -p ${ssh_port}${NC}"
     echo -e "${GREEN}║${NC}                                                                  ${GREEN}║${NC}"
     echo -e "${GREEN}║${NC}  ${BOLD}账号信息：${NC}                                                    ${GREEN}║${NC}"
     echo -e "${GREEN}║${NC}    容器用户: ${YELLOW}root${NC}（密码为您刚才设置的密码）            ${GREEN}║${NC}"
@@ -674,6 +678,7 @@ first_time_setup() {
     # 默认配置值（尽量少问）
     GW_PORT=18789
     WEB_PORT=3000
+    SSH_PORT=2222
     DOMAIN=""
     TZ_VAL="Asia/Shanghai"
     PICKED_PORT=""
@@ -686,6 +691,10 @@ first_time_setup() {
     # Gateway 端口
     pick_port 18789 18790 "Gateway"
     GW_PORT="$PICKED_PORT"
+
+    # SSH 端口（对齐 Windows: 2222→容器22）
+    pick_port 2222 2223 "SSH"
+    SSH_PORT="$PICKED_PORT"
 
     # HTTPS（可选）
     read -p "HTTPS域名（可选，留空跳过，也可输入IP地址）: " DOMAIN
@@ -727,7 +736,7 @@ first_time_setup() {
         fi
 
         # HTTPS 模式：80/443 对外；Gateway/Web 仅本机（通过 Caddy 反代访问）
-        PORT_ARGS="-p ${HTTP_PORT}:80 -p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000"
+        PORT_ARGS="-p ${HTTP_PORT}:80 -p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000 -p ${SSH_PORT}:22"
     else
         # 域名为空 — 提供 IP 自签名 HTTPS 选项（对齐 Windows）
         echo ""
@@ -769,7 +778,7 @@ first_time_setup() {
                 pick_port 8443 8444 "HTTPS"
                 HTTPS_PORT="$PICKED_PORT"
 
-                PORT_ARGS="-p ${HTTP_PORT}:80 -p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000"
+                PORT_ARGS="-p ${HTTP_PORT}:80 -p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000 -p ${SSH_PORT}:22"
             else
                 warn "IP 格式无效，将使用 HTTP 直连模式"
             fi
@@ -779,7 +788,7 @@ first_time_setup() {
         if [ -z "$DOMAIN" ]; then
             pick_port 3000 3001 "Web管理面板"
             WEB_PORT="$PICKED_PORT"
-            PORT_ARGS="-p ${GW_PORT}:18789 -p ${WEB_PORT}:3000"
+            PORT_ARGS="-p ${GW_PORT}:18789 -p ${WEB_PORT}:3000 -p ${SSH_PORT}:22"
         fi
     fi
 
@@ -789,6 +798,7 @@ first_time_setup() {
 {
     "port": $GW_PORT,
     "web_port": $WEB_PORT,
+    "ssh_port": $SSH_PORT,
     "http_port": $HTTP_PORT,
     "https_port": $HTTPS_PORT,
     "domain": "${DOMAIN}",
@@ -923,9 +933,9 @@ F2B
 
     # 显示安装完成摘要
     if [ -n "$DOMAIN" ]; then
-        show_install_summary "$GW_PORT" "$HTTP_PORT" "$HTTPS_PORT" "$DOMAIN" "$TZ_VAL"
+        show_install_summary "$GW_PORT" "$HTTP_PORT" "$HTTPS_PORT" "$DOMAIN" "$TZ_VAL" "$SSH_PORT"
     else
-        show_install_summary "$GW_PORT" "$HTTP_PORT" "$WEB_PORT" "$DOMAIN" "$TZ_VAL"
+        show_install_summary "$GW_PORT" "$HTTP_PORT" "$WEB_PORT" "$DOMAIN" "$TZ_VAL" "$SSH_PORT"
     fi
 
     # 进入容器
@@ -945,6 +955,8 @@ show_running_panel() {
     echo -e "${CYAN}║${NC}                                                  ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}  状态: ${GREEN}● 运行中${NC}    容器: ${BOLD}$CONTAINER_NAME${NC}        ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}                                                  ${CYAN}║${NC}"
+    local SSH_PORT_DISPLAY
+    SSH_PORT_DISPLAY=$(jq -r '.ssh_port // 2222' "$CONFIG_FILE" 2>/dev/null)
     if [ -n "$DOMAIN" ]; then
         HTTPS_PORT=$(jq -r '.https_port // 8443' "$CONFIG_FILE" 2>/dev/null)
         echo -e "${CYAN}║${NC}  🌐 Web管理: ${BLUE}https://${DOMAIN}:${HTTPS_PORT}${NC}"
@@ -955,6 +967,7 @@ show_running_panel() {
         echo -e "${CYAN}║${NC}  🌐 Web管理: ${BLUE}http://localhost:${WEB_PORT}${NC}              ${CYAN}║${NC}"
         echo -e "${CYAN}║${NC}  📋 OpenClaw: ${BLUE}http://localhost:${GW_PORT}${NC}           ${CYAN}║${NC}"
     fi
+    echo -e "${CYAN}║${NC}  🔑 SSH:     ${BLUE}ssh root@localhost -p ${SSH_PORT_DISPLAY}${NC}"
     echo -e "${CYAN}║${NC}                                                  ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}  ${YELLOW}[C]${NC} 配置  ${YELLOW}[回车/10秒]${NC} 直接进入              ${CYAN}║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════╝${NC}"
@@ -1310,13 +1323,14 @@ _do_full_update() {
     domain=$(echo "$config_json" | jq -r '.domain // empty' 2>/dev/null)
     gw_port=$(echo "$config_json" | jq -r '.port // 18789' 2>/dev/null)
     web_port=$(echo "$config_json" | jq -r '.web_port // 3000' 2>/dev/null)
+    ssh_port=$(echo "$config_json" | jq -r '.ssh_port // 2222' 2>/dev/null)
     http_port=$(echo "$config_json" | jq -r '.http_port // 0' 2>/dev/null)
     https_port=$(echo "$config_json" | jq -r '.https_port // 0' 2>/dev/null)
     cert_mode=$(echo "$config_json" | jq -r '.cert_mode // "letsencrypt"' 2>/dev/null)
     tz=$(echo "$config_json" | jq -r '.timezone // "Asia/Shanghai"' 2>/dev/null)
 
     info "域名: ${domain:-无}"
-    info "端口: Gateway=$gw_port Web=$web_port HTTP=$http_port HTTPS=$https_port"
+    info "端口: Gateway=$gw_port Web=$web_port SSH=$ssh_port HTTP=$http_port HTTPS=$https_port"
 
     # 获取当前版本
     local current_ver
@@ -1349,9 +1363,9 @@ _do_full_update() {
     # 构建端口映射
     local PORT_ARGS=""
     if [ -n "$domain" ]; then
-        PORT_ARGS="-p ${http_port}:80 -p ${https_port}:443 -p 127.0.0.1:${gw_port}:18789 -p 127.0.0.1:${web_port}:3000"
+        PORT_ARGS="-p ${http_port}:80 -p ${https_port}:443 -p 127.0.0.1:${gw_port}:18789 -p 127.0.0.1:${web_port}:3000 -p ${ssh_port}:22"
     else
-        PORT_ARGS="-p ${gw_port}:18789 -p ${web_port}:3000"
+        PORT_ARGS="-p ${gw_port}:18789 -p ${web_port}:3000 -p ${ssh_port}:22"
     fi
 
     # 启动新容器
