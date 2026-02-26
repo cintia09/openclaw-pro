@@ -645,7 +645,9 @@ if ($latestVersion -and $latestVersion -eq $currentVersion -and -not $recommendF
 
 # -- 6. 下载最新镜像 --
 Write-Step "下载最新镜像..."
-$downloadDir = Join-Path $env:TEMP "openclaw-update"
+# tmp 目录与 openclaw-pro 平级（如 C:\Mydata\docker-openclaw\tmp）
+$scriptDir = if ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { $PWD.Path }
+$downloadDir = Join-Path (Split-Path $scriptDir -Parent) "tmp"
 if (-not (Test-Path $downloadDir)) { New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null }
 
 $tarPath = Join-Path $downloadDir $updateAssetName
@@ -760,7 +762,7 @@ if (Test-Path $tarPath) {
         return
     }
     Write-OK "镜像加载完成"
-    Remove-Item $tarPath -Force -ErrorAction SilentlyContinue
+    # 镜像文件始终保留在 tmp 目录（便于重试和排查）
 }
 
 # -- 8. 停止并删除旧容器 --

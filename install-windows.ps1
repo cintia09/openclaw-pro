@@ -39,9 +39,13 @@ $SCRIPT_URL      = "https://raw.githubusercontent.com/cintia09/openclaw-pro/main
 $SCRIPT_DIR      = if ($MyInvocation.MyCommand.Path) {
     Split-Path -Parent $MyInvocation.MyCommand.Path
 } else {
-    $env:TEMP
+    # bat 远程调用时 $MyInvocation.MyCommand.Path 为空，用当前工作目录
+    $PWD.Path
 }
-$LOG_FILE        = Join-Path $SCRIPT_DIR "install-log.txt"
+# tmp 目录与 openclaw-pro 平级（如 C:\Mydata\docker-openclaw\tmp）
+$TMP_DIR         = Join-Path (Split-Path $SCRIPT_DIR -Parent) "tmp"
+if (-not (Test-Path $TMP_DIR)) { New-Item -ItemType Directory -Path $TMP_DIR -Force | Out-Null }
+$LOG_FILE        = Join-Path $TMP_DIR "install-log.txt"
 $STATE_FILE      = Join-Path $SCRIPT_DIR ".install-state.json"
 
 # --- Colors / Logging ---------------------------------------------------------
@@ -2848,7 +2852,7 @@ function Main {
             }
 
             try {
-                $imageTar = Join-Path $env:TEMP $assetName
+                $imageTar = Join-Path $TMP_DIR $assetName
 
                 $imageUrl = ""
                 $expectedSize = [long]0
@@ -3056,9 +3060,7 @@ function Main {
                             Write-Warn "docker load 失败，继续尝试其他方式..."
                             Write-Info "镜像文件已保留: $imageTar（下次运行可直接加载，无需重新下载）"
                         }
-                        if ($imageReady) {
-                            Remove-Item $imageTar -Force -ErrorAction SilentlyContinue
-                        }
+                        # 镜像文件始终保留在 tmp 目录（便于重试和排查）
                 } else {
                     Write-Warn "Release 镜像下载失败，继续尝试其他方式..."
                     # 若是分块下载失败，会保留部分下载的文件以便续传（下次运行自动恢复）
@@ -3576,7 +3578,7 @@ function Main {
                 # 恢复方式 1: Download-Robust 多线程分块下载 Release tar.gz
                 $recoverTag = if ($latestReleaseTag) { $latestReleaseTag } else { "latest" }
                 $recoverAssetName = if ($script:imageEdition -eq "full") { "openclaw-pro-image.tar.gz" } else { "openclaw-pro-image-lite.tar.gz" }
-                $recoverTar = Join-Path $env:TEMP $recoverAssetName
+                $recoverTar = Join-Path $TMP_DIR $recoverAssetName
                 $releaseBaseUrl = if ($latestReleaseTag) {
                     "https://github.com/$GITHUB_REPO/releases/download/$latestReleaseTag/$recoverAssetName"
                 } else {
@@ -3597,7 +3599,7 @@ function Main {
                     $recoverDownloadOK = $false
 
                     # 检测上次保留的完整 tar 文件（docker load 失败时不删除）
-                    if ((Test-Path $recoverTar) -and (Get-Item $recoverTar).Length -gt 500MB) {
+                    if ((Test-Path $recoverTar) -and (Get-Item $recoverTar).Length -gt 50MB) {
                         $existRecoverSize = (Get-Item $recoverTar).Length
                         Write-OK "检测到已下载的镜像文件 ($([math]::Round($existRecoverSize / 1MB, 1))MB)，跳过下载"
                         $recoverDownloadOK = $true
@@ -3700,7 +3702,7 @@ function Main {
                         if ($LASTEXITCODE -eq 0) {
                             Write-OK "Release 镜像加载完成 (耗时 ${totalLoadSec} 秒)"
                             $recoverOK = $true
-                            Remove-Item $recoverTar -Force -ErrorAction SilentlyContinue
+                            # 镜像文件始终保留在 tmp 目录（便于重试和排查）
                         } else {
                             Write-Warn "docker load 失败"
                             Write-Info "镜像文件已保留: $recoverTar（下次运行可直接加载，无需重新下载）"
@@ -3742,7 +3744,7 @@ function Main {
                 # 恢复后重试启动容器
                 if ($recoverOK) {
                     Write-Info "正在重试启动容器..."
-                    & docker rm -f $containerName 2>&1 | Out-Null
+                    & docker rm -f $containerName 2>$null | Out-Null
                     Start-Sleep -Seconds 1
                     try {
                         Push-Location $localDeployDir
@@ -3757,9 +3759,10 @@ function Main {
                             "--restart", "unless-stopped"
                         )
                         $retryArgs += $deployConfig.PortArgs
-                        $retryArgs += "openclaw-pro"
+                        $retryArgs += "openclaw-pro:latest"
                         $retryResult = & docker @retryArgs 2>&1
-                        if ($LASTEXITCODE -eq 0) {
+                        $retryCode = $LASTEXITCODE
+                        if ($retryCode -eq 0) {
                             Write-OK "容器启动成功"
                             $launched = $true
                         }
