@@ -1325,8 +1325,11 @@ cmd_update() {
     # 智能检测更新类型（对齐 Windows 逻辑: Dockerfile hash 检查）
     local recommend_full=false
     local recommend_msg=""
+    local has_update=true  # 默认认为有更新（API 不可用时不阻挡）
+    local current_ver="" remote_ver=""
     if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
         info "检测更新类型..."
+        current_ver=$(docker exec "$CONTAINER_NAME" cat /etc/openclaw-version 2>/dev/null || echo "unknown")
         # 检查容器内是否有 Dockerfile hash 文件
         if ! docker exec "$CONTAINER_NAME" test -f /etc/openclaw-dockerfile-hash 2>/dev/null; then
             recommend_full=true
@@ -1342,8 +1345,30 @@ cmd_update() {
                     recommend_full=true
                     recommend_msg="检测到 Dockerfile 已变更，建议完整更新"
                 fi
+                # 检查是否有任何更新可用
+                local update_available
+                update_available=$(echo "$check_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print('true' if d.get('hasUpdate', d.get('updateAvailable', True)) else 'false')" 2>/dev/null || echo "true")
+                remote_ver=$(echo "$check_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('remoteVersion', d.get('latestVersion', '')))" 2>/dev/null || true)
+                if [ "$update_available" = "false" ]; then
+                    has_update=false
+                fi
             fi
         fi
+    fi
+
+    # 如果没有更新，提示已是最新，但仍允许强制更新
+    if ! $has_update; then
+        echo ""
+        echo -e "${GREEN}╔══════════════════════════════════════════╗${NC}"
+        echo -e "${GREEN}║${NC}  ✅ 当前已是最新版本${current_ver:+ (${current_ver})}              ${GREEN}║${NC}"
+        echo -e "${GREEN}╚══════════════════════════════════════════╝${NC}"
+        echo ""
+        local force_choice=""
+        read -p "是否仍要强制检查更新？[y/N]: " force_choice || true
+        if [[ ! "$force_choice" =~ ^[yY] ]]; then
+            return 0
+        fi
+        echo ""
     fi
 
     # 显示更新菜单
