@@ -917,6 +917,10 @@ F2B
     # 获取镜像（配置完成后再下载，与 Windows 安装器流程对齐）
     ensure_image
 
+    # 清除旧 SSH host key（容器重建后 key 会变）
+    ssh-keygen -R "[localhost]:${SSH_PORT}" 2>/dev/null || true
+    ssh-keygen -R "[127.0.0.1]:${SSH_PORT}" 2>/dev/null || true
+
     # 创建容器
     info "创建容器..."
     docker create \
@@ -1493,6 +1497,10 @@ _do_full_update() {
     else
         PORT_ARGS="-p ${gw_port}:18789 -p ${web_port}:3000 -p ${ssh_port}:22"
     fi
+
+    # 清除旧 SSH host key（容器重建后 key 会变）
+    ssh-keygen -R "[localhost]:${ssh_port}" 2>/dev/null || true
+    ssh-keygen -R "[127.0.0.1]:${ssh_port}" 2>/dev/null || true
 
     # 启动新容器
     info "启动新容器..."
