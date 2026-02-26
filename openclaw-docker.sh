@@ -1126,7 +1126,7 @@ cmd_remove() {
     echo -e "  ${GREEN}✓ 已挂载的数据卷不受影响${NC}"
     echo ""
     local confirm=""
-    read -p "确认删除容器？[y/N]: " confirm 2>/dev/null || true
+    read -p "确认删除容器？[y/N]: " confirm
     if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
         docker stop "$CONTAINER_NAME" 2>/dev/null || true
         docker rm "$CONTAINER_NAME" 2>/dev/null || true
@@ -1147,7 +1147,7 @@ cmd_clean() {
     echo -e "  ${YELLOW}⚠ 此操作不可逆！${NC}"
     echo ""
     local confirm=""
-    read -p "输入 YES 确认完全清理: " confirm 2>/dev/null || true
+    read -p "输入 YES 确认完全清理: " confirm
     if [ "$confirm" = "YES" ]; then
         docker stop "$CONTAINER_NAME" 2>/dev/null || true
         docker rm "$CONTAINER_NAME" 2>/dev/null || true
