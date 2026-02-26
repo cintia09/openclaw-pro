@@ -517,6 +517,7 @@ ask_port() {
     local default_port="$1"
     local fallback_start="$2"
     local desc="$3"
+    local container_port="$4"  # 容器内部端口
 
     # 先计算推荐端口（默认端口可用则用它，否则自动寻找）
     local recommended="$default_port"
@@ -525,7 +526,7 @@ ask_port() {
     fi
 
     local input=""
-    read -p "$(echo -e "  ${CYAN}${desc}${NC} 端口 [${GREEN}${recommended}${NC}，回车自动]: ")" input || true
+    read -p "$(echo -e "  ${CYAN}${desc}${NC} 实机端口 → 容器${container_port} [${GREEN}${recommended}${NC}，回车自动]: ")" input || true
 
     if [ -z "$input" ]; then
         PICKED_PORT="$recommended"
@@ -540,7 +541,7 @@ ask_port() {
         warn "输入无效，使用推荐端口 $recommended"
         PICKED_PORT="$recommended"
     fi
-    echo -e "    → ${desc}: ${GREEN}${PICKED_PORT}${NC}"
+    echo -e "    → ${desc}: ${GREEN}${PICKED_PORT}${NC} → 容器 ${container_port}"
 }
 
 # 检测是否在 WSL2 环境
@@ -750,35 +751,35 @@ first_time_setup() {
     # 第二步：根据模式逐个询问端口
     # ============================================
     echo ""
-    echo -e "${BOLD}━━━ 端口配置（回车使用推荐值，输入数字自定义）━━━${NC}"
+    echo -e "${BOLD}━━━ 端口配置（实机端口 → 容器端口，回车使用推荐值）━━━${NC}"
 
     # 所有模式都需要 Gateway 和 SSH
-    ask_port 18789 18790 "Gateway"
+    ask_port 18789 18790 "Gateway" 18789
     GW_PORT="$PICKED_PORT"
 
-    ask_port 2222 2223 "SSH"
+    ask_port 2222 2223 "SSH" 22
     SSH_PORT="$PICKED_PORT"
 
     if [ -n "$DOMAIN" ] && [ "$CERT_MODE" = "letsencrypt" ]; then
         # 域名+LE: HTTP(80) + HTTPS(443) + 内部GW/Web
-        ask_port 80 8080 "HTTP(ACME验证)"
+        ask_port 80 8080 "HTTP(ACME验证)" 80
         HTTP_PORT="$PICKED_PORT"
 
-        ask_port 8443 8444 "HTTPS"
+        ask_port 8443 8444 "HTTPS" 443
         HTTPS_PORT="$PICKED_PORT"
 
         PORT_ARGS="-p ${HTTP_PORT}:80 -p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000 -p ${SSH_PORT}:22"
 
     elif [ -n "$DOMAIN" ] && [ "$CERT_MODE" = "internal" ]; then
         # IP+自签名: HTTPS(443) + 内部GW/Web
-        ask_port 8443 8444 "HTTPS"
+        ask_port 8443 8444 "HTTPS" 443
         HTTPS_PORT="$PICKED_PORT"
 
         PORT_ARGS="-p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000 -p ${SSH_PORT}:22"
 
     else
         # HTTP 直连: GW + Web + SSH
-        ask_port 3000 3001 "Web管理面板"
+        ask_port 3000 3001 "Web管理面板" 3000
         WEB_PORT="$PICKED_PORT"
 
         PORT_ARGS="-p ${GW_PORT}:18789 -p ${WEB_PORT}:3000 -p ${SSH_PORT}:22"
