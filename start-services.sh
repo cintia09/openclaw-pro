@@ -285,10 +285,32 @@ if [ -f "$CONFIG_FILE" ]; then
             export TLS_BLOCK
             echo "[start-services] Using Let's Encrypt certificate"
         fi
-        envsubst < /etc/caddy/Caddyfile.template > /tmp/Caddyfile
-        caddy run --config /tmp/Caddyfile >> "$LOG_DIR/caddy.log" 2>&1 &
-        CADDY_PID=$!
-        echo "[start-services] Caddy PID: $CADDY_PID"
+        # 只替换我们定义的三个变量，避免 envsubst 误替换模板中的其他 $ 符号
+        envsubst '${DOMAIN} ${GLOBAL_OPTIONS} ${TLS_BLOCK}' \
+            < /etc/caddy/Caddyfile.template > /tmp/Caddyfile
+
+        # 验证渲染结果非空
+        if [ ! -s /tmp/Caddyfile ]; then
+            echo "[start-services] ERROR: Caddyfile is empty after envsubst!"
+            echo "[start-services] Template content:"
+            cat /etc/caddy/Caddyfile.template >> "$LOG_DIR/caddy.log" 2>&1
+            echo "[start-services] Env: DOMAIN=$DOMAIN GLOBAL_OPTIONS=$GLOBAL_OPTIONS TLS_BLOCK=$TLS_BLOCK"
+            # 直接用 sed 做变量替换作为兜底
+            echo "[start-services] Falling back to sed-based substitution..."
+            sed -e "s|\${DOMAIN}|${DOMAIN}|g" \
+                -e "s|\${TLS_BLOCK}|${TLS_BLOCK}|g" \
+                -e "s|\${GLOBAL_OPTIONS}|${GLOBAL_OPTIONS}|g" \
+                /etc/caddy/Caddyfile.template > /tmp/Caddyfile
+        fi
+
+        if [ -s /tmp/Caddyfile ]; then
+            echo "[start-services] Caddyfile rendered OK ($(wc -c < /tmp/Caddyfile) bytes)"
+            caddy run --config /tmp/Caddyfile >> "$LOG_DIR/caddy.log" 2>&1 &
+            CADDY_PID=$!
+            echo "[start-services] Caddy PID: $CADDY_PID"
+        else
+            echo "[start-services] ERROR: Caddyfile still empty, Caddy not started"
+        fi
     fi
 fi
 
