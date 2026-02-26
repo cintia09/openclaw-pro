@@ -1107,6 +1107,48 @@ cmd_rebuild() {
     success "镜像重建完成，请运行: $0 run"
 }
 
+cmd_remove() {
+    echo -e "${BOLD}━━━ 删除容器 ━━━${NC}"
+    echo -e "  容器: ${CYAN}${CONTAINER_NAME}${NC}"
+    echo -e "  ${YELLOW}⚠ 容器内未持久化的数据将丢失${NC}"
+    echo -e "  ${GREEN}✓ 已挂载的数据卷不受影响${NC}"
+    echo ""
+    local confirm=""
+    read -p "确认删除容器？[y/N]: " confirm 2>/dev/null || true
+    if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+        docker stop "$CONTAINER_NAME" 2>/dev/null || true
+        docker rm "$CONTAINER_NAME" 2>/dev/null || true
+        success "容器已删除"
+        echo -e "  重新部署: ${CYAN}$0 run${NC}"
+    else
+        info "已取消"
+    fi
+}
+
+cmd_clean() {
+    echo -e "${RED}━━━ 完全清理 ━━━${NC}"
+    echo -e "  ${RED}将删除以下内容：${NC}"
+    echo -e "    • 容器: ${CYAN}${CONTAINER_NAME}${NC}"
+    echo -e "    • 镜像: ${CYAN}${IMAGE_NAME}${NC}"
+    echo -e "    • 配置: ${CYAN}${CONFIG_FILE}${NC}"
+    echo -e "    • 版本标记: ${CYAN}${HOME_DIR}/.openclaw/${NC}"
+    echo -e "  ${YELLOW}⚠ 此操作不可逆！${NC}"
+    echo ""
+    local confirm=""
+    read -p "输入 YES 确认完全清理: " confirm 2>/dev/null || true
+    if [ "$confirm" = "YES" ]; then
+        docker stop "$CONTAINER_NAME" 2>/dev/null || true
+        docker rm "$CONTAINER_NAME" 2>/dev/null || true
+        docker rmi "$IMAGE_NAME" 2>/dev/null || true
+        rm -f "$CONFIG_FILE" 2>/dev/null || true
+        rm -rf "$HOME_DIR/.openclaw" 2>/dev/null || true
+        success "已完全清理"
+        echo -e "  重新安装: ${CYAN}$0 run${NC}"
+    else
+        info "已取消（需输入大写 YES 确认）"
+    fi
+}
+
 cmd_logs() {
     docker logs --tail 100 -f "$CONTAINER_NAME"
 }
@@ -1422,21 +1464,30 @@ case "${1:-run}" in
     config)   cmd_config ;;
     shell)    cmd_shell ;;
     rebuild)  cmd_rebuild ;;
+    remove)   cmd_remove ;;
+    clean)    cmd_clean ;;
     logs)     cmd_logs ;;
     update)   cmd_update ;;
     hotpatch) _do_hotpatch ;;
     *)
-        echo -e "${BOLD}用法:${NC} $0 {run|stop|status|config|shell|rebuild|update|logs}"
+        echo -e "${BOLD}用法:${NC} $0 <命令>"
         echo ""
+        echo -e "${BOLD}常用命令:${NC}"
         echo "  run      启动容器（首次运行进入配置向导）"
         echo "  stop     停止容器"
         echo "  status   查看状态"
-        echo "  config   修改配置"
         echo "  shell    进入容器终端"
-        echo "  rebuild  重建镜像"
-        echo "  update   更新（热更新/完整更新）"
+        echo ""
+        echo -e "${BOLD}管理命令:${NC}"
+        echo "  config   修改配置（密码/端口/域名/时区）"
+        echo "  update   更新（智能检测热更新/完整更新）"
         echo "  hotpatch 仅热更新（Web面板等文件）"
-        echo "  logs     查看日志"
+        echo "  rebuild  重建容器+镜像（保留数据卷）"
+        echo "  logs     查看容器日志"
+        echo ""
+        echo -e "${BOLD}清理命令:${NC}"
+        echo "  remove   删除容器（保留镜像和配置）"
+        echo "  clean    完全清理（容器+镜像+配置）"
         exit 1
         ;;
 esac
