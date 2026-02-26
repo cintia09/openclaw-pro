@@ -688,7 +688,7 @@ first_time_setup() {
     GW_PORT="$PICKED_PORT"
 
     # HTTPS（可选）
-    read -p "HTTPS域名（可选，留空=不启用HTTPS，也可输入IP地址）: " DOMAIN
+    read -p "HTTPS域名（可选，留空跳过，也可输入IP地址）: " DOMAIN
 
     CERT_MODE="letsencrypt"  # 默认证书模式
 
