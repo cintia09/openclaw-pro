@@ -944,29 +944,25 @@ F2B
 
 # 进入容器前的命令提示
 show_command_hint() {
-    local script_name
+    local script_name ssh_port_val
     script_name=$(basename "$0")
+    ssh_port_val=$(jq -r '.ssh_port // 2222' "$CONFIG_FILE" 2>/dev/null || echo 2222)
     echo -e "${CYAN}────────────────────────────────────────────────${NC}"
+    echo -e "  🔑 SSH: ${BLUE}ssh root@localhost -p ${ssh_port_val}${NC}"
     echo -e "  退出容器后可用: ${BOLD}./${script_name}${NC} <命令>"
     echo -e "  ${YELLOW}stop${NC} 停止  ${YELLOW}status${NC} 状态  ${YELLOW}config${NC} 配置  ${YELLOW}update${NC} 更新"
     echo -e "  ${YELLOW}remove${NC} 删除容器  ${YELLOW}clean${NC} 完全清理  ${YELLOW}logs${NC} 日志"
     echo -e "${CYAN}────────────────────────────────────────────────${NC}"
 }
 
-# 显示再次运行面板
+# 容器已运行时的入口
 show_running_panel() {
     echo ""
-    echo -e "${CYAN}╔══════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║${NC}            ${BOLD}🐾 OpenClaw Pro v1.0${NC}                  ${CYAN}║${NC}"
-    echo -e "${CYAN}║${NC}                                                  ${CYAN}║${NC}"
-    echo -e "${CYAN}║${NC}  状态: ${GREEN}● 运行中${NC}    容器: ${BOLD}$CONTAINER_NAME${NC}        ${CYAN}║${NC}"
-    echo -e "${CYAN}║${NC}                                                  ${CYAN}║${NC}"
-    echo -e "${CYAN}║${NC}  ${YELLOW}[C]${NC} 配置菜单  ${YELLOW}[回车/5秒]${NC} 进入容器           ${CYAN}║${NC}"
-    echo -e "${CYAN}╚══════════════════════════════════════════════════╝${NC}"
+    echo -e "  ${GREEN}●${NC} 容器 ${BOLD}${CONTAINER_NAME}${NC} 已运行中"
+    echo -e "  ${YELLOW}[C]${NC} 配置菜单  ${YELLOW}[回车/3秒]${NC} 直接进入容器"
     echo ""
 
-    # 5秒倒计时
-    read -t 5 -n 1 CHOICE 2>/dev/null || CHOICE=""
+    read -t 3 -n 1 CHOICE 2>/dev/null || CHOICE=""
     echo ""
 
     if [[ "$CHOICE" == "c" || "$CHOICE" == "C" ]]; then
