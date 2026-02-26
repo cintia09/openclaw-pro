@@ -942,6 +942,20 @@ F2B
     docker start "$CONTAINER_NAME"
     sleep 2
     echo "root:${ROOT_PASS}" | docker exec -i "$CONTAINER_NAME" chpasswd
+
+    # 配置 sshd 允许密码登录（镜像默认 prohibit-password）
+    docker exec "$CONTAINER_NAME" bash -c '
+        sed -i "s/^#\?PermitRootLogin.*/PermitRootLogin yes/" /etc/ssh/sshd_config
+        sed -i "s/^#\?PasswordAuthentication.*/PasswordAuthentication yes/" /etc/ssh/sshd_config
+        # 重启 sshd（兼容不同发行版）
+        if command -v supervisorctl &>/dev/null; then
+            supervisorctl restart sshd 2>/dev/null || true
+        elif [ -f /run/sshd.pid ]; then
+            kill -HUP $(cat /run/sshd.pid) 2>/dev/null || true
+        else
+            pkill -HUP sshd 2>/dev/null || true
+        fi
+    '
     success "容器已创建并启动"
 
     # 显示安装完成摘要
@@ -1079,6 +1093,12 @@ cmd_config() {
         1)
             read -sp "新密码: " NEW_PASS; echo ""
             echo "root:${NEW_PASS}" | docker exec -i "$CONTAINER_NAME" chpasswd
+            # 确保 sshd 允许密码登录
+            docker exec "$CONTAINER_NAME" bash -c '
+                sed -i "s/^#\?PermitRootLogin.*/PermitRootLogin yes/" /etc/ssh/sshd_config
+                sed -i "s/^#\?PasswordAuthentication.*/PasswordAuthentication yes/" /etc/ssh/sshd_config
+                pkill -HUP sshd 2>/dev/null || true
+            '
             success "密码已修改"
             ;;
         2)
