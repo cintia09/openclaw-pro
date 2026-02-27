@@ -49,6 +49,14 @@ if (-not (Test-Path $TMP_DIR)) { New-Item -ItemType Directory -Path $TMP_DIR -Fo
 $LOG_FILE        = Join-Path $TMP_DIR "install-log.txt"
 $STATE_FILE      = Join-Path $SCRIPT_DIR ".install-state.json"
 
+# 如果通过 `irm ... | iex` (远程执行) 运行且用户未显式指定 -ImageOnly，则默认启用 ImageOnly 模式
+if (-not $PSBoundParameters.ContainsKey('ImageOnly')) {
+    if (-not $MyInvocation.MyCommand.Path) {
+        $ImageOnly = $true
+        Write-Info "检测到远程执行（iex），默认启用 ImageOnly 模式：仅下载/加载 Release 镜像并启动容器"
+    }
+}
+
 # --- Colors / Logging ---------------------------------------------------------
 function Write-Log {
     param([string]$Message, [string]$Level = "INFO")
