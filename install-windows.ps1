@@ -1567,7 +1567,9 @@ function Get-DeployConfig {
     Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray
     Write-Host "  📝 端口映射:" -ForegroundColor White
     if ($config.HttpsEnabled) {
-        Write-Host "     HTTP   $($config.HttpPort) → 容器 80  (证书验证+跳转)" -ForegroundColor Gray
+        if ($config.CertMode -eq 'letsencrypt') {
+            Write-Host "     HTTP   $($config.HttpPort) → 容器 80  (证书验证+跳转)" -ForegroundColor Gray
+        }
         Write-Host "     HTTPS  $($config.HttpsPort) → 容器 443 (主入口)" -ForegroundColor Gray
         Write-Host "     SSH    $($config.SshPort) → 容器 22  (远程登录)" -ForegroundColor Gray
         if ($config.CertMode -eq "internal") {
@@ -1594,7 +1596,10 @@ function Get-DeployConfig {
     # 统一防火墙策略（由用户选择是否自动开放）
     $fwPortList = @()
     if ($config.HttpsEnabled) {
-        if ($config.HttpPort -and $config.HttpPort -gt 0) { $fwPortList += $config.HttpPort }
+        # Only include HTTP port for firewall when using Let's Encrypt (ACME) mode
+        if ($config.CertMode -eq 'letsencrypt') {
+            if ($config.HttpPort -and $config.HttpPort -gt 0) { $fwPortList += $config.HttpPort }
+        }
         if ($config.HttpsPort -and $config.HttpsPort -gt 0) { $fwPortList += $config.HttpsPort }
     } else {
         if ($config.GatewayPort -and $config.GatewayPort -gt 0) { $fwPortList += $config.GatewayPort }
@@ -2813,6 +2818,16 @@ function Main {
                     }
                 }
 
+                # 检测本地镜像的 tag（lite/full/latest）以便与用户选择的镜像类型比对
+                $localImageEdition = "unknown"
+                try {
+                    $localTags = (& docker images --format '{{.Repository}}:{{.Tag}}' 2>$null) -join ';'
+                    if ($localTags -match 'openclaw-pro:lite') { $localImageEdition = 'lite' }
+                    elseif ($localTags -match 'openclaw-pro:full') { $localImageEdition = 'full' }
+                    elseif ($localTags -match 'openclaw-pro:latest') { $localImageEdition = 'latest' }
+                    if ($localTags) { Write-Info "本地镜像标签: $localTags (detected edition: $localImageEdition)" }
+                } catch { }
+
                 # 读取保存的镜像 digest，并与当前实际镜像 ID 对比
                 $localImageDigest = ""
                 $imageDigestFile = Join-Path $homeBaseDir "$tagHomeDataName\.openclaw\image-digest.txt"
@@ -2840,6 +2855,28 @@ function Main {
                 }
 
                 Write-Host ""
+                # 先让用户选择镜像 edition（精简/完整版），以便后续与本地镜像比对
+                Write-Host ""
+                Write-Host "  请选择镜像版本:" -ForegroundColor Cyan
+                Write-Host "     [1] 精简版（默认，~250MB，约 5 分钟完成安装）" -ForegroundColor White
+                Write-Host "         包含: Ubuntu + Node.js + Caddy + Web面板 + 常用工具 + Python3" -ForegroundColor DarkGray
+                Write-Host "         Chrome/noVNC/LightGBM/openclaw 等可后期通过 Web 面板安装" -ForegroundColor DarkGray
+                Write-Host "     [2] 完整版（~1.6GB，约 30 分钟完成安装）" -ForegroundColor White
+                Write-Host "         包含全部组件: Chrome 浏览器、noVNC、LightGBM、openclaw 等" -ForegroundColor DarkGray
+                Write-Host ""
+                Write-Host "  输入选择 [1/2，默认1]: " -NoNewline -ForegroundColor White
+                $editionChoice = (Read-Host).Trim()
+                if ($editionChoice -eq '2') {
+                    $script:imageEdition = "full"
+                    $assetName = "openclaw-pro-image.tar.gz"
+                    Write-Info "已选择完整版镜像"
+                } else {
+                    $script:imageEdition = "lite"
+                    $assetName = "openclaw-pro-image-lite.tar.gz"
+                    Write-Info "已选择精简版镜像"
+                }
+
+                Write-Host ""
                 Write-Host "  请选择镜像策略:" -ForegroundColor Cyan
                 if ($effectiveLatestTag -and $localImageReleaseTag -and $effectiveLatestTag -eq $localImageReleaseTag) {
                     $digestOK = (-not $localImageDigest) -or ($currentImageId -eq $localImageDigest)
@@ -2863,7 +2900,10 @@ function Main {
                     Write-Host "     [2] 强制下载最新镜像（覆盖更新）" -ForegroundColor White
                 }
                 Write-Host ""
-                $defaultImageChoice = if ($effectiveLatestTag -and ($localImageReleaseTag -ne $effectiveLatestTag)) { '2' } else { '1' }
+                $defaultImageChoice = '1'
+                if ($effectiveLatestTag -and ($localImageReleaseTag -ne $effectiveLatestTag)) { $defaultImageChoice = '2' }
+                # 如果本地镜像存在但与所选 edition（lite/full）不匹配，默认建议下载最新镜像
+                if ($localImageEdition -and $localImageEdition -ne 'unknown' -and $localImageEdition -ne $script:imageEdition) { $defaultImageChoice = '2' }
                 Write-Host "  请输入选择 [1/2，默认$defaultImageChoice]: " -NoNewline -ForegroundColor White
                 $imageChoice = (Read-Host).Trim()
                 if (-not $imageChoice) { $imageChoice = $defaultImageChoice }
@@ -2893,17 +2933,7 @@ function Main {
             Write-Host "     [2] 完整版（~1.6GB，约 30 分钟完成安装）" -ForegroundColor White
             Write-Host "         包含全部组件: Chrome 浏览器、noVNC、LightGBM、openclaw 等" -ForegroundColor DarkGray
             Write-Host ""
-            Write-Host "  输入选择 [1/2，默认1]: " -NoNewline -ForegroundColor White
-            $editionChoice = (Read-Host).Trim()
-            if ($editionChoice -eq '2') {
-                $script:imageEdition = "full"
-                $assetName = "openclaw-pro-image.tar.gz"
-                Write-Info "已选择完整版镜像"
-            } else {
-                $script:imageEdition = "lite"
-                $assetName = "openclaw-pro-image-lite.tar.gz"
-                Write-Info "已选择精简版镜像"
-            }
+            
 
             try {
                 $imageTar = Join-Path $TMP_DIR $assetName
