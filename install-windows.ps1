@@ -1399,10 +1399,24 @@ function Get-DeployConfig {
 
         # HTTPS 模式: 仅暴露 Caddy 端口到宿主机
         # Gateway/Web 走容器内回环访问，不占用宿主机 18789/3000
-        $config.PortArgs = @(
-            "-p", "$($config.HttpPort):80",
-            "-p", "$($config.HttpsPort):443"
-        )
+        if ($config.CertMode -eq "letsencrypt") {
+            # Let's Encrypt 需要 80/443 暴露用于 ACME 验证
+            if ($config.CertMode -eq "letsencrypt") {
+                $config.PortArgs = @(
+                    "-p", "$($config.HttpPort):80",
+                    "-p", "$($config.HttpsPort):443"
+                )
+            } else {
+                $config.PortArgs = @(
+                    "-p", "$($config.HttpsPort):443"
+                )
+            }
+        } else {
+            # 自签证书（IP）场景：不需要在宿主机上暴露 80，仅暴露 443
+            $config.PortArgs = @(
+                "-p", "$($config.HttpsPort):443"
+            )
+        }
     } elseif ($domain) {
         Write-Warn "域名格式无效，将使用 HTTP 直连模式"
         $config.Domain = ""
@@ -1503,10 +1517,16 @@ function Get-DeployConfig {
             }
             $config.HttpsPort = $httpsPort
 
-            $config.PortArgs = @(
-                "-p", "$($config.HttpPort):80",
-                "-p", "$($config.HttpsPort):443"
-            )
+            if ($config.CertMode -eq "letsencrypt") {
+                $config.PortArgs = @(
+                    "-p", "$($config.HttpPort):80",
+                    "-p", "$($config.HttpsPort):443"
+                )
+            } else {
+                $config.PortArgs = @(
+                    "-p", "$($config.HttpsPort):443"
+                )
+            }
         }
     }
 
@@ -3033,17 +3053,26 @@ function Main {
                             }
                         }
 
-                        # 有些 tar 里只有 ghcr.io/... 标签；这里自动补一个 openclaw-pro:latest
+                        # 有些 tar 里只有 ghcr.io/... 或带具体 tag 的 RepoTag；尝试补一个 openclaw-pro:latest
                         $preTagCheck = & docker image inspect openclaw-pro 2>$null
-                        if ($LASTEXITCODE -ne 0 -and $loadedRefs.Count -gt 0) {
-                            foreach ($ref in $loadedRefs) {
-                                try {
-                                    & docker tag $ref "openclaw-pro:latest" 2>$null
-                                } catch { }
+                        if ($LASTEXITCODE -ne 0) {
+                            # 优先用 docker load 输出中收集到的 refs 进行 tag
+                            if ($loadedRefs.Count -gt 0) {
+                                foreach ($ref in $loadedRefs) {
+                                    try { & docker tag $ref "openclaw-pro:latest" 2>$null } catch { }
+                                }
+                            }
+
+                            # 若上一步未能创建 openclaw-pro:latest，则扫描当前已加载的 images，查找包含 openclaw-pro 的 repo:tag，并 tag 到 openclaw-pro:latest
+                            $allImages = & docker images --format '{{.Repository}}:{{.Tag}}' 2>$null
+                            foreach ($im in $allImages) {
+                                if ($im -and $im -match 'openclaw-pro') {
+                                    try { & docker tag $im "openclaw-pro:latest" 2>$null } catch { }
+                                }
                             }
                         }
 
-                        # 检查镜像是否加载成功
+                        # 检查镜像是否加载成功（尝试过多种 tag 修正后再检查）
                         $loadCheck = & docker image inspect openclaw-pro 2>$null
                         if ($LASTEXITCODE -eq 0) {
                             $totalSec = [math]::Floor($loadTimer.Elapsed.TotalSeconds)
@@ -3692,12 +3721,24 @@ function Main {
                             if ($_ -match "Loaded image") {
                                 Write-Host "  $_" -ForegroundColor DarkGray
                                 if ($_ -match '^Loaded image:\s*(.+)\s*$') {
-                                    & docker tag $Matches[1].Trim() "openclaw-pro:latest" 2>$null
+                                    try { & docker tag $Matches[1].Trim() "openclaw-pro:latest" 2>$null } catch { }
                                 }
                             } elseif ($_ -match '^Loaded image ID:\s*(sha256:[0-9a-f]+)\s*$') {
-                                & docker tag $Matches[1].Trim() "openclaw-pro:latest" 2>$null
+                                try { & docker tag $Matches[1].Trim() "openclaw-pro:latest" 2>$null } catch { }
                             }
                         }
+
+                        # 若上面没有成功创建 openclaw-pro:latest，继续扫描镜像列表并尝试 tag
+                        $chk = & docker image inspect openclaw-pro 2>$null
+                        if ($LASTEXITCODE -ne 0) {
+                            $allImages = & docker images --format '{{.Repository}}:{{.Tag}}' 2>$null
+                            foreach ($im in $allImages) {
+                                if ($im -and $im -match 'openclaw-pro') {
+                                    try { & docker tag $im "openclaw-pro:latest" 2>$null } catch { }
+                                }
+                            }
+                        }
+
                         $chk = & docker image inspect openclaw-pro 2>$null
                         if ($LASTEXITCODE -eq 0) {
                             Write-OK "Release 镜像加载完成 (耗时 ${totalLoadSec} 秒)"

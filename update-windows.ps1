@@ -292,10 +292,7 @@ Write-Host "  请选择更新方式:" -ForegroundColor White
     }
     Write-Host ""
     if ($recommendFull) {
-        Write-Host "  [1] ⚡ 热更新" -ForegroundColor DarkGray
-        Write-Host "      只更新 Web 面板、配置模板等文件，无需下载镜像/重启容器" -ForegroundColor DarkGray
-        Write-Host ""
-        Write-Host "  [2] 📦 完整更新（推荐）" -ForegroundColor Yellow
+        Write-Host "  [1] 📦 完整更新（推荐）" -ForegroundColor Yellow
         Write-Host "      下载完整镜像并重建容器（~1GB，需几分钟）" -ForegroundColor DarkGray
         Write-Host "      适合：系统包/Node.js 升级、大版本更新" -ForegroundColor DarkGray
     } else {
@@ -308,12 +305,14 @@ Write-Host "  请选择更新方式:" -ForegroundColor White
         Write-Host "      适合：系统包/Node.js 升级、大版本更新" -ForegroundColor DarkGray
     }
     Write-Host ""
-    $defaultChoice = if ($recommendFull) { "2" } else { "1" }
+    # 当检测到需要完整更新时，热更新选项已隐藏，默认选择为完整更新
+    $defaultChoice = if ($recommendFull) { "1" } else { "1" }
     Write-Host "  选择 [1/2，默认${defaultChoice}]: " -NoNewline -ForegroundColor White
     $updateChoice = (Read-Host).Trim()
     if (-not $updateChoice) { $updateChoice = $defaultChoice }
 
-if ($updateChoice -eq "1") {
+# 当 $recommendFull 为真时，菜单只显示完整更新，故选择 1 时应走完整更新分支
+if ($updateChoice -eq "1" -and -not $recommendFull) {
     # =============== 热更新模式 ===============
     Write-Host ""
     Write-Step "热更新模式：检查容器..."
