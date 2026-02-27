@@ -2159,6 +2159,12 @@ function Main {
         }
 
         $needDeployPackageDownload = -not (Test-Path "$localDeployDir\Dockerfile")
+
+        # ImageOnly 模式下跳过部署包/源码下载
+        if ($ImageOnly) {
+            Write-Info "ImageOnly 模式：跳过部署包/源码下载（不下载 Release ZIP 或克隆仓库）"
+            $needDeployPackageDownload = $false
+        }
         if (-not $needDeployPackageDownload) {
             $localDeployVersion = ""
             $localDeployCommitHash = ""
@@ -2223,15 +2229,19 @@ function Main {
                 if ($localDeployVersion) {
                     Write-Host "     本地版本: $localDeployVersion" -ForegroundColor DarkGray
                 }
-                Write-Host "  请选择部署包策略:" -ForegroundColor Cyan
-                Write-Host "     [1] 使用本地部署包" -ForegroundColor White
-                Write-Host "     [2] 更新到最新部署包（默认）" -ForegroundColor White
-                Write-Host "" 
-                Write-Host "  输入选择 [1/2，默认2]: " -NoNewline -ForegroundColor White
-                $deployChoice = (Read-Host).Trim()
-                if ($deployChoice -ne '1') {
-                    $needDeployPackageDownload = $true
-                    Write-Info "已选择更新部署包"
+                if (-not $ImageOnly) {
+                    Write-Host "  请选择部署包策略:" -ForegroundColor Cyan
+                    Write-Host "     [1] 使用本地部署包" -ForegroundColor White
+                    Write-Host "     [2] 更新到最新部署包（默认）" -ForegroundColor White
+                    Write-Host "" 
+                    Write-Host "  输入选择 [1/2，默认2]: " -NoNewline -ForegroundColor White
+                    $deployChoice = (Read-Host).Trim()
+                    if ($deployChoice -ne '1') {
+                        $needDeployPackageDownload = $true
+                        Write-Info "已选择更新部署包"
+                    }
+                } else {
+                    Write-Info "ImageOnly 模式：跳过部署包策略选择，直接使用镜像"
                 }
             }
         }
