@@ -213,7 +213,7 @@ async function checkForUpdate(force = false) {
 
   // Dashboard banner
   const banner = $('update-banner');
-  if (banner && u.hasUpdate) {
+    if (banner && u.hasUpdate) {
     $('update-latest').textContent = u.latestVersion;
     $('update-current').textContent = u.currentVersion;
     $('update-link').href = u.releaseUrl || '#';
@@ -221,11 +221,11 @@ async function checkForUpdate(force = false) {
     // Show/hide hot update button based on update type
     const hotBtn = $('btn-hotpatch-banner');
     const fullHint = $('update-full-hint');
-    if (hotBtn) hotBtn.style.display = u.dockerfileChanged ? 'none' : '';
+    if (hotBtn) hotBtn.style.display = u.requiresFullUpdate ? 'none' : '';
     if (fullHint) {
-      fullHint.style.display = u.dockerfileChanged ? '' : 'none';
+      fullHint.style.display = u.requiresFullUpdate ? '' : 'none';
       // When versions match but Dockerfile changed, show special hint
-      if (u.dockerfileChanged && u.currentVersion === u.latestVersion) {
+      if (u.requiresFullUpdate && u.currentVersion === u.latestVersion) {
         fullHint.innerHTML = '📦 <b>镜像需要重建</b>：Dockerfile 已更新（如 dnsmasq），请运行完整更新脚本';
       }
     }
@@ -242,7 +242,7 @@ async function checkForUpdate(force = false) {
     const statusEl = $('settings-update-status');
     const linkEl = $('settings-release-link');
     if (u.hasUpdate) {
-      if (u.dockerfileChanged) {
+      if (u.requiresFullUpdate) {
         if (u.currentVersion === u.latestVersion) {
           statusEl.innerHTML = '<span style="color:#f59e0b">📦 镜像需要重建</span>';
         } else {
@@ -255,8 +255,8 @@ async function checkForUpdate(force = false) {
       // Show/hide hot update & full update hints on settings page
       const hpBtn = $('btn-hotpatch');
       const fullNote = $('settings-full-update-note');
-      if (hpBtn) hpBtn.style.display = u.dockerfileChanged ? 'none' : '';
-      if (fullNote) fullNote.style.display = u.dockerfileChanged ? '' : 'none';
+      if (hpBtn) hpBtn.style.display = u.requiresFullUpdate ? 'none' : '';
+      if (fullNote) fullNote.style.display = u.requiresFullUpdate ? '' : 'none';
     } else if (u.latestVersion) {
       statusEl.innerHTML = '<span style="color:#888">✅ 已是最新</span>';
       if (linkEl) linkEl.style.display = 'none';

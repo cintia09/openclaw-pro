@@ -582,6 +582,7 @@ app.get('/api/update/check', async (req, res) => {
     if (!latestVersion) {
       return res.json({ currentVersion, latestVersion: null, error: '无法连接 GitHub（API 和 raw 均不可达）' });
     }
+    // Only consider a release version difference as the primary "hasUpdate" trigger
     const hasUpdate = currentVersion !== 'unknown' && currentVersion !== 'dev'
       && latestVersion && latestVersion !== currentVersion;
 
@@ -592,7 +593,8 @@ app.get('/api/update/check', async (req, res) => {
       publishedAt,
       releaseUrl,
       releaseName,
-      hotUpdateOnly: false,
+      // whether the Dockerfile change requires a full image rebuild/update
+      requiresFullUpdate: false,
       dockerfileChanged: false
     };
 
@@ -603,27 +605,29 @@ app.get('/api/update/check', async (req, res) => {
         headers: { 'User-Agent': 'openclaw-pro' },
         timeout: 10000
       });
-      if (dfResp.ok) {
+        if (dfResp.ok) {
         const remoteDockerfile = await dfResp.text();
         const remoteHash = crypto.createHash('sha256').update(remoteDockerfile).digest('hex');
         const localHash = getLocalDockerfileHash();
         if (localHash) {
-          result.hotUpdateOnly = !hasUpdate || remoteHash === localHash;
-          result.dockerfileChanged = remoteHash !== localHash;
+            result.dockerfileChanged = remoteHash !== localHash;
+            // If Dockerfile differs, a full update (rebuild/redeploy) is required
+            result.requiresFullUpdate = remoteHash !== localHash;
         } else {
-          // Old image without hash file: image predates hash feature
-          result.hotUpdateOnly = false;
-          result.dockerfileChanged = true;
+            // Old image without hash file: image predates hash feature
+            result.dockerfileChanged = true;
+            result.requiresFullUpdate = true;
         }
       }
     } catch {}
 
-    // If Dockerfile changed, there's always a pending update (even if version matches)
+    // If Dockerfile changed, mark that a full update is required. Do not mark hasUpdate
+    // solely based on Dockerfile changes; hasUpdate only reflects release version difference.
     if (result.dockerfileChanged) {
-      result.hasUpdate = true;
+      // keep hasUpdate as-is (only release difference triggers it)
     }
 
-    updateCache = { data: { latestVersion, hasUpdate: result.hasUpdate, publishedAt, releaseUrl, releaseName, hotUpdateOnly: result.hotUpdateOnly, dockerfileChanged: result.dockerfileChanged }, checkedAt: Date.now() };
+    updateCache = { data: { latestVersion, hasUpdate: result.hasUpdate, publishedAt, releaseUrl, releaseName, requiresFullUpdate: result.requiresFullUpdate, dockerfileChanged: result.dockerfileChanged }, checkedAt: Date.now() };
     res.json(result);
   } catch (e) {
     res.json({ currentVersion, latestVersion: null, error: e.message });

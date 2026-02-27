@@ -1103,7 +1103,7 @@ show_running_panel() {
         local has_upd remote_ver df_changed
         has_upd=$(echo "$check_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print('true' if d.get('hasUpdate', d.get('updateAvailable', False)) else 'false')" 2>/dev/null || echo "false")
         remote_ver=$(echo "$check_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('remoteVersion', d.get('latestVersion', '')))" 2>/dev/null || true)
-        df_changed=$(echo "$check_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print('true' if d.get('dockerfileChanged') else 'false')" 2>/dev/null || echo "false")
+        df_changed=$(echo "$check_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print('true' if d.get('requiresFullUpdate') else 'false')" 2>/dev/null || echo "false")
         if [ "$has_upd" = "true" ] || [ "$df_changed" = "true" ]; then
             update_hint="${YELLOW}⬆ 有新版本可用${remote_ver:+ ($remote_ver)}${NC}  运行 ${CYAN}./openclaw-docker.sh update${NC} 更新"
         fi
@@ -1394,7 +1394,7 @@ cmd_update() {
             check_json=$(docker exec "$CONTAINER_NAME" curl -sf --max-time 15 http://127.0.0.1:3000/api/update/check?force=1 2>/dev/null || true)
             if [ -n "$check_json" ]; then
                 local df_changed
-                df_changed=$(echo "$check_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print('true' if d.get('dockerfileChanged') else 'false')" 2>/dev/null || echo "false")
+                df_changed=$(echo "$check_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print('true' if d.get('requiresFullUpdate') else 'false')" 2>/dev/null || echo "false")
                 if [ "$df_changed" = "true" ]; then
                     recommend_full=true
                     recommend_msg="检测到 Dockerfile 已变更，建议完整更新"

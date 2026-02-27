@@ -249,11 +249,11 @@ try {
             $rawJson = & docker exec $CONTAINER_NAME curl -sf --max-time 15 http://127.0.0.1:3000/api/update/check?force=1 2>$null
             if ($rawJson) {
                 $checkResult = $rawJson | ConvertFrom-Json
-                $dfChanged = "$($checkResult.dockerfileChanged)" -eq "True" -or "$($checkResult.dockerfileChanged)" -eq "true"
-                if ($dfChanged) {
+                $requiresFull = "$($checkResult.requiresFullUpdate)" -eq "True" -or "$($checkResult.requiresFullUpdate)" -eq "true"
+                if ($requiresFull) {
                     $recommendFull = $true
-                    $recommendMsg = "  ⚠️  检测到 Dockerfile 已变更，建议完整更新"
-                    Write-Host " Dockerfile 已变更" -ForegroundColor Yellow
+                    $recommendMsg = "  ⚠️  检测到需要完整更新（Dockerfile 或底层变更），建议完整更新"
+                    Write-Host " 需要完整更新" -ForegroundColor Yellow
                 } else {
                     Write-Host " OK" -ForegroundColor Green
                 }
