@@ -21,6 +21,7 @@
 param(
     [switch]$Resume,        # Internal: resume after reboot
     [switch]$SkipWelcome    # Skip welcome screen
+    ,[switch]$ImageOnly      # If set, skip repo download and only download/load image
 )
 
 # --- Constants ----------------------------------------------------------------
@@ -2153,7 +2154,11 @@ function Main {
         if (-not $needDeployPackageDownload) {
             $localDeployVersion = ""
             $localDeployCommitHash = ""
-            if (Test-Path "$localDeployDir\.git") {
+            if ($ImageOnly) {
+                Write-Info "ImageOnly 模式：跳过源码/部署包下载，仅下载/加载镜像并启动容器"
+                $needDeployPackageDownload = $false
+                $hasGit = $false
+            } elseif (Test-Path "$localDeployDir\.git") {
                 try {
                     $localDeployVersion = (& git -C $localDeployDir describe --tags --abbrev=0 2>$null | Select-Object -First 1)
                     $localDeployCommitHash = (& git -C $localDeployDir rev-parse HEAD 2>$null | Select-Object -First 1)
@@ -3149,7 +3154,8 @@ function Main {
             }
 
             # -- 尝试 3: 本地构建 (fallback) --
-            if (-not $imageReady) {
+            # 如果处于 ImageOnly 模式则跳过本地构建
+            if (-not $imageReady -and -not $ImageOnly) {
                 Write-Info "正在本地构建镜像...（首次约需 5-10 分钟）"
                 $buildOK = $false
                 $dockerfilePath = Join-Path $localDeployDir "Dockerfile"
