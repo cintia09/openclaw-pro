@@ -2117,23 +2117,27 @@ function Main {
             $localDeployDir = Join-Path $currentDir "openclaw-pro"
             $homeBaseDir = $currentDir
 
-            Write-Host ""
-            Write-Host "  安装目录确认:" -ForegroundColor Cyan
-            Write-Host "     代码目录: $localDeployDir" -ForegroundColor White
-            Write-Host "     数据目录: $(Join-Path $homeBaseDir 'home-data[-N]')" -ForegroundColor White
-            Write-Host "     （首个实例为 home-data，多实例时为 home-data-2, home-data-3 ...）" -ForegroundColor DarkGray
-            Write-Host ""
-            Write-Host "     按回车确认，或输入新路径: " -NoNewline -ForegroundColor White
-            $customBaseDir = (Read-Host).Trim()
-            if ($customBaseDir) {
-                if (-not (Test-Path $customBaseDir)) {
-                    New-Item -ItemType Directory -Path $customBaseDir -Force | Out-Null
+            if (-not $ImageOnly) {
+                Write-Host ""
+                Write-Host "  安装目录确认:" -ForegroundColor Cyan
+                Write-Host "     代码目录: $localDeployDir" -ForegroundColor White
+                Write-Host "     数据目录: $(Join-Path $homeBaseDir 'home-data[-N]')" -ForegroundColor White
+                Write-Host "     （首个实例为 home-data，多实例时为 home-data-2, home-data-3 ...）" -ForegroundColor DarkGray
+                Write-Host ""
+                Write-Host "     按回车确认，或输入新路径: " -NoNewline -ForegroundColor White
+                $customBaseDir = (Read-Host).Trim()
+                if ($customBaseDir) {
+                    if (-not (Test-Path $customBaseDir)) {
+                        New-Item -ItemType Directory -Path $customBaseDir -Force | Out-Null
+                    }
+                    Set-Location $customBaseDir
+                    $currentDir = $customBaseDir
+                    $localDeployDir = Join-Path $currentDir "openclaw-pro"
+                    $homeBaseDir = $currentDir
+                    Write-Info "已切换安装目录: $currentDir"
                 }
-                Set-Location $customBaseDir
-                $currentDir = $customBaseDir
-                $localDeployDir = Join-Path $currentDir "openclaw-pro"
-                $homeBaseDir = $currentDir
-                Write-Info "已切换安装目录: $currentDir"
+            } else {
+                Write-Info "ImageOnly 模式：跳过安装目录交互，使用默认代码目录: $localDeployDir"
             }
         }
         $latestReleaseTag = ""
@@ -2256,7 +2260,8 @@ function Main {
                 if (Test-Path "$localDeployDir\.git") {
                     Write-Info "检测到本地 git 仓库，正在更新..."
                     try {
-                        Push-Location $localDeployDir
+                        $pushedLocal = $false
+                        if (Test-Path $localDeployDir) { try { Push-Location $localDeployDir; $pushedLocal = $true } catch { $pushedLocal = $false } }
                         & git fetch --tags --depth 1 origin 2>&1 | Out-Null
                         $latestTag = if ($latestReleaseTag) { $latestReleaseTag } else { (& git tag --sort=-v:refname 2>$null | Select-Object -First 1) }
                         if ($latestTag) {
@@ -2293,7 +2298,8 @@ function Main {
                         if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
                         # Try to switch to latest release tag
                         try {
-                            Push-Location $localDeployDir
+                            $pushedLocal = $false
+                            if (Test-Path $localDeployDir) { try { Push-Location $localDeployDir; $pushedLocal = $true } catch { $pushedLocal = $false } }
                             & git fetch --tags --depth 1 2>&1 | Out-Null
                             $latestTag = if ($latestReleaseTag) { $latestReleaseTag } else { (& git tag --sort=-v:refname 2>$null | Select-Object -First 1) }
                             if ($latestTag) {
@@ -2778,7 +2784,12 @@ function Main {
 
         Write-Info "正在准备镜像..."
         try {
-            Push-Location $localDeployDir
+            $pushedLocal = $false
+            if (Test-Path $localDeployDir) {
+                try { Push-Location $localDeployDir; $pushedLocal = $true } catch { $pushedLocal = $false }
+            } else {
+                Write-Info "本地部署目录 $localDeployDir 不存在，ImageOnly 或首次安装将跳过源码相关操作"
+            }
 
             # 策略: 检查本地已有镜像 → 下载Release tar.gz → GHCR拉取 → 本地构建
             $imageReady = $false
@@ -3389,30 +3400,36 @@ function Main {
             $defaultHomeData = Join-Path $homeBaseDir $homeDataName
 
             Write-Host ""
-            Write-Host "  容器数据挂载目录 (映射为容器内 /root):" -ForegroundColor Cyan
-            Write-Host "     默认路径: $defaultHomeData" -ForegroundColor White
-            Write-Host ""
-            Write-Host "     [1] 使用默认路径（推荐）" -ForegroundColor White
-            Write-Host "     [2] 自定义路径" -ForegroundColor White
-            Write-Host ""
-            Write-Host "  输入选择 [1/2，默认1]: " -NoNewline -ForegroundColor White
-            $homeDataChoice = (Read-Host).Trim()
+            if (-not $ImageOnly) {
+                Write-Host "  容器数据挂载目录 (映射为容器内 /root):" -ForegroundColor Cyan
+                Write-Host "     默认路径: $defaultHomeData" -ForegroundColor White
+                Write-Host ""
+                Write-Host "     [1] 使用默认路径（推荐）" -ForegroundColor White
+                Write-Host "     [2] 自定义路径" -ForegroundColor White
+                Write-Host ""
+                Write-Host "  输入选择 [1/2，默认1]: " -NoNewline -ForegroundColor White
+                $homeDataChoice = (Read-Host).Trim()
 
-            if ($homeDataChoice -eq '2') {
-                Write-Host "  请输入数据目录完整路径: " -NoNewline -ForegroundColor White
-                $customPath = (Read-Host).Trim()
-                if ($customPath) {
-                    $homeData = $customPath
-                    Write-Info "使用自定义数据目录: $homeData"
+                if ($homeDataChoice -eq '2') {
+                    Write-Host "  请输入数据目录完整路径: " -NoNewline -ForegroundColor White
+                    $customPath = (Read-Host).Trim()
+                    if ($customPath) {
+                        $homeData = $customPath
+                        Write-Info "使用自定义数据目录: $homeData"
+                    } else {
+                        $homeData = $defaultHomeData
+                        Write-Info "输入为空，使用默认路径: $homeData"
+                    }
                 } else {
                     $homeData = $defaultHomeData
-                    Write-Info "输入为空，使用默认路径: $homeData"
                 }
+
+                Write-OK "数据目录: $homeData"
             } else {
                 $homeData = $defaultHomeData
+                Write-Info "ImageOnly 模式：跳过数据目录交互，使用默认路径: $homeData"
+                Write-OK "数据目录: $homeData"
             }
-
-            Write-OK "数据目录: $homeData"
             if (-not (Test-Path $homeData)) {
                 New-Item -ItemType Directory -Path $homeData -Force | Out-Null
             }
@@ -3452,6 +3469,8 @@ function Main {
             }
             Write-Log "Wrote docker-config.json: domain=$($deployConfig.Domain)"
 
+            if ($pushedLocal) { Pop-Location }
+
             # -- 最终镜像可用性检查 --
             $finalImageCheck = & docker image inspect openclaw-pro 2>$null
             if ($LASTEXITCODE -ne 0) {
@@ -3474,7 +3493,24 @@ function Main {
                 "-e", "TZ=Asia/Shanghai",
                 "--restart", "unless-stopped"
             )
-            $runArgs += $deployConfig.PortArgs
+            # 如果使用 IP 自签证书（internal），不要在宿主机上映射 HTTP 80
+            $filteredPortArgs = @()
+            for ($i = 0; $i -lt $deployConfig.PortArgs.Count; $i++) {
+                $arg = $deployConfig.PortArgs[$i]
+                if ($arg -eq '-p' -and ($i + 1) -lt $deployConfig.PortArgs.Count) {
+                    $mapping = $deployConfig.PortArgs[$i + 1]
+                    if ($deployConfig.CertMode -eq 'internal' -and $mapping -match ':(80)$') {
+                        # skip this port mapping pair
+                        $i++ ; continue
+                    }
+                    $filteredPortArgs += $arg
+                    $filteredPortArgs += $mapping
+                    $i++ ; continue
+                } else {
+                    $filteredPortArgs += $arg
+                }
+            }
+            $runArgs += $filteredPortArgs
             $runArgs += "openclaw-pro"
 
             Write-Log "docker run args: $($runArgs -join ' ')"
@@ -3812,7 +3848,8 @@ function Main {
                     & docker rm -f $containerName 2>$null | Out-Null
                     Start-Sleep -Seconds 1
                     try {
-                        Push-Location $localDeployDir
+                        $pushedLocal = $false
+                        if (Test-Path $localDeployDir) { try { Push-Location $localDeployDir; $pushedLocal = $true } catch { $pushedLocal = $false } }
                         $retryArgs = @(
                             "run", "-d",
                             "--name", $containerName,
@@ -3831,7 +3868,7 @@ function Main {
                             Write-OK "容器启动成功"
                             $launched = $true
                         }
-                        Pop-Location
+                        if ($pushedLocal) { Pop-Location }
                     } catch {
                         Pop-Location -ErrorAction SilentlyContinue
                     }
