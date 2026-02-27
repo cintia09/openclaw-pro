@@ -28,6 +28,7 @@ powershell -ExecutionPolicy Bypass -Command ^
     "$u='https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1?ts='+$nonce;" ^
     "$s=$null;" ^
     "Write-Host '  [INFO] Downloading latest installer script...';" ^
+    "Write-Host '  [NOTE] Remote execution will default to ImageOnly (only download/load release image). To perform a full install, download the script and run it as a file.';" ^
     "try{$s=Invoke-RestMethod $u -UseBasicParsing}catch{};" ^
     "if(!$s){try{$f=\"$env:TEMP\oc-install.ps1\"; curl.exe -sL $u -o $f; $s=[IO.File]::ReadAllText($f,[Text.Encoding]::UTF8); Remove-Item $f -Force}catch{}};" ^
     "if(!$s){try{$wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString($u)}catch{}};" ^

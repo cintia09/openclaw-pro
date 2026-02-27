@@ -20,6 +20,16 @@ curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.
 irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1 | iex
 ```
 
+> 注意（远程执行默认行为）：通过 `irm | iex` 直接远程执行安装脚本时，安装器会默认启用 ImageOnly 模式——即只会下载并加载 Release 发布的镜像，然后启动容器（不会克隆或下载源码仓库）。
+
+如果你需要通过脚本进行完整安装（克隆仓库并执行全部部署步骤），请先把脚本下载为本地文件再运行：
+```powershell
+irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1 -OutFile .\install-windows.ps1
+powershell -ExecutionPolicy Bypass -File .\install-windows.ps1
+```
+
+或者下载仓库并使用 `install-windows.bat`（双击运行）将执行完整安装流程。
+
 > **提示：** 如果 PowerShell 报 TLS 错误，先执行 `[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12` 再重试。推荐直接用 `.bat` 文件，无需操心兼容问题。
 
 自动完成：安装 WSL2/Docker → 构建镜像 → 启动配置向导。
