@@ -49,6 +49,41 @@ irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/update-windows.
 
 ### 手动安装（Linux / macOS）
 
+### Linux 一键安装（交互 & ImageOnly）
+
+- 交互式（会提示选择安装方式）：
+
+```bash
+# 下载到本地并交互运行，会提示安装方式（1=源码安装，2=ImageOnly）
+curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.sh -o install.sh
+bash install.sh
+```
+
+运行时会提示选择：
+- `1` — 源码安装（默认，克隆仓库并执行完整部署）
+- `2` — ImageOnly（仅下载 Release 镜像并部署容器，无需克隆源码）
+
+- 非交互 pipe（远程一键，等同 Windows 的 ImageOnly 行为）：
+
+```bash
+# 非交互模式（curl | bash）将自动执行 ImageOnly 安装流程（不克隆源码）
+curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.sh | bash
+```
+
+- 直接运行 ImageOnly 脚本（本地或已下载脚本）：
+
+```bash
+# 若已下载 install-imageonly.sh 或在本地运行
+sudo bash install-imageonly.sh
+```
+
+先决条件与提示：
+- 需要 Docker 权限（root 或 sudo）。
+- 若在 WSL2/Windows 下使用，请确保对应的防火墙/端口转发设置（见原 README 的 WSL2 段）。
+- 若需静默/CI 部署，我可以将 `install-imageonly.sh` 增加对环境变量（如 `ROOT_PASS`, `GW_PORT`, `WEB_PORT`, `SSH_PORT`, `EDITION=lite|full`）的无交互支持。
+
+
+
 ```bash
 git clone https://github.com/cintia09/openclaw-pro.git openclaw-pro
 cd openclaw-pro
