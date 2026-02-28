@@ -53,7 +53,6 @@ $STATE_FILE      = Join-Path $SCRIPT_DIR ".install-state.json"
 if (-not $PSBoundParameters.ContainsKey('ImageOnly')) {
     if (-not $MyInvocation.MyCommand.Path) {
         $ImageOnly = $true
-        Write-Info "检测到远程执行（iex），默认启用 ImageOnly 模式：仅下载/加载 Release 镜像并启动容器"
     }
 }
 
@@ -2164,7 +2163,8 @@ function Main {
                 Write-Info "远端最新 Release: $latestReleaseTag"
                 $latestVer = $latestReleaseTag.TrimStart('v','V')
                 if ($latestVer -and $latestVer -ne $SCRIPT_VERSION) {
-                    Write-Warn "当前脚本版本 v$SCRIPT_VERSION 与最新 Release $latestReleaseTag 不一致（可能命中缓存旧脚本）"
+                    # Version mismatch detected (silent when ImageOnly or remote execution)
+                    # Previously warned to console; suppress to avoid noisy output during remote runs.
                 }
             }
         } catch {
@@ -2175,14 +2175,14 @@ function Main {
 
         # ImageOnly 模式下跳过部署包/源码下载
         if ($ImageOnly) {
-            Write-Info "ImageOnly 模式：跳过部署包/源码下载（不下载 Release ZIP 或克隆仓库）"
+            # ImageOnly: skip deploy package/source downloads (no console notice)
             $needDeployPackageDownload = $false
         }
         if (-not $needDeployPackageDownload) {
             $localDeployVersion = ""
             $localDeployCommitHash = ""
             if ($ImageOnly) {
-                Write-Info "ImageOnly 模式：跳过源码/部署包下载，仅下载/加载镜像并启动容器"
+                # ImageOnly: skipping source/deploy package (silent)
                 $needDeployPackageDownload = $false
                 $hasGit = $false
             } elseif (Test-Path "$localDeployDir\.git") {
@@ -2254,7 +2254,7 @@ function Main {
                         Write-Info "已选择更新部署包"
                     }
                 } else {
-                    Write-Info "ImageOnly 模式：跳过部署包策略选择，直接使用镜像"
+                    # ImageOnly: skip deploy package strategy selection (silent)
                 }
             }
         }
