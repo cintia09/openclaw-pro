@@ -1486,11 +1486,21 @@ function Get-DeployConfig {
             }
             if ($localIp) {
                 Write-Host "  检测到本机 IP: $localIp" -ForegroundColor Cyan
-                Write-Host "  使用此 IP？按回车确认，或输入其他 IP: " -NoNewline -ForegroundColor White
-                $customIp = (Read-Host).Trim()
-                if ($customIp -and $customIp -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') {
-                    $localIp = $customIp
+                # Prompt for IP confirmation; accept Enter or 'y' to confirm, or allow entering a new IP.
+                $chosenIp = $null
+                while ($true) {
+                    Write-Host "  使用此 IP？按回车或输入 'y' 确认，或输入其他 IP: " -NoNewline -ForegroundColor White
+                    $customIp = (Read-Host).Trim()
+                    if (-not $customIp -or $customIp.ToLower() -eq 'y') { $chosenIp = $localIp; break }
+                    if ($customIp -match '^\d{1,3}(?:\.\d{1,3}){3}$') {
+                        $valid = $true
+                        foreach ($octet in ($customIp -split '\.')) { if ([int]$octet -lt 0 -or [int]$octet -gt 255) { $valid = $false } }
+                        if ($valid) { $chosenIp = $customIp; break } else { Write-Warn "IP 段必须在 0-255 之间，请重试" }
+                    } else {
+                        Write-Warn "输入不是有效的 IP 地址，请重试，或按回车确认使用 $localIp"
+                    }
                 }
+                $localIp = $chosenIp
                 $config.Domain = $localIp
                 $config.HttpsEnabled = $true
                 $config.CertMode = "internal"
@@ -3717,9 +3727,31 @@ function Main {
                 Write-Host "     2. 或者重新运行安装脚本，选择其他端口" -ForegroundColor White
                 Write-Host "" 
             } elseif ($errMsg -match "No such image") {
-                # -- 镜像缺失 — 先尝试 Release 健壮下载，再尝试 GHCR 拉取 --
-                Write-Warn "本地镜像不存在，尝试自动恢复..."
+                # -- 镜像缺失 — 在交互式运行时先询问用户是否尝试从 Release 下载，再尝试 GHCR 拉取 --
                 $recoverOK = $false
+                $doRecover = $true
+
+                # 如果是交互式运行，则让用户选择 edition（若尚未选择）和是否下载
+                if ($MyInvocation.MyCommand.Path) {
+                    if (-not $script:imageEdition -or $script:imageEdition -eq '') {
+                        Write-Host "\n  本地未选择镜像版本，请选择镜像版本 (仅本次操作):" -ForegroundColor Cyan
+                        Write-Host "     [1] 精简版 (默认)" -ForegroundColor White
+                        Write-Host "     [2] 完整版" -ForegroundColor White
+                        Write-Host "  输入选择 [1/2，默认1]: " -NoNewline -ForegroundColor White
+                        $editionChoice = (Read-Host).Trim()
+                        if ($editionChoice -eq '2') { $script:imageEdition = 'full' } else { $script:imageEdition = 'lite' }
+                        Write-Info "已选择镜像版本: $script:imageEdition"
+                    }
+
+                    Write-Host "\n本地镜像不存在，是否尝试从 Release 下载镜像并加载？[Y/n]: " -NoNewline -ForegroundColor White
+                    $recChoice = (Read-Host).Trim().ToLower()
+                    if ($recChoice -eq 'n' -or $recChoice -eq 'no') {
+                        $doRecover = $false
+                        Write-Info "已选择跳过 Release 下载，后续将尝试 GHCR 或本地构建（如可用）"
+                    }
+                }
+
+                if ($doRecover) { Write-Info "尝试自动从 Release 恢复本地镜像..." } else { Write-Info "跳过 Release 下载，继续尝试 GHCR 拉取或本地构建..." }
 
                 # 恢复方式 1: Download-Robust 多线程分块下载 Release tar.gz
                 $recoverTag = if ($latestReleaseTag) { $latestReleaseTag } else { "latest" }
