@@ -2125,7 +2125,6 @@ function Main {
             if (-not $ImageOnly) {
                 Write-Host ""
                 Write-Host "  安装目录确认:" -ForegroundColor Cyan
-                Write-Host "     代码目录: $localDeployDir" -ForegroundColor White
                 Write-Host "     数据目录: $(Join-Path $homeBaseDir 'home-data[-N]')" -ForegroundColor White
                 Write-Host "     （首个实例为 home-data，多实例时为 home-data-2, home-data-3 ...）" -ForegroundColor DarkGray
                 Write-Host ""
@@ -2142,7 +2141,12 @@ function Main {
                     Write-Info "已切换安装目录: $currentDir"
                 }
             } else {
-                Write-Info "ImageOnly 模式：跳过安装目录交互，使用默认代码目录: $localDeployDir"
+                # In ImageOnly mode, prefer to store runtime artifacts under $localDeployDir
+                if (-not (Test-Path $localDeployDir)) { New-Item -ItemType Directory -Path $localDeployDir -Force | Out-Null }
+                $homeBaseDir = $localDeployDir
+                $TMP_DIR = $localDeployDir
+                $LOG_FILE = Join-Path $TMP_DIR "install-log.txt"
+                Write-Info "ImageOnly 模式：使用 $localDeployDir 存储镜像、日志与数据目录"
             }
         }
         $latestReleaseTag = ""
@@ -2792,8 +2796,6 @@ function Main {
             $pushedLocal = $false
             if (Test-Path $localDeployDir) {
                 try { Push-Location $localDeployDir; $pushedLocal = $true } catch { $pushedLocal = $false }
-            } else {
-                Write-Info "本地部署目录 $localDeployDir 不存在，ImageOnly 或首次安装将跳过源码相关操作"
             }
 
             # 策略: 检查本地已有镜像 → 下载Release tar.gz → GHCR拉取 → 本地构建
