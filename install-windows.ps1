@@ -50,9 +50,13 @@ $LOG_FILE        = Join-Path $TMP_DIR "install-log.txt"
 $STATE_FILE      = Join-Path $SCRIPT_DIR ".install-state.json"
 
 # 如果通过 `irm ... | iex` (远程执行) 运行且用户未显式指定 -ImageOnly，则默认启用 ImageOnly 模式
-if (-not $PSBoundParameters.ContainsKey('ImageOnly')) {
+# Track whether ImageOnly was explicitly passed vs defaulted by remote exec
+$ImageOnlyExplicit = $PSBoundParameters.ContainsKey('ImageOnly')
+$ImageOnlyDefaulted = $false
+if (-not $ImageOnlyExplicit) {
     if (-not $MyInvocation.MyCommand.Path) {
         $ImageOnly = $true
+        $ImageOnlyDefaulted = $true
     }
 }
 
@@ -2131,7 +2135,7 @@ function Main {
             $localDeployDir = Join-Path $currentDir "openclaw-pro"
             $homeBaseDir = $currentDir
 
-            if (-not $ImageOnly) {
+            if (-not ($ImageOnly -and $ImageOnlyExplicit)) {
                 Write-Host ""
                 Write-Host "  安装目录确认:" -ForegroundColor Cyan
                 Write-Host "     数据目录: $(Join-Path $homeBaseDir 'home-data[-N]')" -ForegroundColor White
@@ -2184,15 +2188,15 @@ function Main {
         $needDeployPackageDownload = -not (Test-Path "$localDeployDir\Dockerfile")
 
         # ImageOnly 模式下跳过部署包/源码下载
-        if ($ImageOnly) {
-            # ImageOnly: skip deploy package/source downloads (no console notice)
+        if ($ImageOnly -and $ImageOnlyExplicit) {
+            # ImageOnly explicitly requested: skip deploy package/source downloads
             $needDeployPackageDownload = $false
         }
         if (-not $needDeployPackageDownload) {
             $localDeployVersion = ""
             $localDeployCommitHash = ""
-            if ($ImageOnly) {
-                # ImageOnly: skipping source/deploy package (silent)
+            if ($ImageOnly -and $ImageOnlyExplicit) {
+                # Explicit ImageOnly: skip source/deploy package
                 $needDeployPackageDownload = $false
                 $hasGit = $false
             } elseif (Test-Path "$localDeployDir\.git") {
@@ -2252,7 +2256,7 @@ function Main {
                 if ($localDeployVersion) {
                     Write-Host "     本地版本: $localDeployVersion" -ForegroundColor DarkGray
                 }
-                if (-not $ImageOnly) {
+                if (-not ($ImageOnly -and $ImageOnlyExplicit)) {
                     Write-Host "  请选择部署包策略:" -ForegroundColor Cyan
                     Write-Host "     [1] 使用本地部署包" -ForegroundColor White
                     Write-Host "     [2] 更新到最新部署包（默认）" -ForegroundColor White
@@ -2264,7 +2268,7 @@ function Main {
                         Write-Info "已选择更新部署包"
                     }
                 } else {
-                    # ImageOnly: skip deploy package strategy selection (silent)
+                    # Explicit ImageOnly: skip deploy package strategy selection (silent)
                 }
             }
         }
@@ -3250,8 +3254,8 @@ function Main {
             }
 
             # -- 尝试 3: 本地构建 (fallback) --
-            # 如果处于 ImageOnly 模式则跳过本地构建
-            if (-not $imageReady -and -not $ImageOnly) {
+            # 如果处于 explicit ImageOnly 模式则跳过本地构建
+            if (-not $imageReady -and -not ($ImageOnly -and $ImageOnlyExplicit)) {
                 Write-Info "正在本地构建镜像...（首次约需 5-10 分钟）"
                 $buildOK = $false
                 $dockerfilePath = Join-Path $localDeployDir "Dockerfile"
@@ -3467,7 +3471,7 @@ function Main {
             $defaultHomeData = Join-Path $homeBaseDir $homeDataName
 
             Write-Host ""
-            if (-not $ImageOnly) {
+            if (-not ($ImageOnly -and $ImageOnlyExplicit)) {
                 Write-Host "  容器数据挂载目录 (映射为容器内 /root):" -ForegroundColor Cyan
                 Write-Host "     默认路径: $defaultHomeData" -ForegroundColor White
                 Write-Host ""
@@ -3732,7 +3736,7 @@ function Main {
                 $doRecover = $true
 
                 # 如果是交互式运行，则让用户选择 edition（若尚未选择）和是否下载
-                if ($MyInvocation.MyCommand.Path) {
+                if ($MyInvocation.MyCommand.Path -or $ImageOnlyDefaulted) {
                     if (-not $script:imageEdition -or $script:imageEdition -eq '') {
                         Write-Host "\n  本地未选择镜像版本，请选择镜像版本 (仅本次操作):" -ForegroundColor Cyan
                         Write-Host "     [1] 精简版 (默认)" -ForegroundColor White
