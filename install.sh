@@ -7,14 +7,16 @@ set -euo pipefail
 if [ ! -t 0 ]; then
   echo "⚡ 非交互模式检测到 (curl|bash)，直接运行 ImageOnly 安装（无需克隆源码）..."
   TMP_SCRIPT=$(mktemp /tmp/openclaw-imageonly.XXXXXX.sh)
+  TARGET_DIR="$(pwd)"
   if curl -fsSL "https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-imageonly.sh" -o "$TMP_SCRIPT"; then
     chmod +x "$TMP_SCRIPT"
-    exec bash "$TMP_SCRIPT"
+    exec env TARGET_DIR="$TARGET_DIR" bash "$TMP_SCRIPT"
   else
     echo "⚠️ 无法下载 ImageOnly 安装脚本（网络或脚本不存在），请稍后重试或手动运行本地安装。" >&2
     exit 1
   fi
 fi
+
 
 
 REPO="https://github.com/cintia09/openclaw-pro.git"
