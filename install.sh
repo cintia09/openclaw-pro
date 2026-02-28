@@ -12,6 +12,31 @@ echo "🐾 OpenClaw Pro Installer"
 echo "========================="
 echo ""
 
+# 如果是交互终端，先询问安装方式：源码安装（默认）或 ImageOnly（仅下载镜像）
+if [ -t 0 ]; then
+  echo "请选择安装方式："
+  echo "  [1] 源码安装（默认，克隆仓库并进行完整部署）"
+  echo "  [2] ImageOnly（仅下载 Release 镜像并部署容器，无需克隆源码）"
+  read -t 30 -p "请选择 [1/2，默认1]: " INSTALL_MODE || true
+  echo ""
+  if [ "${INSTALL_MODE}" = "2" ]; then
+    # 尝试优先使用本地脚本，否则从 GitHub 拉取并执行
+    if [ -f "$(pwd)/install-imageonly.sh" ]; then
+      chmod +x "$(pwd)/install-imageonly.sh" || true
+      exec bash "$(pwd)/install-imageonly.sh"
+    else
+      TMP_SCRIPT=$(mktemp /tmp/openclaw-imageonly.XXXXXX.sh)
+      if curl -fsSL "https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-imageonly.sh" -o "$TMP_SCRIPT"; then
+        chmod +x "$TMP_SCRIPT"
+        exec bash "$TMP_SCRIPT"
+      else
+        echo "无法下载 ImageOnly 安装脚本，请检查网络或使用源码安装。" >&2
+        exit 1
+      fi
+    fi
+  fi
+fi
+
 # ---- 0. Detect install directory (align with Windows SCRIPT_DIR detection) ----
 # Priority: env var > existing install under pwd > existing install under pwd/openclaw-pro > new install
 if [ -n "${OPENCLAW_INSTALL_DIR:-}" ]; then
@@ -113,15 +138,19 @@ fi
 
 echo ""
 if [ ! -t 0 ]; then
-  # Pipe mode (curl|bash): stdin is not a tty, cannot do interactive config
-  echo "✅ 安装完成！请手动运行以下命令启动配置向导："
-  echo ""
-  echo "   cd $INSTALL_DIR && ./openclaw-docker.sh run"
-  echo ""
-  echo "   首次运行会引导你完成配置（密码、端口、HTTPS等），"
-  echo "   然后自动获取 Docker 镜像并启动服务。"
-  echo ""
-  exit 0
+  # Pipe mode (curl|bash): 自动使用 ImageOnly 流程（与 Windows 一致），无需克隆源码
+  echo "⚡ Detected non-interactive install (curl|bash). Running ImageOnly installer..."
+  TMP_SCRIPT=$(mktemp /tmp/openclaw-imageonly.XXXXXX.sh)
+  if curl -fsSL "https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-imageonly.sh" -o "$TMP_SCRIPT"; then
+    chmod +x "$TMP_SCRIPT"
+    echo "→ 执行 ImageOnly 安装脚本"
+    bash "$TMP_SCRIPT" || { echo "ImageOnly 安装失败" >&2; exit 1; }
+    exit 0
+  else
+    echo "无法下载 ImageOnly 安装脚本，尝试提示用户手动运行本地安装。" >&2
+    echo "  cd $INSTALL_DIR && ./openclaw-docker.sh run" >&2
+    exit 1
+  fi
 fi
 
 echo "Starting setup..."
