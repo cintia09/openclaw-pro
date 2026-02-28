@@ -3000,15 +3000,38 @@ function Main {
                 $downloadOK = $false
 
                 # 检测上次保留的完整 tar 文件（docker load 失败时不删除，避免重新下载）
+                $tagFile = "$imageTar.tag"
+                $diskTag = $null
+                if (Test-Path $tagFile) { try { $diskTag = (Get-Content $tagFile -ErrorAction SilentlyContinue | Select-Object -First 1) } catch { $diskTag = $null } }
+
                 if ((Test-Path $imageTar) -and (Get-Item $imageTar).Length -gt 50MB) {
                     $existingSize = (Get-Item $imageTar).Length
                     if ($expectedSize -gt 0 -and [math]::Abs($existingSize - $expectedSize) -lt 1MB) {
-                        Write-OK "检测到已下载的镜像文件 ($([math]::Round($existingSize / 1MB, 1))MB)，跳过下载"
-                        $downloadOK = $true
+                        if ($tagText -and $diskTag -and $diskTag -eq "$tagText|$script:imageEdition") {
+                            Write-OK "检测到已下载的镜像文件 ($([math]::Round($existingSize / 1MB, 1))MB)，版本匹配，跳过下载"
+                            $downloadOK = $true
+                        } elseif ($tagText -and $diskTag -and $diskTag -ne "$tagText|$script:imageEdition") {
+                            Write-Warn "本地镜像文件版本 ($diskTag) 与远端 ($tagText|$script:imageEdition) 不一致，重新下载"
+                            Remove-Item $imageTar -Force -ErrorAction SilentlyContinue
+                            if (Test-Path $tagFile) { Remove-Item $tagFile -Force -ErrorAction SilentlyContinue }
+                            $downloadOK = $false
+                        } else {
+                            # 没有 tag 文件，但大小匹配：假定可用，写入 tag 文件以便后续校验
+                            Write-OK "检测到已下载的镜像文件 ($([math]::Round($existingSize / 1MB, 1))MB)，跳过下载"
+                            try { "$tagText|$script:imageEdition" | Set-Content -Path $tagFile -Force -ErrorAction SilentlyContinue } catch { }
+                            $downloadOK = $true
+                        }
                     } elseif ($expectedSize -le 0 -and $existingSize -gt 500MB) {
                         # 无法获取远端大小时，若本地文件 > 500MB 也认为可能是完整的
-                        Write-OK "检测到已下载的镜像文件 ($([math]::Round($existingSize / 1MB, 1))MB)，尝试直接加载"
-                        $downloadOK = $true
+                        if ($diskTag -and $tagText -and $diskTag -ne "$tagText|$script:imageEdition") {
+                            Write-Warn "本地镜像文件版本 ($diskTag) 与远端 ($tagText|$script:imageEdition) 不一致，重新下载"
+                            Remove-Item $imageTar -Force -ErrorAction SilentlyContinue
+                            if (Test-Path $tagFile) { Remove-Item $tagFile -Force -ErrorAction SilentlyContinue }
+                        } else {
+                            Write-OK "检测到已下载的镜像文件 ($([math]::Round($existingSize / 1MB, 1))MB)，尝试直接加载"
+                            if ($tagText) { try { "$tagText|$script:imageEdition" | Set-Content -Path $tagFile -Force -ErrorAction SilentlyContinue } catch { } }
+                            $downloadOK = $true
+                        }
                     }
                 }
 
@@ -3025,6 +3048,8 @@ function Main {
                             }
                             Write-Host ""
                             if ((Test-Path $imageTar) -and (Get-Item $imageTar).Length -gt 50MB) {
+                                # 写入 tag 元数据以便下次比较
+                                try { "$tagText|$script:imageEdition" | Set-Content -Path "$imageTar.tag" -Force -ErrorAction SilentlyContinue } catch { }
                                 $downloadOK = $true
                                 Write-OK "直链下载成功"
                                 break
@@ -3718,10 +3743,25 @@ function Main {
                     $recoverDownloadOK = $false
 
                     # 检测上次保留的完整 tar 文件（docker load 失败时不删除）
+                    $recoverTagFile = "$recoverTar.tag"
+                    $recoverDiskTag = $null
+                    if (Test-Path $recoverTagFile) { try { $recoverDiskTag = (Get-Content $recoverTagFile -ErrorAction SilentlyContinue | Select-Object -First 1) } catch { $recoverDiskTag = $null } }
                     if ((Test-Path $recoverTar) -and (Get-Item $recoverTar).Length -gt 50MB) {
                         $existRecoverSize = (Get-Item $recoverTar).Length
-                        Write-OK "检测到已下载的镜像文件 ($([math]::Round($existRecoverSize / 1MB, 1))MB)，跳过下载"
-                        $recoverDownloadOK = $true
+                        if ($recoverTag -and $recoverDiskTag -and $recoverDiskTag -eq "$recoverTag|$script:imageEdition") {
+                            Write-OK "检测到已下载的镜像文件 ($([math]::Round($existRecoverSize / 1MB, 1))MB)，版本匹配，跳过下载"
+                            $recoverDownloadOK = $true
+                        } else {
+                            Write-Info "检测到已下载的镜像文件 ($([math]::Round($existRecoverSize / 1MB, 1))MB)，将校验版本..."
+                            if ($recoverDiskTag -and $recoverTag -and $recoverDiskTag -ne "$recoverTag|$script:imageEdition") {
+                                Write-Warn "本地镜像文件版本 ($recoverDiskTag) 与远端 ($recoverTag|$script:imageEdition) 不一致，重新下载"
+                                Remove-Item $recoverTar -Force -ErrorAction SilentlyContinue
+                                if (Test-Path $recoverTagFile) { Remove-Item $recoverTagFile -Force -ErrorAction SilentlyContinue }
+                            } else {
+                                Write-OK "尝试直接使用已下载文件"
+                                $recoverDownloadOK = $true
+                            }
+                        }
                     }
 
                     if (-not $recoverDownloadOK) {
