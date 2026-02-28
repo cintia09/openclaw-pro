@@ -2107,8 +2107,9 @@ function Main {
 
         # 检测当前目录是否已是部署目录（避免嵌套创建 openclaw-pro/openclaw-pro）
         $currentDir = (Get-Location).Path
-        if ((Test-Path (Join-Path $currentDir "Dockerfile")) -and
-            (Test-Path (Join-Path $currentDir "start-services.sh"))) {
+        $curLeaf = Split-Path $currentDir -Leaf
+        if ($curLeaf -eq 'openclaw-pro' -or ((Test-Path (Join-Path $currentDir "Dockerfile")) -and
+            (Test-Path (Join-Path $currentDir "start-services.sh")))) {
             $parentDir = Split-Path $currentDir -Parent
             Write-Host ""
             Write-Host "  ⚠️  检测到当前目录已是 OpenClaw 部署目录:" -ForegroundColor Yellow
