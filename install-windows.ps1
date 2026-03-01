@@ -1076,15 +1076,7 @@ function Get-ContainerReleaseVersion {
                 $fver = (Get-Content $imageTagFile -ErrorAction SilentlyContinue | Select-Object -First 1)
                 if ($fver) {
                     $fver = ("$fver").Trim()
-                    Write-Log "VersionDetect[$ContainerName]: home-data image-release-tag => '$fver'"
-                    if ($fver -match '^([^\|]+)\|') {
-                        Write-Log "VersionDetect[$ContainerName]: choose home-data parsed => '$($Matches[1])'"
-                        return $Matches[1]
-                    }
-                    if ($fver) {
-                        Write-Log "VersionDetect[$ContainerName]: choose home-data raw => '$fver'"
-                        return $fver
-                    }
+                    Write-Log "VersionDetect[$ContainerName]: home-data image-release-tag (hint only) => '$fver'"
                 }
             }
         } catch { }
