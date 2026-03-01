@@ -3748,16 +3748,20 @@ function Main {
                 $recoverOK = $false
                 $doRecover = $true
 
-                # 如果是交互式运行，则总是让用户选择 edition，并确认是否下载
+                # 如果是交互式运行：若前面尚未选择 edition 才提示选择；否则沿用已选版本
                 if ($MyInvocation.MyCommand.Path -or $ImageOnlyDefaulted) {
-                    Write-Host ""
-                    Write-Host "  本地镜像不存在，请选择镜像版本 (仅本次操作):" -ForegroundColor Cyan
-                    Write-Host "     [1] 精简版（默认）" -ForegroundColor White
-                    Write-Host "     [2] 完整版" -ForegroundColor White
-                    Write-Host "  输入选择 [1/2，默认1]: " -NoNewline -ForegroundColor White
-                    $editionChoice = (Read-Host).Trim()
-                    if ($editionChoice -eq '2') { $script:imageEdition = 'full' } else { $script:imageEdition = 'lite' }
-                    Write-Info "已选择镜像版本: $script:imageEdition"
+                    if (-not $script:imageEdition -or $script:imageEdition -eq '') {
+                        Write-Host ""
+                        Write-Host "  本地镜像不存在，请选择镜像版本 (仅本次操作):" -ForegroundColor Cyan
+                        Write-Host "     [1] 精简版（默认）" -ForegroundColor White
+                        Write-Host "     [2] 完整版" -ForegroundColor White
+                        Write-Host "  输入选择 [1/2，默认1]: " -NoNewline -ForegroundColor White
+                        $editionChoice = (Read-Host).Trim()
+                        if ($editionChoice -eq '2') { $script:imageEdition = 'full' } else { $script:imageEdition = 'lite' }
+                        Write-Info "已选择镜像版本: $script:imageEdition"
+                    } else {
+                        Write-Info "沿用已选择镜像版本: $script:imageEdition"
+                    }
 
                     Write-Host ""
                     Write-Host "  本地镜像不存在，是否尝试从 Release 下载镜像并加载？[Y/n]: " -NoNewline -ForegroundColor White
