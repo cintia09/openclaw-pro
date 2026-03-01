@@ -1439,12 +1439,12 @@ function Get-DeployConfig {
         Write-Host "     无需域名，Caddy 自动为本机 IP 生成自签名证书" -ForegroundColor DarkGray
         Write-Host "     浏览器会提示「不安全」，点击「继续访问」即可" -ForegroundColor DarkGray
         Write-Host ""
-        Write-Host "     [1] 不需要，使用 HTTP 直连（默认）" -ForegroundColor Gray
-        Write-Host "     [2] 启用 IP 自签名 HTTPS" -ForegroundColor Gray
+        Write-Host "     [1] 不需要，使用 HTTP 直连" -ForegroundColor Gray
+        Write-Host "     [2] 启用 IP 自签名 HTTPS（默认，推荐）" -ForegroundColor Gray
         Write-Host ""
-        Write-Host "  输入选择 [1/2，默认1]: " -NoNewline -ForegroundColor White
+        Write-Host "  输入选择 [1/2，默认2]: " -NoNewline -ForegroundColor White
         $ipHttpsChoice = (Read-Host).Trim()
-        if ($ipHttpsChoice -eq '2') {
+        if (-not $ipHttpsChoice -or $ipHttpsChoice -eq '2') {
             # 获取本机局域网 IP（排除虚拟网卡：WSL, Docker, Hyper-V, VPN 等）
             $localIp = ""
             try {
@@ -3738,19 +3738,19 @@ function Main {
                 $recoverOK = $false
                 $doRecover = $true
 
-                # 如果是交互式运行，则让用户选择 edition（若尚未选择）和是否下载
+                # 如果是交互式运行，则总是让用户选择 edition，并确认是否下载
                 if ($MyInvocation.MyCommand.Path -or $ImageOnlyDefaulted) {
-                    if (-not $script:imageEdition -or $script:imageEdition -eq '') {
-                        Write-Host "\n  本地未选择镜像版本，请选择镜像版本 (仅本次操作):" -ForegroundColor Cyan
-                        Write-Host "     [1] 精简版 (默认)" -ForegroundColor White
-                        Write-Host "     [2] 完整版" -ForegroundColor White
-                        Write-Host "  输入选择 [1/2，默认1]: " -NoNewline -ForegroundColor White
-                        $editionChoice = (Read-Host).Trim()
-                        if ($editionChoice -eq '2') { $script:imageEdition = 'full' } else { $script:imageEdition = 'lite' }
-                        Write-Info "已选择镜像版本: $script:imageEdition"
-                    }
+                    Write-Host ""
+                    Write-Host "  本地镜像不存在，请选择镜像版本 (仅本次操作):" -ForegroundColor Cyan
+                    Write-Host "     [1] 精简版（默认）" -ForegroundColor White
+                    Write-Host "     [2] 完整版" -ForegroundColor White
+                    Write-Host "  输入选择 [1/2，默认1]: " -NoNewline -ForegroundColor White
+                    $editionChoice = (Read-Host).Trim()
+                    if ($editionChoice -eq '2') { $script:imageEdition = 'full' } else { $script:imageEdition = 'lite' }
+                    Write-Info "已选择镜像版本: $script:imageEdition"
 
-                    Write-Host "\n本地镜像不存在，是否尝试从 Release 下载镜像并加载？[Y/n]: " -NoNewline -ForegroundColor White
+                    Write-Host ""
+                    Write-Host "  本地镜像不存在，是否尝试从 Release 下载镜像并加载？[Y/n]: " -NoNewline -ForegroundColor White
                     $recChoice = (Read-Host).Trim().ToLower()
                     if ($recChoice -eq 'n' -or $recChoice -eq 'no') {
                         $doRecover = $false
