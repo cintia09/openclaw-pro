@@ -1812,8 +1812,8 @@ function Get-DeployConfig {
     }
     if ($config.SshPort -and $config.SshPort -gt 0) { $fwPortList += $config.SshPort }
     $fwPortsText = ($fwPortList | Sort-Object -Unique) -join ','
-    $defaultAutoOpen = if ($config.HttpsEnabled -and $config.CertMode -eq "internal") { "N" } else { "Y" }
-    $defaultHint = if ($defaultAutoOpen -eq "Y") { "Y/n" } else { "y/N" }
+    $defaultAutoOpen = "Y"
+    $defaultHint = "Y/n"
     Write-Host "  🛡️  防火墙设置（目标端口: ${fwPortsText}）" -ForegroundColor White
     Write-Host "     是否自动开放上述端口？[${defaultHint}] : " -NoNewline -ForegroundColor White
     $fwChoice = (Read-Host).Trim().ToLower()
