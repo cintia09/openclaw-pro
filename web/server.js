@@ -701,6 +701,7 @@ app.post('/api/update/hotpatch', async (req, res) => {
     log(`从 GitHub (${branch}) 拉取最新文件...`);
     let needCaddyRestart = false;
     let needWebRestart = false;
+    let needContainerRestart = false;
 
     for (const [ghPath, localPath] of HOTPATCH_FILES) {
       try {
@@ -742,6 +743,7 @@ app.post('/api/update/hotpatch', async (req, res) => {
 
         if (ghPath === 'Caddyfile.template') needCaddyRestart = true;
         if (ghPath === 'web/server.js') needWebRestart = true;
+        if (ghPath === 'start-services.sh') needContainerRestart = true;
       } catch (e) {
         log(`  ❌ ${ghPath}: ${e.message}`);
         hotpatchState.failed.push(ghPath);
@@ -794,6 +796,9 @@ app.post('/api/update/hotpatch', async (req, res) => {
 
     const summary = `热更新完成: ${hotpatchState.updated.length} 个文件已更新, ${hotpatchState.failed.length} 个失败`;
     log(summary);
+    if (needContainerRestart) {
+      log('检测到 start-services.sh 已更新：请重启容器以使入口脚本变更生效（仅热更新不会立即生效）');
+    }
     hotpatchState.status = 'done';
 
     // If server.js was updated, schedule a self-restart

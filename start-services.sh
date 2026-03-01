@@ -120,17 +120,40 @@ done
 SSH_PERSIST_DIR="/root/.openclaw/ssh"
 mkdir -p "$SSH_PERSIST_DIR"
 
+harden_sshd_config() {
+    local cfg="/etc/ssh/sshd_config"
+    [ -f "$cfg" ] || return 0
+
+    set_or_append() {
+        local key="$1"
+        local value="$2"
+        if grep -Eq "^[#[:space:]]*${key}[[:space:]]+" "$cfg"; then
+            sed -i -E "s|^[#[:space:]]*${key}[[:space:]]+.*|${key} ${value}|" "$cfg"
+        else
+            printf "\n%s %s\n" "$key" "$value" >> "$cfg"
+        fi
+    }
+
+    # 强制仅密钥登录：禁用 SSH 密码登录
+    set_or_append "PermitRootLogin" "prohibit-password"
+    set_or_append "PasswordAuthentication" "no"
+    set_or_append "KbdInteractiveAuthentication" "no"
+    set_or_append "ChallengeResponseAuthentication" "no"
+    set_or_append "PubkeyAuthentication" "yes"
+}
+
 if [ -f "$SSH_PERSIST_DIR/sshd_config" ]; then
     # 恢复持久化的 SSH 配置和 host keys
     cp "$SSH_PERSIST_DIR"/ssh_host_* /etc/ssh/ 2>/dev/null
     cp "$SSH_PERSIST_DIR/sshd_config" /etc/ssh/sshd_config
+    harden_sshd_config
+    cp /etc/ssh/sshd_config "$SSH_PERSIST_DIR/sshd_config"
     echo "[start-services] Restored SSH host keys and config from persistent storage"
 else
     # 首次：生成 host keys（如未生成），并保存
     ssh-keygen -A 2>/dev/null
     cp /etc/ssh/ssh_host_* "$SSH_PERSIST_DIR/" 2>/dev/null
-    # 启用 root 登录，禁用密码（仅允许密钥登录）
-    sed -i 's/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+    harden_sshd_config
     cp /etc/ssh/sshd_config "$SSH_PERSIST_DIR/sshd_config"
     echo "[start-services] Generated and persisted SSH host keys"
 fi
