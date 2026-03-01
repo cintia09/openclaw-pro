@@ -2102,7 +2102,9 @@ function Main {
     Write-Step 4 5 "部署 OpenClaw Pro..."
 
     if ($dockerDesktopMode) {
-        # Docker Desktop mode: clone repo locally and run with docker compose / docker run
+        # Docker Desktop mode: default to explicit ImageOnly (no source/repo download)
+        $ImageOnly = $true
+        $ImageOnlyExplicit = $true
         Write-Info "Docker Desktop 模式：在本地部署..."
 
         # 检测当前目录是否已是部署目录（避免嵌套创建 openclaw-pro/openclaw-pro）
@@ -2115,31 +2117,29 @@ function Main {
             Write-Host "  ⚠️  检测到当前目录已是 OpenClaw 部署目录:" -ForegroundColor Yellow
             Write-Host "     $currentDir" -ForegroundColor DarkGray
             Write-Host ""
-            Write-Host "     [1] 在当前目录运行（数据目录将在上级: $parentDir）" -ForegroundColor White
-            Write-Host "     [2] 切换到上级目录运行（推荐，数据目录与代码目录平级）" -ForegroundColor White
+            Write-Host "     [1] 在当前目录运行（部署目录: $currentDir）" -ForegroundColor White
+            Write-Host "     [2] 切换到上级目录运行（默认，部署目录: $(Join-Path $parentDir 'openclaw-pro')）" -ForegroundColor White
             Write-Host ""
             Write-Host "  输入选择 [1/2，默认2]: " -NoNewline -ForegroundColor White
             $dirChoice = (Read-Host).Trim()
 
             if ($dirChoice -eq '1') {
                 $localDeployDir = $currentDir
-                $homeBaseDir = $parentDir
                 Write-Info "在当前目录运行: $localDeployDir"
             } else {
                 Set-Location $parentDir
                 $currentDir = $parentDir
                 $localDeployDir = Join-Path $currentDir "openclaw-pro"
-                $homeBaseDir = $currentDir
                 Write-Info "已切换到上级目录: $currentDir"
             }
         } else {
             $localDeployDir = Join-Path $currentDir "openclaw-pro"
-            $homeBaseDir = $currentDir
+            $homeBaseDir = $localDeployDir
 
             if (-not ($ImageOnly -and $ImageOnlyExplicit)) {
                 Write-Host ""
                 Write-Host "  安装目录确认:" -ForegroundColor Cyan
-                Write-Host "     数据目录: $(Join-Path $homeBaseDir 'home-data[-N]')" -ForegroundColor White
+                Write-Host "     数据目录: $(Join-Path $localDeployDir 'home-data[-N]')" -ForegroundColor White
                 Write-Host "     （首个实例为 home-data，多实例时为 home-data-2, home-data-3 ...）" -ForegroundColor DarkGray
                 Write-Host ""
                 Write-Host "     按回车确认，或输入新路径: " -NoNewline -ForegroundColor White
@@ -2151,18 +2151,18 @@ function Main {
                     Set-Location $customBaseDir
                     $currentDir = $customBaseDir
                     $localDeployDir = Join-Path $currentDir "openclaw-pro"
-                    $homeBaseDir = $currentDir
                     Write-Info "已切换安装目录: $currentDir"
                 }
             } else {
-                # In ImageOnly mode, prefer to store runtime artifacts under $localDeployDir
                 if (-not (Test-Path $localDeployDir)) { New-Item -ItemType Directory -Path $localDeployDir -Force | Out-Null }
-                $homeBaseDir = $localDeployDir
-                $TMP_DIR = $localDeployDir
-                $LOG_FILE = Join-Path $TMP_DIR "install-log.txt"
-                Write-Info "ImageOnly 模式：使用 $localDeployDir 存储镜像、日志与数据目录"
             }
         }
+
+        # 统一目录策略：镜像文件、日志、home-data 全部放在部署目录 openclaw-pro 下
+        if (-not (Test-Path $localDeployDir)) { New-Item -ItemType Directory -Path $localDeployDir -Force | Out-Null }
+        $homeBaseDir = $localDeployDir
+        $TMP_DIR = $localDeployDir
+        $LOG_FILE = Join-Path $localDeployDir "install-log.txt"
         $latestReleaseTag = ""
         $latestReleaseInfo = $null
         try {
@@ -2193,7 +2193,7 @@ function Main {
             # ImageOnly explicitly requested: skip deploy package/source downloads
             $needDeployPackageDownload = $false
         }
-        if (-not $needDeployPackageDownload) {
+        if (-not $needDeployPackageDownload -and -not ($ImageOnly -and $ImageOnlyExplicit)) {
             $localDeployVersion = ""
             $localDeployCommitHash = ""
             if ($ImageOnly -and $ImageOnlyExplicit) {
@@ -3033,10 +3033,11 @@ function Main {
                             if (Test-Path $tagFile) { Remove-Item $tagFile -Force -ErrorAction SilentlyContinue }
                             $downloadOK = $false
                         } else {
-                            # 没有 tag 文件，但大小匹配：假定可用，写入 tag 文件以便后续校验
-                            Write-OK "检测到已下载的镜像文件 ($([math]::Round($existingSize / 1MB, 1))MB)，跳过下载"
-                            try { "$tagText|$script:imageEdition" | Set-Content -Path $tagFile -Force -ErrorAction SilentlyContinue } catch { }
-                            $downloadOK = $true
+                            # 没有 tag 元数据时无法可靠比对版本：强制重新下载
+                            Write-Warn "检测到已下载镜像但缺少版本元数据，无法与远端版本比对，重新下载"
+                            Remove-Item $imageTar -Force -ErrorAction SilentlyContinue
+                            if (Test-Path $tagFile) { Remove-Item $tagFile -Force -ErrorAction SilentlyContinue }
+                            $downloadOK = $false
                         }
                     } elseif ($expectedSize -le 0 -and $existingSize -gt 500MB) {
                         # 无法获取远端大小时，若本地文件 > 500MB 也认为可能是完整的
@@ -3045,9 +3046,10 @@ function Main {
                             Remove-Item $imageTar -Force -ErrorAction SilentlyContinue
                             if (Test-Path $tagFile) { Remove-Item $tagFile -Force -ErrorAction SilentlyContinue }
                         } else {
-                            Write-OK "检测到已下载的镜像文件 ($([math]::Round($existingSize / 1MB, 1))MB)，尝试直接加载"
-                            if ($tagText) { try { "$tagText|$script:imageEdition" | Set-Content -Path $tagFile -Force -ErrorAction SilentlyContinue } catch { } }
-                            $downloadOK = $true
+                            Write-Warn "检测到已下载镜像但无法确认远端版本，重新下载以确保一致"
+                            Remove-Item $imageTar -Force -ErrorAction SilentlyContinue
+                            if (Test-Path $tagFile) { Remove-Item $tagFile -Force -ErrorAction SilentlyContinue }
+                            $downloadOK = $false
                         }
                     }
                 }
@@ -3797,8 +3799,10 @@ function Main {
                                 Remove-Item $recoverTar -Force -ErrorAction SilentlyContinue
                                 if (Test-Path $recoverTagFile) { Remove-Item $recoverTagFile -Force -ErrorAction SilentlyContinue }
                             } else {
-                                Write-OK "尝试直接使用已下载文件"
-                                $recoverDownloadOK = $true
+                                Write-Warn "缺少可用版本元数据，无法确认与远端一致，重新下载"
+                                Remove-Item $recoverTar -Force -ErrorAction SilentlyContinue
+                                if (Test-Path $recoverTagFile) { Remove-Item $recoverTagFile -Force -ErrorAction SilentlyContinue }
+                                $recoverDownloadOK = $false
                             }
                         }
                     }
