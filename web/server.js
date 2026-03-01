@@ -198,8 +198,8 @@ function restartGatewayForeground(callback) {
     'pkill -f "[o]penclaw.*gateway" >/dev/null 2>&1 || true',
     'nohup openclaw gateway run --allow-unconfigured >> /root/.openclaw/logs/gateway.log 2>&1 &',
     'sleep 1',
-    'pgrep -f "[o]penclaw.*gateway" >/dev/null 2>&1',
-  ].join(' && ');
+    'pgrep -f "[o]penclaw.*gateway" >/dev/null 2>&1'
+  ].join('\n');
 
   exec(`bash --noprofile --norc -lc '${cmd}'`, { env: { ...process.env, TERM: 'dumb' } }, callback);
 }

@@ -602,8 +602,16 @@ $('btn-oc-install').addEventListener('click', async ()=>{
 });
 
 $('btn-oc-start').addEventListener('click', async ()=>{
+  appendOcLogLine('[gateway] 正在提交重启请求...');
   const r = await api('/api/openclaw/start', { method:'POST' });
-  toast(r.success ? '已触发重启' : '重启失败', r.message || r.error || '');
+  if (r.success) {
+    appendOcLogLine(`[gateway] ${r.message || '重启请求已提交'}`);
+    appendOcLogLine('[gateway] 请稍候 2-5 秒，状态将自动刷新。');
+    toast('已触发重启', r.message || 'Gateway 正在重启，请稍候');
+  } else {
+    appendOcLogLine(`[gateway] 重启失败: ${r.error || '请查看日志'}`);
+    toast('重启失败', r.error || '请查看日志');
+  }
   setTimeout(refreshOpenClaw, 2500);
 });
 
