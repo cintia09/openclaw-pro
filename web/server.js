@@ -950,7 +950,11 @@ function runOpenClawTask(command, title) {
   appendInstallLog(task, `[openclaw] ${title}\n`);
   appendInstallLog(task, `[openclaw] command: ${command}\n\n`);
 
-  const child = exec(`bash -lc '${command}'`, { timeout: 900000 });
+  const escaped = String(command).replace(/'/g, `'"'"'`);
+  const child = exec(`bash --noprofile --norc -lc '${escaped}'`, {
+    timeout: 900000,
+    env: { ...process.env, TERM: 'dumb' }
+  });
   child.stdout.on('data', d => appendInstallLog(task, d));
   child.stderr.on('data', d => appendInstallLog(task, d));
   child.on('close', code => {
@@ -1004,7 +1008,13 @@ app.get('/api/openclaw/install/:taskId', (req, res) => {
 });
 
 app.post('/api/openclaw/update', (req, res) => {
-  const command = 'openclaw update --channel stable || npm install -g openclaw@latest';
+  const command = [
+    'if command -v openclaw >/dev/null 2>&1; then',
+    '  openclaw update --channel stable || npm install -g openclaw@latest;',
+    'else',
+    '  curl -fsSL --proto "=https" --tlsv1.2 https://openclaw.ai/install-cli.sh | bash;',
+    'fi'
+  ].join(' ');
   const taskId = runOpenClawTask(command, '按官方稳定渠道更新 OpenClaw');
   res.json({ taskId });
 });

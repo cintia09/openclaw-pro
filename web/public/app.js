@@ -411,7 +411,7 @@ $('btn-oc-install').addEventListener('click', async ()=>{
       toast('开始安装', '正在执行 OpenClaw 官方安装流程...');
       pollTask(i.taskId);
     }else{
-      toast('开始更新', '正在按稳定渠道更新 OpenClaw...');
+      toast('开始更新', '正在按稳定渠道更新 OpenClaw（未安装时会自动安装）...');
       pollTask(r.taskId);
     }
   }finally{
