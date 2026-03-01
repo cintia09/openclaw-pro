@@ -1930,6 +1930,9 @@ function Write-LaunchAccessSummary {
         Write-Host "     🔗 Gateway:  http://localhost:${GatewayPort}" -ForegroundColor Cyan
         Write-Host "     🔗 管理面板: http://localhost:${PanelPort}" -ForegroundColor Cyan
     }
+    Write-Host "" 
+    Write-Host "  ⏳ 访问提示: 服务启动后通常需等待 30-120 秒；首次安装可能需要 3-5 分钟" -ForegroundColor Yellow
+    Write-Host "     若暂时无法访问，请稍等后刷新页面" -ForegroundColor DarkGray
     Write-Host ""
 }
 
