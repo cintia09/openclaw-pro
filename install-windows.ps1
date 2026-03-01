@@ -4029,6 +4029,18 @@ function Main {
                 # 恢复后重试启动容器
                 if ($recoverOK) {
                     Write-Info "正在重试启动容器..."
+                    $retryHomeData = $homeData
+                    if ([string]::IsNullOrWhiteSpace("$retryHomeData")) {
+                        $retryHomeDataName = "home-data"
+                        if ($containerName -match '^openclaw-pro-(\d+)$') {
+                            $retryHomeDataName = "home-data-$($Matches[1])"
+                        }
+                        $retryHomeData = Join-Path $homeBaseDir $retryHomeDataName
+                        Write-Warn "检测到数据目录变量为空，回退到默认数据目录: $retryHomeData"
+                    }
+                    if (-not (Test-Path $retryHomeData)) {
+                        New-Item -ItemType Directory -Path $retryHomeData -Force | Out-Null
+                    }
                     try {
                         $containerExists = (& docker ps -a --filter "name=^/$containerName$" --format "{{.Names}}" 2>$null | Select-Object -First 1)
                         if ($containerExists -eq $containerName) {
@@ -4047,7 +4059,7 @@ function Main {
                             "--hostname", "openclaw",
                             "--dns", "8.8.8.8",
                             "--dns", "8.8.4.4",
-                            "-v", "${homeData}:/root",
+                            "-v", "${retryHomeData}:/root",
                             "-e", "TZ=Asia/Shanghai",
                             "--restart", "unless-stopped"
                         )
