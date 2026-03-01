@@ -25,7 +25,7 @@ param(
 )
 
 # --- Constants ----------------------------------------------------------------
-$SCRIPT_VERSION  = "1.0.6"
+$SCRIPT_VERSION  = "1.0.7"
 $TASK_NAME       = "OpenClawSetup"
 $UBUNTU_DISTRO   = "Ubuntu-24.04"
 $OPENCLAW_PORT   = "18789"
@@ -979,7 +979,10 @@ function Download-Robust {
                 continue
             }
             if ($line -match '^\d+$') {
-                $completedSet.TryAdd([int]$line, [byte]1) | Out-Null
+                $chunkNo = [int]$line
+                if ($chunkNo -ge 0 -and $chunkNo -lt $totalChunks) {
+                    $completedSet.TryAdd($chunkNo, [byte]1) | Out-Null
+                }
             }
         }
         # 无 SIZE 头的旧进度文件也接受（向后兼容），但要求文件大小正确
@@ -995,7 +998,14 @@ function Download-Robust {
     if ($needPrealloc) {
         if ((Test-Path $progressFile) -and $completedSet.Count -eq 0) {
             # 尝试读取旧进度块数以便提示
-            $oldCount = (Get-Content $progressFile -ErrorAction SilentlyContinue | Where-Object { $_ -match '^\d+$' }).Count
+            $oldSet = [System.Collections.Generic.HashSet[int]]::new()
+            foreach ($line in (Get-Content $progressFile -ErrorAction SilentlyContinue)) {
+                if ($line -match '^\d+$') {
+                    $oldChunk = [int]$line
+                    if ($oldChunk -ge 0 -and $oldChunk -lt $totalChunks) { [void]$oldSet.Add($oldChunk) }
+                }
+            }
+            $oldCount = $oldSet.Count
             if ($oldCount -gt 0) {
                 Write-Warn "目标文件已失效（被删除或版本变更），旧进度 ${oldCount} 块作废，将重新下载"
             }
@@ -3030,11 +3040,10 @@ function Main {
                             if (Test-Path $tagFile) { Remove-Item $tagFile -Force -ErrorAction SilentlyContinue }
                             $downloadOK = $false
                         } else {
-                            # 没有 tag 元数据时无法可靠比对版本：强制重新下载
-                            Write-Warn "检测到已下载镜像但缺少版本元数据，无法与远端版本比对，重新下载"
-                            Remove-Item $imageTar -Force -ErrorAction SilentlyContinue
-                            if (Test-Path $tagFile) { Remove-Item $tagFile -Force -ErrorAction SilentlyContinue }
-                            $downloadOK = $false
+                            # 文件大小匹配但缺少 tag 元数据：默认复用并补写元数据，避免不必要的重复下载
+                            Write-Warn "检测到已下载镜像缺少版本元数据，默认复用并补写元数据"
+                            try { "$tagText|$script:imageEdition" | Set-Content -Path $tagFile -Force -ErrorAction SilentlyContinue } catch { }
+                            $downloadOK = $true
                         }
                     } elseif ($expectedSize -le 0 -and $existingSize -gt 500MB) {
                         # 无法获取远端大小时，若本地文件 > 500MB 也认为可能是完整的
@@ -3043,10 +3052,9 @@ function Main {
                             Remove-Item $imageTar -Force -ErrorAction SilentlyContinue
                             if (Test-Path $tagFile) { Remove-Item $tagFile -Force -ErrorAction SilentlyContinue }
                         } else {
-                            Write-Warn "检测到已下载镜像但无法确认远端版本，重新下载以确保一致"
-                            Remove-Item $imageTar -Force -ErrorAction SilentlyContinue
-                            if (Test-Path $tagFile) { Remove-Item $tagFile -Force -ErrorAction SilentlyContinue }
-                            $downloadOK = $false
+                            Write-Warn "无法确认远端版本但本地镜像完整，默认复用并补写元数据"
+                            if ($tagText) { try { "$tagText|$script:imageEdition" | Set-Content -Path $tagFile -Force -ErrorAction SilentlyContinue } catch { } }
+                            $downloadOK = $true
                         }
                     }
                 }
@@ -3089,6 +3097,17 @@ function Main {
                         -ChunkSizeMB 2 `
                         -Threads 8 `
                         -RetryPerChunk 20
+
+                    if (-not $downloadOK) {
+                        Write-Warn "首轮 8 线程下载未完成，自动降级重试（4线程、1MB块）..."
+                        $downloadOK = Download-Robust `
+                            -Urls $downloadUrls `
+                            -OutFile $imageTar `
+                            -ExpectedSize $expectedSize `
+                            -ChunkSizeMB 1 `
+                            -Threads 4 `
+                            -RetryPerChunk 30
+                    }
                 }
 
                 if ($downloadOK) {
@@ -3221,49 +3240,60 @@ function Main {
 
             # -- 尝试 2: 从 GHCR 拉取镜像 --
             if (-not $imageReady) {
-                $ghcrTag = if ($latestReleaseTag) { $latestReleaseTag } else { "latest" }
+                $ghcrTags = @()
                 if ($script:imageEdition -eq "lite") {
-                    $ghcrTag = if ($latestReleaseTag) { "$latestReleaseTag-lite" } else { "lite" }
+                    if ($latestReleaseTag) { $ghcrTags += "$latestReleaseTag-lite" }
+                    $ghcrTags += "lite"
+                    if ($latestReleaseTag) { $ghcrTags += "$latestReleaseTag" }
+                    $ghcrTags += "latest"
+                } else {
+                    if ($latestReleaseTag) { $ghcrTags += "$latestReleaseTag" }
+                    $ghcrTags += "latest"
                 }
-                $ghcrImage = "ghcr.io/${GITHUB_REPO}:${ghcrTag}"
-                Write-Info "尝试从 GHCR 拉取镜像: $ghcrImage ..."
-                try {
-                    # 重要: 不能用 | ForEach-Object，PowerShell 5.1 中 pipeline 会导致 $LASTEXITCODE 不可靠
-                    $pullOutput = & docker pull $ghcrImage 2>&1
-                    $pullExitCode = $LASTEXITCODE
-                    # 显示拉取日志
-                    $pullOutput | ForEach-Object {
-                        if ($_ -match "Pulling|Downloading|Extracting|Pull complete|Digest|Status") {
-                            Write-Host "  $_" -ForegroundColor DarkGray
-                        }
-                        Write-Log "docker pull: $_"
-                    }
-                    if ($pullExitCode -eq 0) {
-                        # 绝对校验: tag 前确认 GHCR 镜像确实存在
-                        $ghcrCheck = & docker image inspect $ghcrImage 2>$null
-                        if ($LASTEXITCODE -eq 0) {
-                            & docker tag $ghcrImage "openclaw-pro:latest" 2>$null
-                            # 再次确认 tag 成功
-                            $tagCheck = & docker image inspect "openclaw-pro:latest" 2>$null
-                            if ($LASTEXITCODE -eq 0) {
-                                $imageReady = $true
-                                Write-OK "GHCR 镜像拉取成功"
-                                try {
-                                    $pulledId = (& docker image inspect openclaw-pro --format '{{.Id}}' 2>$null)
-                                    if ($pulledId) { $script:loadedImageDigest = $pulledId }
-                                } catch { }
-                            } else {
-                                Write-Warn "docker tag 失败，继续尝试本地构建..."
+                $ghcrTags = $ghcrTags | Select-Object -Unique
+
+                foreach ($tag in $ghcrTags) {
+                    if ($imageReady) { break }
+                    $ghcrImage = "ghcr.io/${GITHUB_REPO}:${tag}"
+                    Write-Info "尝试从 GHCR 拉取镜像: $ghcrImage ..."
+                    for ($attempt = 1; $attempt -le 2 -and -not $imageReady; $attempt++) {
+                        try {
+                            $pullOutput = & docker pull $ghcrImage 2>&1
+                            $pullExitCode = $LASTEXITCODE
+                            $pullOutput | ForEach-Object {
+                                if ($_ -match "Pulling|Downloading|Extracting|Pull complete|Digest|Status|Retrying") {
+                                    Write-Host "  $_" -ForegroundColor DarkGray
+                                }
+                                Write-Log "docker pull: $_"
                             }
-                        } else {
-                            Write-Warn "GHCR 拉取返回成功但镜像不存在（pipeline 异常），继续尝试本地构建..."
+                            if ($pullExitCode -eq 0) {
+                                $ghcrCheck = & docker image inspect $ghcrImage 2>$null
+                                if ($LASTEXITCODE -eq 0) {
+                                    & docker tag $ghcrImage "openclaw-pro:latest" 2>$null
+                                    $tagCheck = & docker image inspect "openclaw-pro:latest" 2>$null
+                                    if ($LASTEXITCODE -eq 0) {
+                                        $imageReady = $true
+                                        Write-OK "GHCR 镜像拉取成功（tag: $tag）"
+                                        try {
+                                            $pulledId = (& docker image inspect openclaw-pro --format '{{.Id}}' 2>$null)
+                                            if ($pulledId) { $script:loadedImageDigest = $pulledId }
+                                        } catch { }
+                                    }
+                                }
+                            }
+                            if (-not $imageReady -and $attempt -lt 2) {
+                                Write-Warn "GHCR 拉取失败（tag: $tag，第 $attempt 次），2 秒后重试..."
+                                Start-Sleep -Seconds 2
+                            }
+                        } catch {
+                            Write-Log "GHCR pull failed ($tag, attempt=$attempt): $_"
+                            if ($attempt -lt 2) { Start-Sleep -Seconds 2 }
                         }
-                    } else {
-                        Write-Warn "GHCR 拉取失败 (exit=$pullExitCode)，继续尝试本地构建..."
                     }
-                } catch {
-                    Write-Log "GHCR pull failed: $_"
-                    Write-Warn "GHCR 拉取异常，继续尝试本地构建..."
+                }
+
+                if (-not $imageReady) {
+                    Write-Warn "GHCR 多标签拉取均失败，继续尝试本地构建..."
                 }
             }
 
@@ -3835,6 +3865,16 @@ function Main {
                             -ChunkSizeMB 2 `
                             -Threads 8 `
                             -RetryPerChunk 20
+                        if (-not $recoverDownloadOK) {
+                            Write-Warn "首轮 8 线程下载未完成，自动降级重试（4线程、1MB块）..."
+                            $recoverDownloadOK = Download-Robust `
+                                -Urls $recoverUrls `
+                                -OutFile $recoverTar `
+                                -ExpectedSize $recoverSize `
+                                -ChunkSizeMB 1 `
+                                -Threads 4 `
+                                -RetryPerChunk 30
+                        }
                     } else {
                         Write-Warn "无法获取文件大小，尝试 curl.exe 直链下载..."
                         $recoverDownloadOK = $false
