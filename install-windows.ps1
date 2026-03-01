@@ -49,6 +49,11 @@ $TMP_DIR         = $env:TEMP
 $LOG_FILE        = Join-Path $env:TEMP "openclaw-install-log.txt"
 $STATE_FILE      = Join-Path $SCRIPT_DIR ".install-state.json"
 
+$script:sshServiceReady = $false
+$script:sshPasswordAuthDisabled = $false
+$script:sshInjectedKeyPath = ""
+$script:rootPasswordFilePath = ""
+
 # 如果通过 `irm ... | iex` (远程执行) 运行且用户未显式指定 -ImageOnly，则默认启用 ImageOnly 模式
 # Track whether ImageOnly was explicitly passed vs defaulted by remote exec
 $ImageOnlyExplicit = $PSBoundParameters.ContainsKey('ImageOnly')
@@ -111,6 +116,53 @@ function Write-Info {
 function Write-Suggestion {
     param([string]$Text)
     Write-Host "  💡 $Text" -ForegroundColor Cyan
+}
+
+function New-StrongPassword {
+    param([int]$Length = 20)
+
+    if ($Length -lt 12) { $Length = 12 }
+
+    $upper = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+    $lower = "abcdefghijkmnopqrstuvwxyz"
+    $digit = "23456789"
+    $special = "!@#$%^&*-_=+"
+    $all = ($upper + $lower + $digit + $special).ToCharArray()
+
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $result = New-Object System.Collections.Generic.List[char]
+
+        foreach ($set in @($upper, $lower, $digit, $special)) {
+            $chars = $set.ToCharArray()
+            $buf = New-Object byte[] 4
+            $rng.GetBytes($buf)
+            $idx = [BitConverter]::ToUInt32($buf, 0) % $chars.Length
+            $result.Add($chars[$idx])
+        }
+
+        for ($i = $result.Count; $i -lt $Length; $i++) {
+            $buf = New-Object byte[] 4
+            $rng.GetBytes($buf)
+            $idx = [BitConverter]::ToUInt32($buf, 0) % $all.Length
+            $result.Add($all[$idx])
+        }
+
+        # Fisher-Yates shuffle
+        for ($i = $result.Count - 1; $i -gt 0; $i--) {
+            $buf = New-Object byte[] 4
+            $rng.GetBytes($buf)
+            $j = [BitConverter]::ToUInt32($buf, 0) % ($i + 1)
+            $tmp = $result[$i]
+            $result[$i] = $result[$j]
+            $result[$j] = $tmp
+        }
+
+        return -join $result
+    }
+    finally {
+        $rng.Dispose()
+    }
 }
 
 
@@ -1851,6 +1903,30 @@ function Show-Completion {
         Write-Host "     docker start openclaw-pro      # 启动服务" -ForegroundColor Gray
         Write-Host "     docker exec -it openclaw-pro bash  # 进入容器终端" -ForegroundColor Gray
         Write-Host "     ssh root@localhost -p ${SshPort}    # SSH 远程登录" -ForegroundColor Gray
+        Write-Host ""
+        Write-Host "  🔐 SSH 安全状态：" -ForegroundColor White
+        if ($script:sshServiceReady) {
+            Write-Host "     SSH 服务: 已启动" -ForegroundColor Green
+        } else {
+            Write-Host "     SSH 服务: 启动状态未知，请执行 docker logs openclaw-pro 排查" -ForegroundColor Yellow
+        }
+        if ($script:sshPasswordAuthDisabled) {
+            Write-Host "     PasswordAuthentication: no（已禁用密码登录，仅允许密钥）" -ForegroundColor Green
+        } else {
+            Write-Host "     PasswordAuthentication: 未检测到 no，请检查容器 sshd_config" -ForegroundColor Yellow
+        }
+
+        if ($script:sshInjectedKeyPath) {
+            Write-Host "     公钥注入: 已自动注入 $script:sshInjectedKeyPath" -ForegroundColor Green
+        } else {
+            Write-Host "     公钥注入: 未检测到宿主机公钥，请手动注入到 /root/.ssh/authorized_keys" -ForegroundColor Yellow
+            Write-Host "     示例: type `%USERPROFILE`%\.ssh\id_ed25519.pub | docker exec -i openclaw-pro bash -lc \"mkdir -p /root/.ssh && cat >> /root/.ssh/authorized_keys && chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys\"" -ForegroundColor DarkGray
+        }
+
+        if ($script:rootPasswordFilePath) {
+            Write-Host "     Root 初始密码: 已生成并保存到 $script:rootPasswordFilePath" -ForegroundColor Green
+            Write-Host "     注意: 该密码仅供容器内本地管理使用，SSH 仍为密钥登录" -ForegroundColor DarkGray
+        }
         Write-Host ""
         Write-Host "  🔄 升级到新版本：" -ForegroundColor White
         Write-Host "     重新运行安装命令即可，脚本会自动检测版本差异：" -ForegroundColor DarkGray
@@ -3856,6 +3932,111 @@ function Main {
             if ($LASTEXITCODE -eq 0) {
                 Write-OK "容器已启动"
                 $launched = $true
+
+                # 收尾：确保 SSH 服务可用、禁用密码登录状态可见、自动注入宿主机公钥、生成初始 root 密码（仅本地用途）
+                try {
+                    $sshReady = $false
+                    for ($attempt = 1; $attempt -le 8; $attempt++) {
+                        & docker exec $containerName bash -lc "pgrep -x sshd >/dev/null 2>&1" 2>$null | Out-Null
+                        if ($LASTEXITCODE -eq 0) {
+                            $sshReady = $true
+                            break
+                        }
+                        & docker exec $containerName bash -lc "mkdir -p /run/sshd && (/usr/sbin/sshd >/dev/null 2>&1 || service ssh start >/dev/null 2>&1 || true)" 2>$null | Out-Null
+                        Start-Sleep -Milliseconds 600
+                    }
+                    $script:sshServiceReady = $sshReady
+                    if ($sshReady) {
+                        Write-OK "SSH 服务已就绪"
+                    } else {
+                        Write-Warn "SSH 服务状态未确认，请稍后执行 docker logs $containerName 查看"
+                    }
+
+                    $pwdAuth = (& docker exec $containerName bash -lc "sshd -T 2>/dev/null | awk '/^passwordauthentication /{print `$2}'" 2>$null | Out-String).Trim().ToLower()
+                    $script:sshPasswordAuthDisabled = ($pwdAuth -eq 'no')
+                    if ($script:sshPasswordAuthDisabled) {
+                        Write-OK "SSH 密码登录已禁用（仅密钥登录）"
+                    } else {
+                        Write-Warn "未检测到 PasswordAuthentication no，请检查容器内 sshd 配置"
+                    }
+
+                    $pubKeyCandidates = @(
+                        (Join-Path $env:USERPROFILE ".ssh\id_ed25519.pub"),
+                        (Join-Path $env:USERPROFILE ".ssh\id_rsa.pub"),
+                        (Join-Path $env:USERPROFILE ".ssh\id_ecdsa.pub")
+                    )
+                    $injected = $false
+                    foreach ($keyFile in $pubKeyCandidates) {
+                        if (-not (Test-Path $keyFile)) { continue }
+                        & docker exec $containerName bash -lc "mkdir -p /root/.ssh && chmod 700 /root/.ssh" 2>$null | Out-Null
+                        & docker cp $keyFile "${containerName}:/root/.ssh/authorized_keys.tmp" 2>$null | Out-Null
+                        if ($LASTEXITCODE -ne 0) { continue }
+                        & docker exec $containerName bash -lc "cat /root/.ssh/authorized_keys.tmp >> /root/.ssh/authorized_keys && sort -u -o /root/.ssh/authorized_keys /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && rm -f /root/.ssh/authorized_keys.tmp" 2>$null | Out-Null
+                        if ($LASTEXITCODE -eq 0) {
+                            $script:sshInjectedKeyPath = $keyFile
+                            $injected = $true
+                            Write-OK "已自动注入宿主机 SSH 公钥: $keyFile"
+                            break
+                        }
+                    }
+
+                    if (-not $injected) {
+                        try {
+                            $sshDir = Join-Path $env:USERPROFILE ".ssh"
+                            if (-not (Test-Path $sshDir)) {
+                                New-Item -ItemType Directory -Path $sshDir -Force | Out-Null
+                            }
+
+                            $keyPath = Join-Path $sshDir "id_ed25519"
+                            $pubPath = "$keyPath.pub"
+                            if (-not (Test-Path $pubPath)) {
+                                $sshKeygen = Get-Command ssh-keygen -ErrorAction SilentlyContinue
+                                if ($sshKeygen) {
+                                    Write-Info "未检测到宿主机公钥，正在自动生成 id_ed25519..."
+                                    & $sshKeygen.Source -t ed25519 -N '' -f $keyPath 2>$null | Out-Null
+                                }
+                            }
+
+                            if (Test-Path $pubPath) {
+                                & docker exec $containerName bash -lc "mkdir -p /root/.ssh && chmod 700 /root/.ssh" 2>$null | Out-Null
+                                & docker cp $pubPath "${containerName}:/root/.ssh/authorized_keys.tmp" 2>$null | Out-Null
+                                if ($LASTEXITCODE -eq 0) {
+                                    & docker exec $containerName bash -lc "cat /root/.ssh/authorized_keys.tmp >> /root/.ssh/authorized_keys && sort -u -o /root/.ssh/authorized_keys /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && rm -f /root/.ssh/authorized_keys.tmp" 2>$null | Out-Null
+                                    if ($LASTEXITCODE -eq 0) {
+                                        $script:sshInjectedKeyPath = $pubPath
+                                        $injected = $true
+                                        Write-OK "已自动生成并注入宿主机 SSH 公钥: $pubPath"
+                                    }
+                                }
+                            }
+                        } catch {
+                            Write-Log "Auto-generate host SSH key failed: $_" "WARN"
+                        }
+                    }
+
+                    if (-not $injected) {
+                        Write-Warn "未发现可用宿主机公钥（id_ed25519/id_rsa/id_ecdsa），请手动注入 authorized_keys"
+                    }
+
+                    $rootPwdFile = Join-Path $configDir "root-initial-password.txt"
+                    if (-not (Test-Path $rootPwdFile)) {
+                        $initPwd = New-StrongPassword -Length 20
+                        ("root:{0}" -f $initPwd) | & docker exec -i $containerName chpasswd 2>$null | Out-Null
+                        if ($LASTEXITCODE -eq 0) {
+                            $initPwd | Set-Content -Path $rootPwdFile -Force
+                            $script:rootPasswordFilePath = $rootPwdFile
+                            Write-OK "已生成并设置 root 初始密码（已保存到本地文件）"
+                        } else {
+                            Write-Warn "设置 root 初始密码失败，可稍后进入容器手动执行 passwd root"
+                        }
+                    } else {
+                        $script:rootPasswordFilePath = $rootPwdFile
+                        Write-Info "检测到已存在 root 初始密码文件，沿用现有值"
+                    }
+                } catch {
+                    Write-Log "Post-deploy SSH/bootstrap step failed: $_" "WARN"
+                    Write-Warn "安装后 SSH/公钥/初始密码收尾步骤部分失败，请在完成页按提示手动处理"
+                }
 
                 if ($deployConfig.HttpsEnabled) {
                     $certModeText = if ($deployConfig.CertMode -eq "internal") { "自签证书" } else { "Let's Encrypt" }
