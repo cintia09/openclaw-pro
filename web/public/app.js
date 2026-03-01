@@ -271,9 +271,22 @@ async function refreshStatus(){
   if (s.gatewayWatchdog === false) {
     gatewayParts.push('watchdog未运行');
   }
-  if (s.terminal && (s.terminal.reason || s.terminal.ready === false)) {
-    const reasonText = s.terminal.reason || '终端后端未就绪';
-    gatewayParts.push(`终端: ${reasonText}`);
+  if (s.terminal) {
+    if (s.terminal.ready) {
+      const mode = s.terminal.mode || 'unknown';
+      if (mode === 'pty') {
+        gatewayParts.push('终端: 正常(PTY)');
+      } else if (mode === 'fallback') {
+        gatewayParts.push('终端: 正常(兼容模式)');
+      } else {
+        gatewayParts.push(`终端: 正常(${mode})`);
+      }
+    } else {
+      const reasonText = s.terminal.reason || '终端后端未就绪';
+      gatewayParts.push(`终端: ${reasonText}`);
+    }
+  } else {
+    gatewayParts.push('终端: 状态未知');
   }
   $('kpi-gateway-sub').textContent = gatewayParts.join(' · ');
 
