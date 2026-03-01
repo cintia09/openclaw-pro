@@ -947,7 +947,10 @@ function Normalize-ReleaseVersion {
 }
 
 function Get-ContainerReleaseVersion {
-    param([string]$ContainerName)
+    param(
+        [string]$ContainerName,
+        [string]$HomeBaseDir = ""
+    )
     if (-not $ContainerName) { return "" }
     try {
         $raw = (& docker exec $ContainerName sh -lc "cat /etc/openclaw-version 2>/dev/null || true" 2>$null | Select-Object -First 1)
@@ -967,6 +970,49 @@ function Get-ContainerReleaseVersion {
             if ($verLine) { return $verLine }
         }
     } catch { }
+
+    try {
+        $imgRef = (& docker inspect $ContainerName --format '{{.Config.Image}}' 2>$null | Select-Object -First 1)
+        if ($imgRef) {
+            $imgRef = ("$imgRef").Trim()
+            if ($imgRef -match ':(v?\d+\.\d+\.\d+(?:[-\w\.]*)?)$') {
+                $tagVer = $Matches[1]
+                $tagVer = ($tagVer -replace '(-lite|-full)$','')
+                if ($tagVer) { return $tagVer }
+            }
+        }
+    } catch { }
+
+    try {
+        $imageId = (& docker inspect $ContainerName --format '{{.Image}}' 2>$null | Select-Object -First 1)
+        if ($imageId) {
+            $labelVer = (& docker image inspect $imageId --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>$null | Select-Object -First 1)
+            if ($labelVer) {
+                $labelVer = ("$labelVer").Trim()
+                if ($labelVer) { return $labelVer }
+            }
+        }
+    } catch { }
+
+    if ($HomeBaseDir) {
+        try {
+            $tagHomeDataName = "home-data"
+            if ($ContainerName -match '^openclaw-pro-(\d+)$') {
+                $tagHomeDataName = "home-data-$($Matches[1])"
+            }
+            $imageTagFile = Join-Path $HomeBaseDir "$tagHomeDataName\.openclaw\image-release-tag.txt"
+            if (Test-Path $imageTagFile) {
+                $fver = (Get-Content $imageTagFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+                if ($fver) {
+                    $fver = ("$fver").Trim()
+                    if ($fver -match '^([^\|]+)\|') {
+                        return $Matches[1]
+                    }
+                    if ($fver) { return $fver }
+                }
+            }
+        } catch { }
+    }
 
     return ""
 }
@@ -2662,7 +2708,7 @@ function Main {
                 $rcName = $parts[0]
                 $rcStatus = if ($parts.Count -ge 2) { $parts[1] } else { "" }
                 $rcPorts = if ($parts.Count -ge 3) { $parts[2] } else { "" }
-                $rcVersion = Get-ContainerReleaseVersion -ContainerName $rcName
+                $rcVersion = Get-ContainerReleaseVersion -ContainerName $rcName -HomeBaseDir $homeBaseDir
                 $rcVersionText = if ($rcVersion) { $rcVersion } else { "未知" }
                 $runningContainerMeta += @{
                     Name = $rcName
