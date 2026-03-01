@@ -2736,10 +2736,16 @@ function Main {
                         HttpsEnabled = [bool]$upgradeConfig.domain
                     }
                     if ($deployConfig.HttpsEnabled) {
-                        $deployConfig.PortArgs = @(
-                            "-p", "$($deployConfig.HttpPort):80",
-                            "-p", "$($deployConfig.HttpsPort):443"
-                        )
+                        if ($deployConfig.CertMode -eq "letsencrypt") {
+                            $deployConfig.PortArgs = @(
+                                "-p", "$($deployConfig.HttpPort):80",
+                                "-p", "$($deployConfig.HttpsPort):443"
+                            )
+                        } else {
+                            $deployConfig.PortArgs = @(
+                                "-p", "$($deployConfig.HttpsPort):443"
+                            )
+                        }
                     } else {
                         $deployConfig.PortArgs = @(
                             "-p", "$($deployConfig.GatewayPort):18789",
@@ -3507,10 +3513,16 @@ function Main {
                 }
 
                 if ($deployConfig.HttpsEnabled) {
-                    $deployConfig.PortArgs = @(
-                        "-p", "$($deployConfig.HttpPort):80",
-                        "-p", "$($deployConfig.HttpsPort):443"
-                    )
+                    if ($deployConfig.CertMode -eq "letsencrypt") {
+                        $deployConfig.PortArgs = @(
+                            "-p", "$($deployConfig.HttpPort):80",
+                            "-p", "$($deployConfig.HttpsPort):443"
+                        )
+                    } else {
+                        $deployConfig.PortArgs = @(
+                            "-p", "$($deployConfig.HttpsPort):443"
+                        )
+                    }
                 } else {
                     $deployConfig.PortArgs = @(
                         "-p", "$($deployConfig.GatewayPort):18789",
