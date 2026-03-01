@@ -43,10 +43,9 @@ $SCRIPT_DIR      = if ($MyInvocation.MyCommand.Path) {
     # bat 远程调用时 $MyInvocation.MyCommand.Path 为空，用当前工作目录
     $PWD.Path
 }
-# tmp 目录与 openclaw-pro 平级（如 C:\Mydata\docker-openclaw\tmp）
-$TMP_DIR         = Join-Path (Split-Path $SCRIPT_DIR -Parent) "tmp"
-if (-not (Test-Path $TMP_DIR)) { New-Item -ItemType Directory -Path $TMP_DIR -Force | Out-Null }
-$LOG_FILE        = Join-Path $TMP_DIR "install-log.txt"
+# 日志与镜像下载目录将在部署阶段统一设置到部署目录 openclaw-pro
+$TMP_DIR         = $SCRIPT_DIR
+$LOG_FILE        = Join-Path $SCRIPT_DIR "install-log.txt"
 $STATE_FILE      = Join-Path $SCRIPT_DIR ".install-state.json"
 
 # 如果通过 `irm ... | iex` (远程执行) 运行且用户未显式指定 -ImageOnly，则默认启用 ImageOnly 模式
@@ -2607,9 +2606,9 @@ function Main {
             }
             Write-Host ""
             Write-Host "  请选择操作:" -ForegroundColor White
-            Write-Host "     [1] 保留旧容器，新建一个实例（使用不同端口）" -ForegroundColor Gray
-            Write-Host "     [2] 升级旧容器（沿用端口/域名配置，数据保留）" -ForegroundColor Gray
-            Write-Host "     [3] 删除旧容器，全部重新配置（数据保留，端口/域名重新设置）" -ForegroundColor Gray
+            Write-Host "     [1] 新建一个容器（不删除旧容器）" -ForegroundColor Gray
+            Write-Host "     [2] 重新安装容器（删除旧容器，保留配置和 home-data，默认沿用旧配置）" -ForegroundColor Gray
+            Write-Host "     [3] 重新安装容器（删除旧容器 + 配置 + home-data）" -ForegroundColor Gray
             Write-Host ""
             Write-Host "  输入选择 [2]: " -NoNewline -ForegroundColor White
             $choice = (Read-Host).Trim()
@@ -2633,7 +2632,7 @@ function Main {
                         break
                     }
                 }
-                Write-Info "将创建新容器: $containerName（数据目录: home-data-$idx，与代码目录平级）"
+                Write-Info "将创建新容器: $containerName（数据目录: home-data-$idx，位于部署目录下）"
             } elseif ($choice -eq '2') {
                 # -- 升级模式：读取旧容器对应的配置，删除旧容器后复用相同配置 --
                 $upgradeContainerName = ""
@@ -2740,7 +2739,7 @@ function Main {
                 Write-Info "💡 数据目录 (home-data) 不会被删除，原有配置和数据均保留"
                 Write-Info "   如需彻底删除数据，请手动删除目录: $(Join-Path $homeBaseDir $upgradeHomeDataName)"
             } else {
-                # [3] 重新配置 — 原有的删除逻辑
+                # [3] 全量重装：删除旧容器，并删除对应配置与 home-data
                 if ($runningContainers.Count -eq 1) {
                     # 只有一个，直接删除
                     $rcName = ($runningContainers[0] -split '\|')[0]
@@ -2780,12 +2779,18 @@ function Main {
                 }
                 Start-Sleep -Seconds 2  # 等待端口释放
                 Write-OK "旧容器已删除"
-                Write-Info "💡 数据目录 (home-data) 不会被删除，原有配置和数据均保留"
                 $delHomeDataName = "home-data"
                 if ($containerName -match '^openclaw-pro-(\d+)$') {
                     $delHomeDataName = "home-data-$($Matches[1])"
                 }
-                Write-Info "   如需彻底删除数据，请手动删除目录: $(Join-Path $homeBaseDir $delHomeDataName)"
+                $delHomeDataPath = Join-Path $homeBaseDir $delHomeDataName
+                $delConfigPath = Join-Path $delHomeDataPath ".openclaw"
+                if (Test-Path $delConfigPath) {
+                    try { Remove-Item $delConfigPath -Recurse -Force -ErrorAction Stop; Write-Info "已删除旧配置目录: $delConfigPath" } catch { Write-Warn "删除旧配置目录失败: $delConfigPath" }
+                }
+                if (Test-Path $delHomeDataPath) {
+                    try { Remove-Item $delHomeDataPath -Recurse -Force -ErrorAction Stop; Write-Info "已删除旧数据目录: $delHomeDataPath" } catch { Write-Warn "删除旧数据目录失败: $delHomeDataPath" }
+                }
             }
         }
 
@@ -2816,6 +2821,31 @@ function Main {
             # 策略: 检查本地已有镜像 → 下载Release tar.gz → GHCR拉取 → 本地构建
             $imageReady = $false
             $forceRefreshImage = $false
+
+            # 先选择镜像版本（lite/full），用于后续本地/远端版本比对与下载
+            $assetName = "openclaw-pro-image-lite.tar.gz"
+            Write-Host ""
+            Write-Host "  请选择镜像版本:" -ForegroundColor Cyan
+            Write-Host "     [1] 精简版（默认，~250MB，约 5 分钟完成安装）" -ForegroundColor White
+            Write-Host "         包含: Ubuntu + Node.js + Caddy + Web面板 + 常用工具 + Python3" -ForegroundColor DarkGray
+            Write-Host "         Chrome/noVNC/LightGBM/openclaw 等可后期通过 Web 面板安装" -ForegroundColor DarkGray
+            Write-Host "     [2] 完整版（~1.6GB，约 30 分钟完成安装）" -ForegroundColor White
+            Write-Host "         包含全部组件: Chrome 浏览器、noVNC、LightGBM、openclaw 等" -ForegroundColor DarkGray
+            Write-Host ""
+            Write-Host "  输入选择 [1/2，默认1]: " -NoNewline -ForegroundColor White
+            $editionChoice = (Read-Host).Trim()
+            if ($editionChoice -eq '2') {
+                $script:imageEdition = "full"
+                $assetName = "openclaw-pro-image.tar.gz"
+                Write-Info "已选择完整版镜像"
+            } else {
+                $script:imageEdition = "lite"
+                $assetName = "openclaw-pro-image-lite.tar.gz"
+                Write-Info "已选择精简版镜像"
+            }
+            if ($latestReleaseTag) {
+                Write-Info "远端目标版本: $latestReleaseTag ($script:imageEdition)"
+            }
 
             # -- 尝试 0: 检查镜像是否已存在 --
             $existingImage = & docker image inspect openclaw-pro 2>$null
@@ -2872,28 +2902,6 @@ function Main {
                 }
 
                 Write-Host ""
-                # 先让用户选择镜像 edition（精简/完整版），以便后续与本地镜像比对
-                Write-Host ""
-                Write-Host "  请选择镜像版本:" -ForegroundColor Cyan
-                Write-Host "     [1] 精简版（默认，~250MB，约 5 分钟完成安装）" -ForegroundColor White
-                Write-Host "         包含: Ubuntu + Node.js + Caddy + Web面板 + 常用工具 + Python3" -ForegroundColor DarkGray
-                Write-Host "         Chrome/noVNC/LightGBM/openclaw 等可后期通过 Web 面板安装" -ForegroundColor DarkGray
-                Write-Host "     [2] 完整版（~1.6GB，约 30 分钟完成安装）" -ForegroundColor White
-                Write-Host "         包含全部组件: Chrome 浏览器、noVNC、LightGBM、openclaw 等" -ForegroundColor DarkGray
-                Write-Host ""
-                Write-Host "  输入选择 [1/2，默认1]: " -NoNewline -ForegroundColor White
-                $editionChoice = (Read-Host).Trim()
-                if ($editionChoice -eq '2') {
-                    $script:imageEdition = "full"
-                    $assetName = "openclaw-pro-image.tar.gz"
-                    Write-Info "已选择完整版镜像"
-                } else {
-                    $script:imageEdition = "lite"
-                    $assetName = "openclaw-pro-image-lite.tar.gz"
-                    Write-Info "已选择精简版镜像"
-                }
-
-                Write-Host ""
                 Write-Host "  请选择镜像策略:" -ForegroundColor Cyan
                 if ($effectiveLatestTag -and $localImageReleaseTag -and $effectiveLatestTag -eq $localImageReleaseTag) {
                     $digestOK = (-not $localImageDigest) -or ($currentImageId -eq $localImageDigest)
@@ -2940,17 +2948,6 @@ function Main {
             # -- 尝试 1: 下载预构建镜像 tar.gz（分块断点续传） --
             if (-not $imageReady) {
             Write-Info "检查 Release 预构建镜像..."
-
-            # -- 镜像版本选择：精简版 (lite) vs 完整版 (full) --
-            Write-Host ""
-            Write-Host "  请选择镜像版本:" -ForegroundColor Cyan
-            Write-Host "     [1] 精简版（默认，~250MB，约 5 分钟完成安装）" -ForegroundColor White
-            Write-Host "         包含: Ubuntu + Node.js + Caddy + Web面板 + 常用工具 + Python3" -ForegroundColor DarkGray
-            Write-Host "         Chrome/noVNC/LightGBM/openclaw 等可后期通过 Web 面板安装" -ForegroundColor DarkGray
-            Write-Host "     [2] 完整版（~1.6GB，约 30 分钟完成安装）" -ForegroundColor White
-            Write-Host "         包含全部组件: Chrome 浏览器、noVNC、LightGBM、openclaw 等" -ForegroundColor DarkGray
-            Write-Host ""
-            
 
             try {
                 $imageTar = Join-Path $TMP_DIR $assetName
@@ -3096,7 +3093,11 @@ function Main {
 
                 if ($downloadOK) {
                         Write-OK "镜像下载完成"
-                        Write-Info "正在加载镜像到 Docker...（1.6GB 需约 1-3 分钟，请耐心等待）"
+                        $loadSizeText = "未知大小"
+                        if (Test-Path $imageTar) {
+                            $loadSizeText = "$( [math]::Round((Get-Item $imageTar).Length / 1MB, 1) )MB"
+                        }
+                        Write-Info "正在加载镜像到 Docker...（$loadSizeText，通常需 1-5 分钟，请耐心等待）"
 
                         # 清理可能残留的 docker load 进程（上次 Ctrl+C 后遗留的 Start-Job 子进程）
                         try {
@@ -3763,6 +3764,7 @@ function Main {
                 # 恢复方式 1: Download-Robust 多线程分块下载 Release tar.gz
                 $recoverTag = if ($latestReleaseTag) { $latestReleaseTag } else { "latest" }
                 $recoverAssetName = if ($script:imageEdition -eq "full") { "openclaw-pro-image.tar.gz" } else { "openclaw-pro-image-lite.tar.gz" }
+                Write-Info "远端目标版本: $recoverTag ($script:imageEdition)"
                 $recoverTar = Join-Path $TMP_DIR $recoverAssetName
                 $releaseBaseUrl = if ($latestReleaseTag) {
                     "https://github.com/$GITHUB_REPO/releases/download/$latestReleaseTag/$recoverAssetName"
@@ -3841,7 +3843,11 @@ function Main {
 
                     if ($recoverDownloadOK) {
                         Write-OK "镜像下载完成"
-                        Write-Info "正在加载镜像到 Docker...（1.6GB 需约 1-3 分钟，请耐心等待）"
+                        $recoverLoadSizeText = "未知大小"
+                        if (Test-Path $recoverTar) {
+                            $recoverLoadSizeText = "$( [math]::Round((Get-Item $recoverTar).Length / 1MB, 1) )MB"
+                        }
+                        Write-Info "正在加载镜像到 Docker...（$recoverLoadSizeText，通常需 1-5 分钟，请耐心等待）"
 
                         # 清理可能残留的 docker load 进程（上次 Ctrl+C 后遗留的 Start-Job 子进程）
                         try {
