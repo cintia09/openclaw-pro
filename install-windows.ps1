@@ -3972,8 +3972,9 @@ function Main {
 
                     $pwdAuth = (& docker exec $containerName bash -lc "sshd -T 2>/dev/null | sed -n 's/^passwordauthentication //p' | tail -n1 | tr '[:upper:]' '[:lower:]'" 2>$null | Out-String).Trim().ToLower()
                     if (-not $pwdAuth) {
-                        $pwdAuth = (& docker exec $containerName bash -lc "grep -Ehi '^[[:space:]]*PasswordAuthentication[[:space:]]+' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null | tail -n1 | sed -E 's/.*[Pp]asswordAuthentication[[:space:]]+([^[:space:]#]+).*/\\1/' | tr '[:upper:]' '[:lower:]'" 2>$null | Out-String).Trim().ToLower()
+                        $pwdAuth = (& docker exec $containerName bash -lc "grep -Ehi '^[[:space:]]*PasswordAuthentication[[:space:]]+' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null | tail -n1 | tr -s '[:space:]' ' ' | cut -d' ' -f2 | tr '[:upper:]' '[:lower:]'" 2>$null | Out-String).Trim().ToLower()
                     }
+                    Write-Log "SSH PasswordAuthentication detected value: '$pwdAuth'"
                     $script:sshPasswordAuthDisabled = ($pwdAuth -eq 'no')
                     if ($script:sshPasswordAuthDisabled) {
                         Write-OK "SSH 密码登录已禁用（仅密钥登录）"
