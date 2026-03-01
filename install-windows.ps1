@@ -2861,8 +2861,38 @@ function Main {
                         $ed = Get-ContainerEdition -ContainerName $item.Name
                         if (-not $ed) { $ed = 'lite' }
                         $localDfHash = Get-ContainerDockerfileHash -ContainerName $item.Name
-                        $remoteDfHash = Get-RemoteDockerfileHash -ReleaseTag $latestReleaseTag -Edition $ed
-                        if ($localDfHash -and $remoteDfHash -and ($localDfHash -eq $remoteDfHash)) {
+
+                        $remoteCandidates = @()
+                        $remotePrimary = Get-RemoteDockerfileHash -ReleaseTag $latestReleaseTag -Edition $ed
+                        if ($remotePrimary) { $remoteCandidates += $remotePrimary }
+                        $altEdition = if ($ed -eq 'lite') { 'full' } else { 'lite' }
+                        $remoteAlt = Get-RemoteDockerfileHash -ReleaseTag $latestReleaseTag -Edition $altEdition
+                        if ($remoteAlt) { $remoteCandidates += $remoteAlt }
+                        $remoteCandidates = @($remoteCandidates | Select-Object -Unique)
+
+                        $currentCandidates = @()
+                        if ($localDfHash) { $currentCandidates += $localDfHash }
+
+                        if ($currentCandidates.Count -eq 0) {
+                            $itemVersionTag = Normalize-ReleaseVersion $item.VersionRaw
+                            if ($itemVersionTag) {
+                                $curPrimary = Get-RemoteDockerfileHash -ReleaseTag $itemVersionTag -Edition $ed
+                                if ($curPrimary) { $currentCandidates += $curPrimary }
+                                $curAlt = Get-RemoteDockerfileHash -ReleaseTag $itemVersionTag -Edition $altEdition
+                                if ($curAlt) { $currentCandidates += $curAlt }
+                            }
+                        }
+                        $currentCandidates = @($currentCandidates | Select-Object -Unique)
+
+                        $canHotUpdate = $false
+                        foreach ($ch in $currentCandidates) {
+                            if ($remoteCandidates -contains $ch) {
+                                $canHotUpdate = $true
+                                break
+                            }
+                        }
+
+                        if ($canHotUpdate) {
                             $hotUpdateEligible += $item
                         }
                     }
