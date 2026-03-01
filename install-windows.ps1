@@ -1256,9 +1256,27 @@ function Download-Robust {
         $completedSet.Clear()
         if (Test-Path $progressFile) { Remove-Item $progressFile -Force -ErrorAction SilentlyContinue }
         Write-Info "预分配 ${totalMB}MB 磁盘空间..."
-        $fs = [IO.File]::Create($OutFile)
-        $fs.SetLength($ExpectedSize)
-        $fs.Close()
+        $preallocOk = $false
+        for ($pa = 1; $pa -le 12 -and -not $preallocOk; $pa++) {
+            $fs = $null
+            try {
+                if (Test-Path $OutFile) {
+                    Remove-Item $OutFile -Force -ErrorAction SilentlyContinue
+                }
+                $fs = [IO.File]::Open($OutFile, [IO.FileMode]::Create, [IO.FileAccess]::ReadWrite, [IO.FileShare]::Read)
+                $fs.SetLength($ExpectedSize)
+                $preallocOk = $true
+            } catch {
+                Write-Log "Prealloc attempt ${pa}/12 failed: $_"
+                Start-Sleep -Milliseconds ([math]::Min(300 * $pa, 2000))
+            } finally {
+                if ($fs) { try { $fs.Close() } catch { } }
+            }
+        }
+        if (-not $preallocOk) {
+            Write-Warn "预分配文件失败（文件可能被占用），请稍后重试"
+            return $false
+        }
         # 写入 SIZE 头
         "SIZE:$ExpectedSize" | Set-Content $progressFile -Force
     } elseif (-not (Test-Path $progressFile)) {
@@ -4414,13 +4432,20 @@ function Main {
 
                     # 检测上次保留的完整 tar 文件（docker load 失败时不删除）
                     $recoverTagFile = "$recoverTar.tag"
+                    $recoverProgressFile = "$recoverTar.progress"
+                    $hasRecoverProgress = (Test-Path $recoverProgressFile)
                     $recoverDiskTag = $null
                     if (Test-Path $recoverTagFile) { try { $recoverDiskTag = (Get-Content $recoverTagFile -ErrorAction SilentlyContinue | Select-Object -First 1) } catch { $recoverDiskTag = $null } }
                     if ((Test-Path $recoverTar) -and (Get-Item $recoverTar).Length -gt 50MB) {
                         $existRecoverSize = (Get-Item $recoverTar).Length
                         if ($recoverTag -and $recoverDiskTag -and ($recoverDiskTag -eq "$recoverTag|$script:imageEdition" -or ($recoverTagIsAliasLatest -and $recoverDiskTag -match "^.+\|$([regex]::Escape($script:imageEdition))$"))) {
+                            if ($hasRecoverProgress) {
+                                Write-Warn "检测到未完成分块进度文件，继续断点续传以确保完整性"
+                                $recoverDownloadOK = $false
+                            } else {
                             Write-OK "检测到已下载的镜像文件 ($([math]::Round($existRecoverSize / 1MB, 1))MB)，版本匹配，跳过下载"
                             $recoverDownloadOK = $true
+                            }
                         } else {
                             Write-Info "检测到已下载的镜像文件 ($([math]::Round($existRecoverSize / 1MB, 1))MB)，将校验版本..."
                             if ($recoverDiskTag -and $recoverTag -and (-not $recoverTagIsAliasLatest) -and $recoverDiskTag -ne "$recoverTag|$script:imageEdition") {
@@ -4430,9 +4455,14 @@ function Main {
                             } else {
                                 $recoverSizeHint = Get-RemoteFileSize -Urls $recoverUrls
                                 if (($recoverSizeHint -gt 0 -and [math]::Abs($existRecoverSize - $recoverSizeHint) -lt 1MB) -or ($recoverSizeHint -le 0 -and $existRecoverSize -gt 200MB)) {
-                                    Write-Warn "检测到已下载镜像缺少版本元数据，默认复用并补写元数据"
-                                    if ($recoverTag) { try { "$recoverTag|$script:imageEdition" | Set-Content -Path $recoverTagFile -Force -ErrorAction SilentlyContinue } catch { } }
-                                    $recoverDownloadOK = $true
+                                    if ($hasRecoverProgress) {
+                                        Write-Warn "检测到已下载镜像缺少版本元数据，且存在分块进度，继续断点续传"
+                                        $recoverDownloadOK = $false
+                                    } else {
+                                        Write-Warn "检测到已下载镜像缺少版本元数据，默认复用并补写元数据"
+                                        if ($recoverTag) { try { "$recoverTag|$script:imageEdition" | Set-Content -Path $recoverTagFile -Force -ErrorAction SilentlyContinue } catch { } }
+                                        $recoverDownloadOK = $true
+                                    }
                                 } else {
                                     Write-Warn "本地镜像文件大小与远端不匹配，重新下载"
                                     Remove-Item $recoverTar -Force -ErrorAction SilentlyContinue
