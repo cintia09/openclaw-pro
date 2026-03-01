@@ -299,6 +299,18 @@ async function refreshStatus(){
   } else {
     gatewayParts.push('终端: 状态未知');
   }
+  const terminalStatus = $('kpi-terminal-status');
+  const terminalDetail = $('kpi-terminal-detail');
+  if (terminalStatus && terminalDetail) {
+    if (s.terminal?.ready) {
+      const mode = s.terminal.mode || 'unknown';
+      terminalStatus.innerHTML = '<span class="pulse online"></span>终端就绪';
+      terminalDetail.textContent = mode === 'pty' ? '交互模式：PTY' : `交互模式：${mode}`;
+    } else {
+      terminalStatus.innerHTML = '<span class="pulse offline"></span>终端异常';
+      terminalDetail.textContent = s.terminal?.reason || '终端后端未就绪';
+    }
+  }
   $('kpi-gateway-sub').textContent = gatewayParts.join(' · ');
 
   $('kpi-caddy').innerHTML = s.caddy
@@ -1078,6 +1090,8 @@ let terminalBound = false;
 let termResizeTimer = null;
 let termReconnectTimer = null;
 let termWsToken = null;
+let termFallbackTimer = null;
+let termFailureCount = 0;
 
 function termAppendText(text){
   const el = $('terminal');
@@ -1089,11 +1103,35 @@ function terminalDisconnect(){
     clearTimeout(termReconnectTimer);
     termReconnectTimer = null;
   }
+  if (termFallbackTimer) {
+    clearInterval(termFallbackTimer);
+    termFallbackTimer = null;
+  }
   if (termWs){
     try{ termWs.close(); }catch{}
     termWs = null;
   }
   $('term-state').textContent = '未连接';
+}
+
+async function pullTerminalFallbackLogs(){
+  if (termWs && termWs.readyState === WebSocket.OPEN) return;
+  const d = await api('/api/logs?lines=140');
+  if (d.error) return;
+  const logs = String(d.logs || '').trimEnd();
+  if (!logs) return;
+  setColored($('terminal'), logs, 6000, !!$('term-autoscroll')?.checked);
+  if ($('term-autoscroll')?.checked) {
+    $('terminal').scrollTop = $('terminal').scrollHeight;
+  }
+}
+
+function startTerminalFallback(reason = ''){
+  if (termFallbackTimer) return;
+  $('term-state').textContent = '只读日志模式';
+  termAppendText(`\n[terminal] 交互连接不可用，已切换只读日志模式${reason ? ` (${reason})` : ''}。\n`);
+  pullTerminalFallbackLogs().catch(()=>{});
+  termFallbackTimer = setInterval(() => pullTerminalFallbackLogs().catch(()=>{}), 2500);
 }
 
 function sendTerminalData(data){
@@ -1196,6 +1234,11 @@ async function terminalConnect(){
   }
 
   termWs.onopen = ()=> {
+    termFailureCount = 0;
+    if (termFallbackTimer) {
+      clearInterval(termFallbackTimer);
+      termFallbackTimer = null;
+    }
     $('term-state').textContent = '已连接';
     termAppendText('[terminal] 已连接（PTY）。直接在此区域输入命令并按回车执行。\n');
     $('terminal')?.focus();
@@ -1204,10 +1247,14 @@ async function terminalConnect(){
   termWs.onclose = (ev)=> {
     const code = Number(ev?.code || 0);
     const reason = ev?.reason ? ` reason=${ev.reason}` : '';
+    termFailureCount += 1;
     $('term-state').textContent = code === 1008 ? '认证失效' : '已断开';
     termAppendText(`\n[terminal] 连接已断开 (code=${code}${reason}).\n`);
     if (code === 1008) {
       termWsToken = null;
+    }
+    if (code === 1006 || termFailureCount >= 2) {
+      startTerminalFallback(`code=${code}`);
     }
     termWs = null;
     if ($('page-terminal').classList.contains('active')) {
@@ -1220,9 +1267,13 @@ async function terminalConnect(){
     }
   };
   termWs.onerror = ()=> {
+    termFailureCount += 1;
     $('term-state').textContent = '连接错误';
     termAppendText('\n[terminal] 连接错误。\n');
     termWsToken = null;
+    if (termFailureCount >= 2) {
+      startTerminalFallback('网络或代理异常');
+    }
     api('/api/status').then((s) => {
       const reason = s?.terminal?.reason;
       if (reason) {
