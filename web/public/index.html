@@ -42,18 +42,16 @@
       <div class="top-title">
         <button class="hamburger" id="btn-hamburger" title="菜单">☰</button>
         <h1 id="page-title">仪表盘</h1>
-              <span class="badge">交互终端</span>
-              <span class="muted small">WebSocket: /api/ws/terminal</span>
+      </div>
+      <div class="user-actions">
         <a class="btn btn-ghost" href="/gateway" target="_blank" rel="noopener">打开 Gateway</a>
         <button class="btn" id="btn-logout">退出</button>
       </div>
-              <button class="btn btn-primary" id="btn-term-send">发送</button>
+    </header>
+
     <!-- Content -->
     <main class="content">
       <!-- Dashboard -->
-          <div class="row" style="margin-top:10px;gap:8px">
-            <input class="input" id="term-input" placeholder="输入命令，例如: ls -la" style="flex:1" />
-          </div>
       <section class="page active" id="page-dashboard" data-title="仪表盘">
         <!-- Update notification -->
         <div id="update-banner" class="card" style="grid-column:span 12;background:#1a3a2a;border:1px solid #2d6b45;display:none">
