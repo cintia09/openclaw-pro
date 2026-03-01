@@ -3299,21 +3299,16 @@ function Main {
 
                 # 若未记录本地版本标记，尝试从本地镜像 tag 反推出 release 版本
                 if (-not $localImageReleaseTag -and $localTags) {
-                    $tagCandidates = $localTags -split ';'
-                    foreach ($repoTag in $tagCandidates) {
-                        if (-not $repoTag) { continue }
-                        # 例: ghcr.io/cintia09/openclaw-pro:v1.1.1-lite / openclaw-pro:v1.1.1
-                        if ($repoTag -match ':(v\d+\.\d+\.\d+(?:[-\w\.]*)?)$') {
-                            $derived = $Matches[1]
-                            # 去掉版本后缀中的 -lite / -full，统一为 release tag 形态
-                            $derived = ($derived -replace '(-lite|-full)$','')
+                    try {
+                        $mainRepoTag = (& docker image inspect openclaw-pro:latest --format '{{index .RepoTags 0}}' 2>$null | Select-Object -First 1)
+                        if ($mainRepoTag -and $mainRepoTag -match ':(v\d+\.\d+\.\d+(?:[-\w\.]*)?)$') {
+                            $derived = ($Matches[1] -replace '(-lite|-full)$','')
                             if ($derived) {
                                 $localImageReleaseTag = $derived
-                                Write-Info "根据本地镜像标签推断版本: $localImageReleaseTag"
-                                break
+                                Write-Info "根据当前主镜像标签推断版本: $localImageReleaseTag"
                             }
                         }
-                    }
+                    } catch { }
                 }
 
                 # 读取保存的镜像 digest，并与当前实际镜像 ID 对比
@@ -3552,7 +3547,6 @@ function Main {
                         $loadJob = Start-Job -ScriptBlock {
                             param($tar)
                             & docker load -i $tar 2>&1
-                            return $LASTEXITCODE
                         } -ArgumentList $imageTar
 
                         $spinner = @('|','/','-','\','|','/','-','\','|','/','-','\','|','/','-','\')
@@ -3594,6 +3588,7 @@ function Main {
 
                         # 输出 docker load 日志
                         $loadOutput | ForEach-Object {
+                            if ($_ -is [int] -or "$_" -match '^\d+$') { return }
                             Write-Log "docker load: $_"
                             if ($_ -match "Loaded image") {
                                 Write-Host "  $_" -ForegroundColor DarkGray
@@ -4187,8 +4182,8 @@ function Main {
                                 $sshKeygen = Get-Command ssh-keygen -ErrorAction SilentlyContinue
                                 if ($sshKeygen) {
                                     Write-Info "未检测到宿主机公钥，正在自动生成 id_ed25519..."
-                                    $sshArgs = @('-q', '-t', 'ed25519', '-N', '', '-f', $keyPath)
-                                    & $sshKeygen.Source @sshArgs 2>$null | Out-Null
+                                    $sshCmd = "`"$($sshKeygen.Source)`" -q -t ed25519 -N `"`" -f `"$keyPath`""
+                                    & cmd /c $sshCmd 2>$null | Out-Null
                                 }
                             }
 
