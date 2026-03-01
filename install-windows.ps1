@@ -53,6 +53,7 @@ $script:sshServiceReady = $false
 $script:sshPasswordAuthDisabled = $false
 $script:sshInjectedKeyPath = ""
 $script:rootPasswordFilePath = ""
+$script:deployedContainerName = ""
 
 # 如果通过 `irm ... | iex` (远程执行) 运行且用户未显式指定 -ImageOnly，则默认启用 ImageOnly 模式
 # Track whether ImageOnly was explicitly passed vs defaulted by remote exec
@@ -1897,11 +1898,12 @@ function Show-Completion {
         Write-Host ""
 
         Write-Host "  📝 管理命令：" -ForegroundColor White
+        $showContainerName = if ($script:deployedContainerName) { $script:deployedContainerName } else { "openclaw-pro" }
         Write-Host "     docker ps                      # 查看容器状态" -ForegroundColor Gray
-        Write-Host "     docker logs openclaw-pro       # 查看日志" -ForegroundColor Gray
-        Write-Host "     docker stop openclaw-pro       # 停止服务" -ForegroundColor Gray
-        Write-Host "     docker start openclaw-pro      # 启动服务" -ForegroundColor Gray
-        Write-Host "     docker exec -it openclaw-pro bash  # 进入容器终端" -ForegroundColor Gray
+        Write-Host "     docker logs $showContainerName       # 查看日志" -ForegroundColor Gray
+        Write-Host "     docker stop $showContainerName       # 停止服务" -ForegroundColor Gray
+        Write-Host "     docker start $showContainerName      # 启动服务" -ForegroundColor Gray
+        Write-Host "     docker exec -it $showContainerName bash  # 进入容器终端" -ForegroundColor Gray
         Write-Host "     ssh root@localhost -p ${SshPort}    # SSH 远程登录" -ForegroundColor Gray
         Write-Host ""
         Write-Host "  🔐 SSH 安全状态：" -ForegroundColor White
@@ -1912,8 +1914,10 @@ function Show-Completion {
         }
         if ($script:sshPasswordAuthDisabled) {
             Write-Host "     PasswordAuthentication: no（已禁用密码登录，仅允许密钥）" -ForegroundColor Green
+            Write-Host "     🔒 SSH 密码登录已关闭，只能通过密钥方式登录" -ForegroundColor Green
         } else {
             Write-Host "     PasswordAuthentication: 未检测到 no（建议重启容器后复查 /etc/ssh/sshd_config）" -ForegroundColor Yellow
+            Write-Host "     ⚠️ SSH 应使用密钥登录，请勿启用密码登录" -ForegroundColor Yellow
         }
 
         if ($script:sshInjectedKeyPath) {
@@ -1927,12 +1931,8 @@ function Show-Completion {
         if ($script:rootPasswordFilePath) {
             Write-Host "     Root 初始密码: 已生成并保存到 $script:rootPasswordFilePath" -ForegroundColor Green
             Write-Host "     注意: 该密码仅供容器内本地管理使用，SSH 仍为密钥登录" -ForegroundColor DarkGray
-            Write-Host "     建议立即修改: docker exec -it openclaw-pro bash -lc 'passwd root'" -ForegroundColor DarkGray
+            Write-Host "     建议立即修改: docker exec -it $showContainerName bash -lc 'passwd root'" -ForegroundColor DarkGray
         }
-        Write-Host ""
-        Write-Host "  ⬆ 手动升级（容器内测试）：" -ForegroundColor White
-        Write-Host '     docker exec -it openclaw-pro bash -lc "openclaw update --channel stable || npm install -g openclaw@latest"' -ForegroundColor Gray
-        Write-Host '     docker exec -it openclaw-pro bash -lc "openclaw --version"' -ForegroundColor Gray
         Write-Host ""
         Write-Host "  🔄 升级到新版本：" -ForegroundColor White
         Write-Host "     重新运行安装命令即可，脚本会自动检测版本差异：" -ForegroundColor DarkGray
@@ -3938,6 +3938,7 @@ function Main {
             if ($LASTEXITCODE -eq 0) {
                 Write-OK "容器已启动"
                 $launched = $true
+                $script:deployedContainerName = $containerName
 
                 # 收尾：确保 SSH 服务可用、禁用密码登录状态可见、自动注入宿主机公钥、生成初始 root 密码（仅本地用途）
                 try {
@@ -4518,6 +4519,20 @@ function Main {
     $sPort  = if ($script:sshPort) { $script:sshPort } else { 2222 }
     $autoFw = if ($null -ne $script:autoOpenFirewall) { [bool]$script:autoOpenFirewall } else { $true }
     Show-Completion -DeployLaunched $launched -IsDockerDesktop $dockerDesktopMode -GatewayPort $gwPort -PanelPort $wpPort -Domain $dom -CertMode $cmode -HttpPort $hPort -HttpsPort $hsPort -SshPort $sPort -AutoOpenFirewall $autoFw
+
+    if ($launched) {
+        $enterContainerName = if ($script:deployedContainerName) { $script:deployedContainerName } else { "openclaw-pro" }
+        Write-Host "  ==================================================" -ForegroundColor DarkCyan
+        Write-Host "  🚪 默认进入容器终端（输入 exit 返回）" -ForegroundColor Cyan
+        Write-Host "     docker exec -it $enterContainerName bash" -ForegroundColor Yellow
+        Write-Host "  ==================================================" -ForegroundColor DarkCyan
+        Write-Host ""
+        try {
+            & docker exec -it $enterContainerName bash
+        } catch {
+            Write-Warn "自动进入容器失败，请手动执行: docker exec -it $enterContainerName bash"
+        }
+    }
 
     Read-Host "按回车关闭此窗口"
 }
