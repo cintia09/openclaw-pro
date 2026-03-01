@@ -3,7 +3,7 @@
 // - Express on 3000
 // - Auth: signed cookie + PBKDF2 (docker-config.json)
 // - Keep legacy APIs: status/config/restart/openclaw/logs/trading
-// - WebSocket: /api/ws/logs (tail gateway log)
+// - WebSocket: /api/ws/logs (tail gateway log), /api/ws/terminal (interactive shell)
 // - Plugins market APIs: /api/plugins/list + /api/plugins/install
 // - STT config APIs: /api/stt/config
 // ============================================================
@@ -13,7 +13,7 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const net = require('net');
-const { execSync, exec } = require('child_process');
+const { execSync, exec, spawn } = require('child_process');
 const crypto = require('crypto');
 const dns = require('dns');
 
@@ -1431,8 +1431,14 @@ const server = http.createServer(app);
 
 if (WebSocketServer) {
   const wss = new WebSocketServer({ server, path: '/api/ws/logs' });
+  const termWss = new WebSocketServer({ server, path: '/api/ws/terminal' });
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, req) => {
+    if (!isAuthenticated(req)) {
+      try { ws.close(1008, 'unauthorized'); } catch {}
+      return;
+    }
+
     // Send recent lines on connect
     try {
       const lines = tailLogLines(120);
@@ -1485,8 +1491,64 @@ if (WebSocketServer) {
     ws.on('close', cleanup);
     ws.on('error', cleanup);
   });
+
+  termWss.on('connection', (ws, req) => {
+    if (!isAuthenticated(req)) {
+      try { ws.close(1008, 'unauthorized'); } catch {}
+      return;
+    }
+
+    const shell = spawn('bash', ['-li'], {
+      env: { ...process.env, TERM: 'xterm-256color' },
+      cwd: '/root'
+    });
+
+    const sendOutput = (data) => {
+      if (ws.readyState !== 1) return;
+      try {
+        ws.send(JSON.stringify({ type: 'output', data: String(data || '') }));
+      } catch {}
+    };
+
+    sendOutput('OpenClaw Terminal connected. 输入命令并回车执行。\n');
+
+    shell.stdout.on('data', (chunk) => sendOutput(chunk.toString('utf8')));
+    shell.stderr.on('data', (chunk) => sendOutput(chunk.toString('utf8')));
+
+    shell.on('close', (code) => {
+      sendOutput(`\n[terminal] shell exited (code=${code ?? 0})\n`);
+      try { ws.close(); } catch {}
+    });
+
+    shell.on('error', (err) => {
+      sendOutput(`\n[terminal] shell error: ${err.message}\n`);
+      try { ws.close(); } catch {}
+    });
+
+    ws.on('message', (raw) => {
+      try {
+        const msg = JSON.parse(String(raw || '{}'));
+        if (msg.type === 'input' && typeof msg.data === 'string') {
+          shell.stdin.write(msg.data);
+        }
+      } catch {
+        // ignore invalid payload
+      }
+    });
+
+    const cleanup = () => {
+      try { shell.stdin.end(); } catch {}
+      try { shell.kill('SIGTERM'); } catch {}
+      setTimeout(() => {
+        try { shell.kill('SIGKILL'); } catch {}
+      }, 1000);
+    };
+
+    ws.on('close', cleanup);
+    ws.on('error', cleanup);
+  });
 } else {
-  console.warn('[web] ws package not available: /api/ws/logs disabled');
+  console.warn('[web] ws package not available: /api/ws/logs and /api/ws/terminal disabled');
 }
 
 server.on('upgrade', (req, socket, head) => {

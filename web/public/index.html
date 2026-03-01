@@ -423,16 +423,18 @@
         <div class="card">
           <div class="terminal-toolbar">
             <div class="row">
-              <span class="badge">实时日志</span>
-              <span class="muted small">WebSocket: /api/ws/logs</span>
+              <span class="badge">交互终端</span>
+              <span class="muted small">WebSocket: /api/ws/terminal</span>
             </div>
             <div class="row">
               <button class="btn" id="btn-term-clear">清空</button>
-              <button class="btn" id="btn-term-pause">暂停</button>
-              <button class="btn btn-primary" id="btn-term-download">下载日志</button>
+              <button class="btn btn-primary" id="btn-term-send">发送</button>
             </div>
           </div>
           <pre class="terminal" id="terminal"></pre>
+          <div class="row" style="margin-top:10px;gap:8px">
+            <input class="input" id="term-input" placeholder="输入命令，例如: ls -la" style="flex:1" />
+          </div>
           <div class="row" style="margin-top:10px">
             <span class="muted small" id="term-state">未连接</span>
             <label class="chip" style="cursor:pointer">

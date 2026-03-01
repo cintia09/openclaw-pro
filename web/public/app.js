@@ -747,46 +747,27 @@ document.addEventListener('click', async (e)=>{
 });
 
 // ------------------------
-// Terminal (WebSocket logs)
+// Terminal (interactive shell)
 // ------------------------
 let termWs = null;
-let termPaused = false;
 
-function colorizeLogLine(line){
-  const dateLike = /^\s*(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)/;
-  let safe = escapeHtml(line);
-
-  if (/\b(ERROR|Error|ERR)\b/.test(line)) safe = `<span class="term-error">${safe}</span>`;
-  else if (/\b(WARN|Warning|WRN)\b/.test(line)) safe = `<span class="term-warn">${safe}</span>`;
-
-  const m = line.match(dateLike);
-  if (m){
-    const prefix = escapeHtml(m[1]);
-    safe = safe.replace(prefix, `<span class="term-date">${prefix}</span>`);
-  }
-
-  return safe;
-}
-
-function termAppend(lines){
+function termAppendText(text){
   const el = $('terminal');
-  const arr = Array.isArray(lines) ? lines : String(lines||'').split('\n');
-
-  const html = arr
-    .filter(x=>x!==undefined && x!==null)
-    .map(l=> `<span class="term-line">${colorizeLogLine(l)}</span>`)
+  const chunks = String(text || '').split('\n');
+  const html = chunks
+    .filter(x => x !== undefined && x !== null)
+    .map(l => `<span class="term-line">${escapeHtml(l)}${l === '' ? '&nbsp;' : ''}</span>`)
     .join('');
 
   el.insertAdjacentHTML('beforeend', html);
 
-  // cap DOM size
-  const maxLines = 3000;
+  const maxLines = 4000;
   const nodes = el.querySelectorAll('.term-line');
-  if (nodes.length > maxLines){
-    for (let i=0;i<nodes.length-maxLines;i++) nodes[i].remove();
+  if (nodes.length > maxLines) {
+    for (let i = 0; i < nodes.length - maxLines; i++) nodes[i].remove();
   }
 
-  if ($('term-autoscroll').checked){
+  if ($('term-autoscroll').checked) {
     el.scrollTop = el.scrollHeight;
   }
 }
@@ -799,12 +780,24 @@ function terminalDisconnect(){
   $('term-state').textContent = '未连接';
 }
 
+function terminalSendInput(){
+  const inputEl = $('term-input');
+  const cmd = (inputEl?.value || '').trim();
+  if (!cmd) return;
+  if (!termWs || termWs.readyState !== WebSocket.OPEN) {
+    toast('终端未连接', '请等待连接完成后再发送命令');
+    return;
+  }
+  termWs.send(JSON.stringify({ type: 'input', data: `${cmd}\n` }));
+  inputEl.value = '';
+}
+
 function terminalConnect(){
   if (!$('page-terminal').classList.contains('active')) return;
   if (termWs && (termWs.readyState === WebSocket.OPEN || termWs.readyState === WebSocket.CONNECTING)) return;
 
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const url = `${proto}//${location.host}/api/ws/logs`;
+  const url = `${proto}//${location.host}/api/ws/terminal`;
 
   $('term-state').textContent = '连接中...';
 
@@ -814,40 +807,37 @@ function terminalConnect(){
     return;
   }
 
-  termWs.onopen = ()=> { $('term-state').textContent = '已连接'; };
-  termWs.onclose = ()=> { $('term-state').textContent = '已断开'; termWs=null; };
+  termWs.onopen = ()=> {
+    $('term-state').textContent = '已连接';
+    const inputEl = $('term-input');
+    if (inputEl) inputEl.focus();
+  };
+  termWs.onclose = ()=> { $('term-state').textContent = '已断开'; termWs = null; };
   termWs.onerror = ()=> { $('term-state').textContent = '连接错误'; };
 
   termWs.onmessage = (ev)=>{
-    if (termPaused) return;
-    try{
+    try {
       const msg = JSON.parse(ev.data);
-      if (msg.type === 'lines') termAppend(msg.lines);
-      else if (msg.type === 'line') termAppend([msg.line]);
-      else termAppend([String(ev.data||'')]);
-    }catch{
-      termAppend([String(ev.data||'')]);
+      if (msg.type === 'output') {
+        termAppendText(msg.data || '');
+      } else if (msg.type === 'info') {
+        termAppendText(msg.data || '');
+      } else {
+        termAppendText(String(ev.data || ''));
+      }
+    } catch {
+      termAppendText(String(ev.data || ''));
     }
   };
 }
 
 $('btn-term-clear').addEventListener('click', ()=>{ $('terminal').innerHTML=''; });
-$('btn-term-pause').addEventListener('click', ()=>{
-  termPaused = !termPaused;
-  $('btn-term-pause').textContent = termPaused ? '继续' : '暂停';
-});
-
-$('btn-term-download').addEventListener('click', async ()=>{
-  const d = await api('/api/logs?lines=5000');
-  const text = d.logs || '';
-  const blob = new Blob([text], { type:'text/plain;charset=utf-8' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `openclaw-gateway-${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.log`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(()=> URL.revokeObjectURL(a.href), 2000);
+$('btn-term-send').addEventListener('click', terminalSendInput);
+$('term-input').addEventListener('keydown', (e)=>{
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    terminalSendInput();
+  }
 });
 
 // clean ws when leaving
