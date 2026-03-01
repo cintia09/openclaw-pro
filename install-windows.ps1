@@ -3967,6 +3967,9 @@ function Main {
                         Write-Warn "SSH 服务状态未确认，请稍后执行 docker logs $containerName 查看"
                     }
 
+                    # 强制应用 SSH 安全配置（禁用密码登录，仅允许密钥）
+                    & docker exec $containerName bash -lc "if [ -f /etc/ssh/sshd_config ]; then sed -i -E 's|^[#[:space:]]*PermitRootLogin[[:space:]]+.*|PermitRootLogin prohibit-password|' /etc/ssh/sshd_config; sed -i -E 's|^[#[:space:]]*PasswordAuthentication[[:space:]]+.*|PasswordAuthentication no|' /etc/ssh/sshd_config; sed -i -E 's|^[#[:space:]]*KbdInteractiveAuthentication[[:space:]]+.*|KbdInteractiveAuthentication no|' /etc/ssh/sshd_config; sed -i -E 's|^[#[:space:]]*ChallengeResponseAuthentication[[:space:]]+.*|ChallengeResponseAuthentication no|' /etc/ssh/sshd_config; fi; mkdir -p /run/sshd; pkill -x sshd >/dev/null 2>&1 || true; (/usr/sbin/sshd >/dev/null 2>&1 || service ssh restart >/dev/null 2>&1 || true)" 2>$null | Out-Null
+
                     $pwdAuth = (& docker exec $containerName bash -lc "grep -Ei '^[[:space:]]*PasswordAuthentication[[:space:]]+' /etc/ssh/sshd_config | tail -n1 | tr -s '[:space:]' ' ' | cut -d' ' -f2 | tr '[:upper:]' '[:lower:]'" 2>$null | Out-String).Trim().ToLower()
                     $script:sshPasswordAuthDisabled = ($pwdAuth -eq 'no')
                     if ($script:sshPasswordAuthDisabled) {
@@ -3980,6 +3983,31 @@ function Main {
                         (Join-Path $env:USERPROFILE ".ssh\id_rsa.pub"),
                         (Join-Path $env:USERPROFILE ".ssh\id_ecdsa.pub")
                     )
+
+                    if ($env:HOME -and $env:HOME -ne $env:USERPROFILE) {
+                        $pubKeyCandidates += @(
+                            (Join-Path $env:HOME ".ssh\id_ed25519.pub"),
+                            (Join-Path $env:HOME ".ssh\id_rsa.pub"),
+                            (Join-Path $env:HOME ".ssh\id_ecdsa.pub")
+                        )
+                    }
+
+                    # 管理员 PowerShell 可能读不到实际登录用户目录，补充扫描 C:\Users\*\.ssh
+                    try {
+                        $userRoots = Get-ChildItem "C:\Users" -Directory -ErrorAction SilentlyContinue | Where-Object {
+                            $_.Name -notin @('Public', 'Default', 'Default User', 'All Users')
+                        }
+                        foreach ($u in $userRoots) {
+                            $pubKeyCandidates += @(
+                                (Join-Path $u.FullName ".ssh\id_ed25519.pub"),
+                                (Join-Path $u.FullName ".ssh\id_rsa.pub"),
+                                (Join-Path $u.FullName ".ssh\id_ecdsa.pub")
+                            )
+                        }
+                    } catch { }
+
+                    # 去重
+                    $pubKeyCandidates = $pubKeyCandidates | Where-Object { $_ } | Select-Object -Unique
                     $injected = $false
                     foreach ($keyFile in $pubKeyCandidates) {
                         if (-not (Test-Path $keyFile)) { continue }
