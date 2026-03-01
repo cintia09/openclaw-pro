@@ -4360,10 +4360,17 @@ function Main {
                                 Remove-Item $recoverTar -Force -ErrorAction SilentlyContinue
                                 if (Test-Path $recoverTagFile) { Remove-Item $recoverTagFile -Force -ErrorAction SilentlyContinue }
                             } else {
-                                Write-Warn "缺少可用版本元数据，无法确认与远端一致，重新下载"
-                                Remove-Item $recoverTar -Force -ErrorAction SilentlyContinue
-                                if (Test-Path $recoverTagFile) { Remove-Item $recoverTagFile -Force -ErrorAction SilentlyContinue }
-                                $recoverDownloadOK = $false
+                                $recoverSizeHint = Get-RemoteFileSize -Urls $recoverUrls
+                                if (($recoverSizeHint -gt 0 -and [math]::Abs($existRecoverSize - $recoverSizeHint) -lt 1MB) -or ($recoverSizeHint -le 0 -and $existRecoverSize -gt 200MB)) {
+                                    Write-Warn "检测到已下载镜像缺少版本元数据，默认复用并补写元数据"
+                                    if ($recoverTag) { try { "$recoverTag|$script:imageEdition" | Set-Content -Path $recoverTagFile -Force -ErrorAction SilentlyContinue } catch { } }
+                                    $recoverDownloadOK = $true
+                                } else {
+                                    Write-Warn "本地镜像文件大小与远端不匹配，重新下载"
+                                    Remove-Item $recoverTar -Force -ErrorAction SilentlyContinue
+                                    if (Test-Path $recoverTagFile) { Remove-Item $recoverTagFile -Force -ErrorAction SilentlyContinue }
+                                    $recoverDownloadOK = $false
+                                }
                             }
                         }
                     }
