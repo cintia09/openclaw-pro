@@ -1007,7 +1007,14 @@ function Get-ContainerReleaseVersion {
     if (-not $ContainerName) { return "" }
     Write-Log "VersionDetect[$ContainerName]: start"
     try {
-        $verLine = (& docker exec $ContainerName sh -lc "openclaw --version 2>/dev/null || true" 2>$null | Select-Object -First 1)
+        $verCmd = @(
+            "openclaw --version 2>/dev/null",
+            "/usr/local/bin/openclaw --version 2>/dev/null",
+            "/opt/venv/bin/openclaw --version 2>/dev/null",
+            "python3 -m openclaw --version 2>/dev/null",
+            "python -m openclaw --version 2>/dev/null"
+        ) -join " || "
+        $verLine = (& docker exec $ContainerName sh -lc "$verCmd || true" 2>$null | Select-Object -First 1)
         if ($verLine) {
             $verLine = ("$verLine").Trim()
             Write-Log "VersionDetect[$ContainerName]: runtime openclaw --version => '$verLine'"
@@ -1030,6 +1037,20 @@ function Get-ContainerReleaseVersion {
             if ($raw) {
                 Write-Log "VersionDetect[$ContainerName]: choose file version => '$raw'"
                 return $raw
+            }
+        }
+        $tmpVer = Join-Path $env:TEMP ("openclaw-version-" + $ContainerName + ".txt")
+        & docker cp "${ContainerName}:/etc/openclaw-version" $tmpVer 2>$null | Out-Null
+        if (Test-Path $tmpVer) {
+            $raw2 = (Get-Content $tmpVer -ErrorAction SilentlyContinue | Select-Object -First 1)
+            Remove-Item $tmpVer -Force -ErrorAction SilentlyContinue
+            if ($raw2) {
+                $raw2 = ("$raw2").Trim()
+                Write-Log "VersionDetect[$ContainerName]: /etc/openclaw-version (docker cp) => '$raw2'"
+                if ($raw2) {
+                    Write-Log "VersionDetect[$ContainerName]: choose file version via docker cp => '$raw2'"
+                    return $raw2
+                }
             }
         }
     } catch { }
