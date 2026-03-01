@@ -1530,7 +1530,7 @@ app.post('/api/restart', (req, res) => {
         return res.json({ success: false, error: 'watchdog 脚本不存在，无法自动拉起 Gateway' });
       }
       if (/Unrecognized key|Invalid config/i.test(String(detail || ''))) {
-        return res.json({ success: false, error: `${detail || 'Gateway 配置无效'}；请点击“配置恢复”后重试` });
+        return res.json({ success: false, error: `${detail || 'Gateway 配置无效'}；请点击“配置恢复”（内部会执行 openclaw doctor --fix）后重试` });
       }
       res.json({ success: false, error: detail || 'Gateway 重启失败，请查看 watchdog 日志' });
     });
@@ -1616,19 +1616,44 @@ app.get('/api/openclaw', async (req, res) => {
   res.json({ installed, version, latestVersion, hasUpdate, updateCheckError, gatewayRunning, invalidConfigKeys });
 });
 
-app.post('/api/openclaw/config/repair', (req, res) => {
+app.post('/api/openclaw/config/repair', async (req, res) => {
   try {
+    const lines = [];
+    lines.push('[repair] 正在执行 openclaw doctor --fix ...');
+
+    let doctorOutput = '';
+    if (runCommandOk('command -v openclaw >/dev/null 2>&1', 800)) {
+      const doctor = await runOpenClawCli('openclaw doctor --fix 2>&1', 120000);
+      doctorOutput = compactOutput(doctor.output || '');
+      if (doctorOutput) lines.push(`[repair] doctor 输出: ${doctorOutput}`);
+      if (doctor.ok) lines.push('[repair] doctor --fix 执行完成。');
+      else lines.push('[repair] doctor --fix 返回非0，继续执行兜底修复。');
+    } else {
+      lines.push('[repair] openclaw 命令不可用，跳过 doctor，直接执行兜底修复。');
+    }
+
     const gatewayLog = readGatewayLogTail(500);
-    const detected = detectInvalidConfigKeysFromText(gatewayLog);
+    const detected = Array.from(new Set([
+      ...detectInvalidConfigKeysFromText(gatewayLog),
+      ...detectInvalidConfigKeysFromText(doctorOutput)
+    ]));
     if (!detected.includes('providers')) detected.push('providers');
 
     const repair = repairOpenClawConfigInvalidKeys(detected);
-    const lines = [];
     lines.push(`[repair] 检测到潜在无效 key: ${detected.length ? detected.join(', ') : '无'}`);
 
     if (!repair.changed) {
-      lines.push('[repair] 未发现可修复项，配置保持不变。');
-      return res.json({ success: true, changed: false, detected, removed: [], backupPath: '', log: lines.join('\n') });
+      lines.push('[repair] 未发现可删除项（可能已被 doctor 修复）。');
+      lines.push('[repair] 请点击“重启 Gateway”验证配置是否恢复。');
+      return res.json({
+        success: true,
+        changed: false,
+        detected,
+        removed: [],
+        backupPath: '',
+        doctorOutput,
+        log: lines.join('\n')
+      });
     }
 
     lines.push(`[repair] 已移除无效 key: ${repair.removed.join(', ')}`);
@@ -1641,6 +1666,7 @@ app.post('/api/openclaw/config/repair', (req, res) => {
       detected,
       removed: repair.removed,
       backupPath: repair.backupPath,
+      doctorOutput,
       log: lines.join('\n')
     });
   } catch (e) {
@@ -1705,7 +1731,7 @@ app.post('/api/openclaw/start', (req, res) => {
       return res.json({ success: false, error: 'watchdog 脚本不存在，无法自动拉起 Gateway' });
     }
     if (/Unrecognized key|Invalid config/i.test(String(detail || ''))) {
-      return res.json({ success: false, error: `${detail || 'Gateway 配置无效'}；请点击“配置恢复”后重试` });
+      return res.json({ success: false, error: `${detail || 'Gateway 配置无效'}；请点击“配置恢复”（内部会执行 openclaw doctor --fix）后重试` });
     }
     res.json({ success: false, error: detail || 'Gateway 重启失败，请查看 watchdog 日志' });
   });
