@@ -1471,10 +1471,12 @@ _do_hotpatch() {
 
     # 触发 hotpatch
     local result
-    result=$(docker exec "$CONTAINER_NAME" curl -s -X POST http://127.0.0.1:3000/api/update/hotpatch -H "Content-Type: application/json" -d '{"branch":"main"}' 2>/dev/null || true)
+    result=$(docker exec "$CONTAINER_NAME" curl -sS --connect-timeout 3 --max-time 10 -X POST http://127.0.0.1:3000/api/update/hotpatch -H "Content-Type: application/json" -d '{"branch":"main"}' 2>/dev/null || true)
 
     if [ -z "$result" ]; then
-        error "无法连接到 Web 面板 API"
+        error "无法连接到 Web 面板 API（请求超时或服务无响应）"
+        echo -e "  排查: ${CYAN}docker exec ${CONTAINER_NAME} curl -sS --connect-timeout 3 --max-time 5 http://127.0.0.1:3000/api/status${NC}"
+        echo -e "  日志: ${CYAN}docker exec ${CONTAINER_NAME} tail -n 120 /root/.openclaw/logs/web-panel.log${NC}"
         return 1
     fi
 
@@ -1502,7 +1504,7 @@ _do_hotpatch() {
             fi
         fi
         local status_json
-        status_json=$(docker exec "$CONTAINER_NAME" curl -sf http://127.0.0.1:3000/api/update/hotpatch/status 2>/dev/null || true)
+        status_json=$(docker exec "$CONTAINER_NAME" curl -sS -f --connect-timeout 3 --max-time 8 http://127.0.0.1:3000/api/update/hotpatch/status 2>/dev/null || true)
         if [ -z "$status_json" ]; then
             fail_count=$((fail_count + 1))
             if ($was_running || $post_ok) && [ "$fail_count" -ge 5 ]; then
