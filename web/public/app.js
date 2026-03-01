@@ -826,6 +826,7 @@ document.addEventListener('click', async (e)=>{
 let termWs = null;
 let terminalBound = false;
 let termResizeTimer = null;
+let termReconnectTimer = null;
 
 function termAppendText(text){
   const el = $('terminal');
@@ -833,6 +834,10 @@ function termAppendText(text){
 }
 
 function terminalDisconnect(){
+  if (termReconnectTimer) {
+    clearTimeout(termReconnectTimer);
+    termReconnectTimer = null;
+  }
   if (termWs){
     try{ termWs.close(); }catch{}
     termWs = null;
@@ -937,6 +942,14 @@ function terminalConnect(){
     $('term-state').textContent = '已断开';
     termAppendText('\n[terminal] 连接已断开。\n');
     termWs = null;
+    if ($('page-terminal').classList.contains('active')) {
+      if (termReconnectTimer) clearTimeout(termReconnectTimer);
+      termReconnectTimer = setTimeout(() => {
+        termReconnectTimer = null;
+        terminalConnect();
+      }, 1500);
+      $('term-state').textContent = '重连中...';
+    }
   };
   termWs.onerror = ()=> {
     $('term-state').textContent = '连接错误';

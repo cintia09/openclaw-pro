@@ -235,6 +235,27 @@ function runCommandText(cmd, timeoutMs = 2500) {
   }
 }
 
+function createTerminalShell() {
+  const useScriptPty = runCommandOk('command -v script >/dev/null 2>&1', 800);
+  if (useScriptPty) {
+    return {
+      shell: spawn('script', ['-qf', '-c', 'bash -li', '/dev/null'], {
+        env: { ...process.env, TERM: 'xterm-256color', SHELL: '/bin/bash' },
+        cwd: '/root'
+      }),
+      mode: 'pty'
+    };
+  }
+
+  return {
+    shell: spawn('bash', ['-li'], {
+      env: { ...process.env, TERM: 'xterm-256color', SHELL: '/bin/bash' },
+      cwd: '/root'
+    }),
+    mode: 'fallback'
+  };
+}
+
 // ============================================================
 // PBKDF2 password
 // ============================================================
@@ -1529,10 +1550,7 @@ if (WebSocketServer) {
       return;
     }
 
-    const shell = spawn('script', ['-qf', '-c', 'bash -li', '/dev/null'], {
-      env: { ...process.env, TERM: 'xterm-256color', SHELL: '/bin/bash' },
-      cwd: '/root'
-    });
+    const { shell, mode } = createTerminalShell();
 
     const sendOutput = (data) => {
       if (ws.readyState !== 1) return;
@@ -1541,7 +1559,12 @@ if (WebSocketServer) {
       } catch {}
     };
 
-    sendOutput('OpenClaw Terminal connected (PTY). 输入命令并回车执行。\n');
+    if (mode === 'pty') {
+      sendOutput('OpenClaw Terminal connected (PTY). 输入命令并回车执行。\n');
+    } else {
+      sendOutput('OpenClaw Terminal connected (fallback shell). 输入命令并回车执行。\n');
+      sendOutput('[terminal] 当前环境未检测到 script，已使用兼容模式。\n');
+    }
 
     shell.stdout.on('data', (chunk) => sendOutput(chunk.toString('utf8')));
     shell.stderr.on('data', (chunk) => sendOutput(chunk.toString('utf8')));
