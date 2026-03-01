@@ -611,7 +611,6 @@ app.get('/api/update/check', async (req, res) => {
       const refs = [];
       if (latestVersion) refs.push(latestVersion);
       if (release && release.target_commitish) refs.push(release.target_commitish);
-      if (!refs.includes('main')) refs.push('main');
 
       let remoteHash = '';
       let checkedRef = '';

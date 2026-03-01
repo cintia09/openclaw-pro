@@ -67,10 +67,16 @@
               <button class="btn btn-secondary" onclick="this.closest('#update-banner').style.display='none'">关闭</button>
             </div>
           </div>
-          <div class="muted small" style="margin-top:6px">
-            完整更新请重新执行一键安装脚本（会自动检测并升级到最新 release）：
-            <span class="muted" style="margin-left:12px">Linux：<code style="background:#223;padding:2px 6px;border-radius:4px;user-select:all">curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.sh | bash</code></span>
-            <span class="muted" style="margin-left:12px">Windows：<code style="background:#223;padding:2px 6px;border-radius:4px;user-select:all">irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1 | iex</code></span>
+          <div id="update-install-note" class="muted small" style="margin-top:8px;display:none">
+            <div style="margin-bottom:6px;color:#f59e0b;font-weight:700">需要完整更新时，请重新执行一键安装脚本：</div>
+            <div style="margin:4px 0">
+              <span style="color:#6ee7b7">Linux：</span>
+              <code style="background:#223;padding:3px 8px;border-radius:4px;user-select:all">curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.sh | bash</code>
+            </div>
+            <div style="margin:4px 0">
+              <span style="color:#93c5fd">Windows：</span>
+              <code style="background:#223;padding:3px 8px;border-radius:4px;user-select:all">irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1 | iex</code>
+            </div>
           </div>
         </div>
 

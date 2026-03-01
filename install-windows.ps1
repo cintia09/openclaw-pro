@@ -2857,6 +2857,7 @@ function Main {
                 })
                 if ($outdated.Count -gt 0) {
                     $hotUpdateEligible = @()
+                    $hotUpdateReinstallConfirmed = $false
                     foreach ($item in $outdated) {
                         $ed = Get-ContainerEdition -ContainerName $item.Name
                         if (-not $ed) { $ed = 'lite' }
@@ -2874,8 +2875,17 @@ function Main {
                         if ($localDfHash) { $currentCandidates += $localDfHash }
 
                         if ($currentCandidates.Count -eq 0) {
-                            $itemVersionTag = Normalize-ReleaseVersion $item.VersionRaw
-                            if ($itemVersionTag) {
+                            $itemVersionTagRaw = ("$($item.VersionRaw)").Trim()
+                            $itemVersionTagNorm = Normalize-ReleaseVersion $item.VersionRaw
+                            $itemVersionRefs = @()
+                            if ($itemVersionTagRaw) { $itemVersionRefs += $itemVersionTagRaw }
+                            if ($itemVersionTagNorm) {
+                                if (-not ($itemVersionRefs -contains $itemVersionTagNorm)) { $itemVersionRefs += $itemVersionTagNorm }
+                                $itemVersionTagWithV = "v$itemVersionTagNorm"
+                                if (-not ($itemVersionRefs -contains $itemVersionTagWithV)) { $itemVersionRefs += $itemVersionTagWithV }
+                            }
+
+                            foreach ($itemVersionTag in $itemVersionRefs) {
                                 $curPrimary = Get-RemoteDockerfileHash -ReleaseTag $itemVersionTag -Edition $ed
                                 if ($curPrimary) { $currentCandidates += $curPrimary }
                                 $curAlt = Get-RemoteDockerfileHash -ReleaseTag $itemVersionTag -Edition $altEdition
@@ -2903,6 +2913,10 @@ function Main {
                             Write-Host "     $($item.Name): 建议先在 Web 面板 → 系统更新 执行热更新" -ForegroundColor DarkGray
                         }
                         Write-Host ""
+                        Write-Host "  推荐操作:" -ForegroundColor Cyan
+                        Write-Host "     [默认 N] 先执行 Web 热更新（推荐）" -ForegroundColor White
+                        Write-Host "     [输入 y] 继续完整重装流程" -ForegroundColor White
+                        Write-Host ""
                         Write-Host "  是否继续执行安装重装流程？[y/N]: " -NoNewline -ForegroundColor White
                         $continueInstall = (Read-Host).Trim().ToLower()
                         if ($continueInstall -ne 'y' -and $continueInstall -ne 'yes') {
@@ -2911,6 +2925,7 @@ function Main {
                             Write-Host "  热更新后可再次运行安装脚本（如有需要）。" -ForegroundColor DarkGray
                             return
                         }
+                        $hotUpdateReinstallConfirmed = $true
                     }
 
                     Write-Warn "检测到容器版本与目标版本不匹配（目标: $latestReleaseTag）"
@@ -2919,9 +2934,15 @@ function Main {
                         Write-Host "     $($item.Name): $oldV -> $latestReleaseTag" -ForegroundColor Yellow
                     }
                     Write-Host ""
-                    Write-Host "  是否先执行升级重装（删除旧容器，保留配置和 home-data）？[Y/n]: " -NoNewline -ForegroundColor White
-                    $upgradeFirst = (Read-Host).Trim().ToLower()
-                    if (-not $upgradeFirst -or $upgradeFirst -eq 'y' -or $upgradeFirst -eq 'yes') {
+                    $doReinstall = $hotUpdateReinstallConfirmed
+                    if (-not $doReinstall) {
+                        Write-Host "  是否先执行升级重装（删除旧容器，保留配置和 home-data）？[Y/n]: " -NoNewline -ForegroundColor White
+                        $upgradeFirst = (Read-Host).Trim().ToLower()
+                        if (-not $upgradeFirst -or $upgradeFirst -eq 'y' -or $upgradeFirst -eq 'yes') {
+                            $doReinstall = $true
+                        }
+                    }
+                    if ($doReinstall) {
                         $choice = '2'
                         if ($outdated.Count -eq 1) {
                             $preferredUpgradeContainer = $outdated[0].Name

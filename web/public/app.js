@@ -221,12 +221,21 @@ async function checkForUpdate(force = false) {
     // Show/hide hot update button based on update type
     const hotBtn = $('btn-hotpatch-banner');
     const fullHint = $('update-full-hint');
+    const installNote = $('update-install-note');
     if (hotBtn) hotBtn.style.display = u.requiresFullUpdate ? 'none' : '';
     if (fullHint) {
       fullHint.style.display = u.requiresFullUpdate ? '' : 'none';
       if (u.requiresFullUpdate) {
         fullHint.innerHTML = '📦 <b>需要完整更新</b>：请重新执行一键安装脚本（会自动检测并升级到新版本）';
       }
+    }
+    if (installNote) installNote.style.display = u.requiresFullUpdate ? '' : 'none';
+    if (!u.requiresFullUpdate && fullHint) {
+      fullHint.style.display = '';
+      fullHint.style.color = '#4ade80';
+      fullHint.innerHTML = '⚡ <b>可热更新</b>：建议先点击“热更新”，无需重装容器';
+    } else if (fullHint) {
+      fullHint.style.color = '#f59e0b';
     }
   }
 
