@@ -3045,7 +3045,7 @@ function Main {
                 }
                 Write-Host "  请输入 YES 确认继续: " -NoNewline -ForegroundColor White
                 $confirmReinstall = (Read-Host).Trim()
-                if ($confirmReinstall -ne 'YES') {
+                if ($confirmReinstall.ToUpperInvariant() -ne 'YES') {
                     Write-Host ""
                     Write-Host "  未输入 YES，已取消本次操作。" -ForegroundColor Yellow
                     return
