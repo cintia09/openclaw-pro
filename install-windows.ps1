@@ -1921,7 +1921,7 @@ function Show-Completion {
         } else {
             Write-Host "     公钥注入: 未自动注入，你可以使用任意来源的公钥手动写入 /root/.ssh/authorized_keys" -ForegroundColor Yellow
             Write-Host "     示例(Linux/macOS): cat /path/to/your_key.pub | docker exec -i openclaw-pro bash -lc 'mkdir -p /root/.ssh && cat >> /root/.ssh/authorized_keys && chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys'" -ForegroundColor DarkGray
-            Write-Host "     示例(Windows): type C:\path\to\your_key.pub | docker exec -i openclaw-pro bash -lc \"mkdir -p /root/.ssh && cat >> /root/.ssh/authorized_keys && chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys\"" -ForegroundColor DarkGray
+            Write-Host '     示例(Windows): type C:\path\to\your_key.pub | docker exec -i openclaw-pro bash -lc "mkdir -p /root/.ssh && cat >> /root/.ssh/authorized_keys && chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys"' -ForegroundColor DarkGray
         }
 
         if ($script:rootPasswordFilePath) {
@@ -1931,8 +1931,8 @@ function Show-Completion {
         }
         Write-Host ""
         Write-Host "  ⬆ 手动升级（容器内测试）：" -ForegroundColor White
-        Write-Host "     docker exec -it openclaw-pro bash -lc \"openclaw update --channel stable || npm install -g openclaw@latest\"" -ForegroundColor Gray
-        Write-Host "     docker exec -it openclaw-pro bash -lc \"openclaw --version\"" -ForegroundColor Gray
+        Write-Host '     docker exec -it openclaw-pro bash -lc "openclaw update --channel stable || npm install -g openclaw@latest"' -ForegroundColor Gray
+        Write-Host '     docker exec -it openclaw-pro bash -lc "openclaw --version"' -ForegroundColor Gray
         Write-Host ""
         Write-Host "  🔄 升级到新版本：" -ForegroundColor White
         Write-Host "     重新运行安装命令即可，脚本会自动检测版本差异：" -ForegroundColor DarkGray
