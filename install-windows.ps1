@@ -1139,19 +1139,20 @@ function Download-Robust {
     $totalChunks = [int][math]::Ceiling($ExpectedSize / $chunkSize)
     $totalMB = [math]::Round($ExpectedSize / 1MB, 1)
 
-    # 锁定单一下载源，避免分块重试时跨代理混用导致文件拼接不一致
+    # 锁定单一下载源（且必须支持 Range），避免分块重试时跨代理混用或选到不支持分块的源
     $selectedUrl = $null
     foreach ($u in $Urls) {
         try {
             $targetUrl = $u
-            for ($redir = 0; $redir -lt 3; $redir++) {
+            for ($redir = 0; $redir -lt 6; $redir++) {
                 $req = [System.Net.HttpWebRequest]::Create($targetUrl)
-                $req.Method = "HEAD"
+                $req.Method = "GET"
                 $req.AllowAutoRedirect = $false
                 $req.Timeout = 8000
                 $req.ReadWriteTimeout = 8000
                 $req.UserAgent = "OpenClaw-Installer/1.0"
                 $req.KeepAlive = $false
+                $req.AddRange(0, 0)
                 $resp = $req.GetResponse()
                 if ($resp -is [System.Net.HttpWebResponse]) {
                     $code = [int]$resp.StatusCode
@@ -1161,15 +1162,29 @@ function Download-Robust {
                         $targetUrl = $loc
                         continue
                     }
+                    $cr = $resp.Headers["Content-Range"]
+                    $len = [long]$resp.ContentLength
+                    $resp.Close()
+                    if (($code -eq 206) -or ($cr -match '^bytes\s+0-0/\d+$')) {
+                        # 支持 Range 分块
+                        $selectedUrl = $u
+                        break
+                    }
+                    if ($code -eq 200 -and $len -gt 0) {
+                        Write-Log "Download-Robust source skipped (no range support): $u"
+                        break
+                    }
                 }
-                $resp.Close()
-                $selectedUrl = $u
-                break
             }
-        } catch { }
+        } catch {
+            Write-Log "Download-Robust source probe failed: $u ; $_"
+        }
         if ($selectedUrl) { break }
     }
-    if (-not $selectedUrl) { $selectedUrl = $Urls[0] }
+    if (-not $selectedUrl) {
+        $selectedUrl = $Urls[0]
+        Write-Warn "未探测到明确支持 Range 的下载源，仍尝试首个源进行下载"
+    }
     if ($Urls.Count -gt 1 -and $selectedUrl) {
         $shortSelected = if ($selectedUrl.Length -gt 70) { $selectedUrl.Substring(0, 67) + "..." } else { $selectedUrl }
         Write-Info "已锁定下载源: $shortSelected"
