@@ -3732,8 +3732,10 @@ function Main {
                 try {
                     $fwPortList = @()
                     if ($deployConfig.HttpsEnabled) {
-                        if ($deployConfig.HttpPort -and $deployConfig.HttpPort -gt 0) {
-                            $fwPortList += $deployConfig.HttpPort
+                        if ($deployConfig.CertMode -eq 'letsencrypt') {
+                            if ($deployConfig.HttpPort -and $deployConfig.HttpPort -gt 0) {
+                                $fwPortList += $deployConfig.HttpPort
+                            }
                         }
                         if ($deployConfig.HttpsPort -and $deployConfig.HttpsPort -gt 0) {
                             $fwPortList += $deployConfig.HttpsPort
