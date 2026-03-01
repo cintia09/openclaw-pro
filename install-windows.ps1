@@ -1131,7 +1131,8 @@ function Download-Robust {
         [long]$ExpectedSize,           # 预期文件大小（字节）
         [int]$ChunkSizeMB = 2,         # 每块大小（MB）
         [int]$Threads = 8,             # 并行线程数
-        [int]$RetryPerChunk = 20       # 每块最大重试次数
+        [int]$RetryPerChunk = 20,      # 每块最大重试次数
+        [switch]$ForceFresh            # 强制全新下载（忽略/清空续传进度）
     )
 
     $chunkSize = [long]($ChunkSizeMB * 1024 * 1024)
@@ -1182,7 +1183,11 @@ function Download-Robust {
 
     # -- Step 1: 检查文件是否需要（重新）预分配 --
     $needPrealloc = $false
-    if (-not (Test-Path $OutFile)) {
+    if ($ForceFresh) {
+        $needPrealloc = $true
+        if (Test-Path $OutFile) { Remove-Item $OutFile -Force -ErrorAction SilentlyContinue }
+        if (Test-Path $progressFile) { Remove-Item $progressFile -Force -ErrorAction SilentlyContinue }
+    } elseif (-not (Test-Path $OutFile)) {
         $needPrealloc = $true
     } elseif ((Get-Item $OutFile).Length -ne $ExpectedSize) {
         $needPrealloc = $true
@@ -4497,7 +4502,8 @@ function Main {
                                     -ExpectedSize $recoverSize `
                                     -ChunkSizeMB 2 `
                                     -Threads 8 `
-                                    -RetryPerChunk 20
+                                    -RetryPerChunk 20 `
+                                    -ForceFresh
                                 if (-not $recoverDownloadOK) {
                                     Write-Warn "8 线程重试未完成，自动降级重试（4线程、1MB块）..."
                                     $recoverDownloadOK = Download-Robust `
@@ -4506,7 +4512,8 @@ function Main {
                                         -ExpectedSize $recoverSize `
                                         -ChunkSizeMB 1 `
                                         -Threads 4 `
-                                        -RetryPerChunk 30
+                                        -RetryPerChunk 30 `
+                                        -ForceFresh
                                 }
                             }
                             if (-not $recoverDownloadOK) {
@@ -4629,7 +4636,8 @@ function Main {
                                         -ExpectedSize $recoverSize `
                                         -ChunkSizeMB 2 `
                                         -Threads 8 `
-                                        -RetryPerChunk 20
+                                        -RetryPerChunk 20 `
+                                        -ForceFresh
                                     if (-not $recoverDownloadOK) {
                                         Write-Warn "8 线程重试未完成，自动降级重试（4线程、1MB块）..."
                                         $recoverDownloadOK = Download-Robust `
@@ -4638,7 +4646,8 @@ function Main {
                                             -ExpectedSize $recoverSize `
                                             -ChunkSizeMB 1 `
                                             -Threads 4 `
-                                            -RetryPerChunk 30
+                                            -RetryPerChunk 30 `
+                                            -ForceFresh
                                     }
                                 }
                                 if (-not $recoverDownloadOK) {
