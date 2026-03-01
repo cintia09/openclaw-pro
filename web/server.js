@@ -853,17 +853,26 @@ app.post('/api/update/hotpatch', async (req, res) => {
 // API: status
 // ============================================================
 app.get('/api/status', (req, res) => {
+  const statusStart = Date.now();
   const status = { gateway: false, web: true, caddy: false, uptime: 0, memory: {}, version: getCurrentVersion() };
 
   try {
     execSync('pgrep -f "[o]penclaw.*gateway"', { stdio: 'ignore' });
     status.gateway = true;
-  } catch {}
+  } catch (e) {
+    if (req.query.debug === '1') {
+      console.log(`[status] gateway check miss: ${e.message || e}`);
+    }
+  }
 
   try {
     execSync('pgrep -f caddy', { stdio: 'ignore' });
     status.caddy = true;
-  } catch {}
+  } catch (e) {
+    if (req.query.debug === '1') {
+      console.log(`[status] caddy check miss: ${e.message || e}`);
+    }
+  }
 
   try {
     const uptime = parseFloat(fs.readFileSync('/proc/uptime', 'utf8').split(' ')[0]);
@@ -890,11 +899,19 @@ app.get('/api/status', (req, res) => {
     try {
       execSync('pgrep -f "websockify.*6080"', { stdio: 'ignore' });
       status.browser = true;
-    } catch {
+    } catch (e) {
       status.browser = false;
+      if (req.query.debug === '1') {
+        console.log(`[status] browser check miss: ${e.message || e}`);
+      }
     }
   } else {
     status.browser = false;
+  }
+
+  const statusElapsed = Date.now() - statusStart;
+  if (statusElapsed > 1200 || req.query.debug === '1') {
+    console.log(`[status] elapsed=${statusElapsed}ms gateway=${status.gateway} caddy=${status.caddy} browser=${status.browser} version=${status.version}`);
   }
 
   res.json(status);

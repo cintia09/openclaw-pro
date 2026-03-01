@@ -9,6 +9,19 @@ function $(id){ return document.getElementById(id); }
 function q(sel, root=document){ return root.querySelector(sel); }
 function qa(sel, root=document){ return Array.from(root.querySelectorAll(sel)); }
 
+const OC_DEBUG = (() => {
+  try {
+    return localStorage.getItem('ocDebug') === '1';
+  } catch {
+    return false;
+  }
+})();
+
+function dlog(...args){
+  if (!OC_DEBUG) return;
+  console.debug('[oc-debug]', ...args);
+}
+
 // ------------------------
 // API helper
 // ------------------------
@@ -17,6 +30,7 @@ async function api(url, opts={}){
   const { timeoutMs: _ignoreTimeoutMs, ...fetchOpts } = opts;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const startedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
   try{
     const res = await fetch(url, {
       headers: { 'Content-Type': 'application/json' },
@@ -24,6 +38,11 @@ async function api(url, opts={}){
       signal: controller.signal,
       body: fetchOpts.body ? JSON.stringify(fetchOpts.body) : undefined
     });
+
+    const elapsed = ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt;
+    if (OC_DEBUG) {
+      dlog('api', fetchOpts.method || 'GET', url, 'status=', res.status, 'elapsedMs=', Math.round(elapsed));
+    }
 
     if (res.status === 401){
       window.location.href = '/login.html';
@@ -35,7 +54,9 @@ async function api(url, opts={}){
     return data;
   }catch(e){
     console.error('api error', e);
+    const elapsed = ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt;
     if (e && e.name === 'AbortError') return { error: `请求超时（>${timeoutMs}ms）` };
+    dlog('api error', fetchOpts.method || 'GET', url, 'elapsedMs=', Math.round(elapsed), 'message=', e && e.message ? e.message : e);
     return { error: e.message };
   } finally {
     clearTimeout(timeout);
@@ -188,11 +209,18 @@ function formatUptime(sec){
 }
 
 async function refreshStatus(){
-  if (window.__statusRefreshing) return;
+  if (window.__statusRefreshing) {
+    dlog('refreshStatus skipped: previous request still running');
+    return;
+  }
   window.__statusRefreshing = true;
+  const startedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
   try {
     const s = await api('/api/status');
-    if (s.error) return;
+    if (s.error) {
+      dlog('refreshStatus error:', s.error);
+      return;
+    }
 
   $('kpi-gateway').innerHTML = s.gateway
     ? `<span class="pulse online"></span>在线`
@@ -213,6 +241,8 @@ async function refreshStatus(){
     if (s.version && s.version !== 'unknown') {
       $('sidebar-version').textContent = s.version;
     }
+    const elapsed = ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt;
+    dlog('refreshStatus ok', 'elapsedMs=', Math.round(elapsed), 'gateway=', !!s.gateway, 'caddy=', !!s.caddy);
   } finally {
     window.__statusRefreshing = false;
   }
