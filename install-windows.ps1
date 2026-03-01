@@ -3968,7 +3968,10 @@ function Main {
                     }
 
                     # 强制应用 SSH 安全配置（禁用密码登录，仅允许密钥）
-                    & docker exec $containerName bash -lc "if [ -f /etc/ssh/sshd_config ]; then sed -i -E 's|^[#[:space:]]*PermitRootLogin[[:space:]]+.*|PermitRootLogin prohibit-password|' /etc/ssh/sshd_config; sed -i -E 's|^[#[:space:]]*PasswordAuthentication[[:space:]]+.*|PasswordAuthentication no|' /etc/ssh/sshd_config; sed -i -E 's|^[#[:space:]]*KbdInteractiveAuthentication[[:space:]]+.*|KbdInteractiveAuthentication no|' /etc/ssh/sshd_config; sed -i -E 's|^[#[:space:]]*ChallengeResponseAuthentication[[:space:]]+.*|ChallengeResponseAuthentication no|' /etc/ssh/sshd_config; fi; mkdir -p /run/sshd; pkill -x sshd >/dev/null 2>&1 || true; (/usr/sbin/sshd >/dev/null 2>&1 || service ssh restart >/dev/null 2>&1 || true)" 2>$null | Out-Null
+                    # 使用 /etc/ssh/sshd_config.d/99-openclaw-security.conf 覆盖，避免被其他 include 文件反向覆盖
+                    & docker exec $containerName bash -lc "mkdir -p /etc/ssh/sshd_config.d && printf '%s\n' 'PermitRootLogin prohibit-password' 'PasswordAuthentication no' 'KbdInteractiveAuthentication no' 'ChallengeResponseAuthentication no' 'PubkeyAuthentication yes' > /etc/ssh/sshd_config.d/99-openclaw-security.conf" 2>$null | Out-Null
+                    & docker exec $containerName bash -lc "if [ -f /etc/ssh/sshd_config ]; then sed -i -E 's|^[#[:space:]]*PermitRootLogin[[:space:]]+.*|PermitRootLogin prohibit-password|' /etc/ssh/sshd_config; sed -i -E 's|^[#[:space:]]*PasswordAuthentication[[:space:]]+.*|PasswordAuthentication no|' /etc/ssh/sshd_config; sed -i -E 's|^[#[:space:]]*KbdInteractiveAuthentication[[:space:]]+.*|KbdInteractiveAuthentication no|' /etc/ssh/sshd_config; sed -i -E 's|^[#[:space:]]*ChallengeResponseAuthentication[[:space:]]+.*|ChallengeResponseAuthentication no|' /etc/ssh/sshd_config; fi" 2>$null | Out-Null
+                    & docker exec $containerName bash -lc "mkdir -p /run/sshd; pkill -x sshd >/dev/null 2>&1 || true; (/usr/sbin/sshd >/dev/null 2>&1 || service ssh restart >/dev/null 2>&1 || true)" 2>$null | Out-Null
 
                     $pwdAuth = (& docker exec $containerName bash -lc "sshd -T 2>/dev/null | sed -n 's/^passwordauthentication //p' | tail -n1 | tr '[:upper:]' '[:lower:]'" 2>$null | Out-String).Trim().ToLower()
                     if (-not $pwdAuth) {
@@ -4040,7 +4043,8 @@ function Main {
                                 $sshKeygen = Get-Command ssh-keygen -ErrorAction SilentlyContinue
                                 if ($sshKeygen) {
                                     Write-Info "未检测到宿主机公钥，正在自动生成 id_ed25519..."
-                                    & $sshKeygen.Source -t ed25519 -N '' -f $keyPath 2>$null | Out-Null
+                                    $sshArgs = @('-q', '-t', 'ed25519', '-N', '', '-f', $keyPath)
+                                    & $sshKeygen.Source @sshArgs 2>$null | Out-Null
                                 }
                             }
 
