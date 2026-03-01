@@ -1707,28 +1707,34 @@ function runOpenClawTask(command, title) {
 }
 
 app.get('/api/openclaw', async (req, res) => {
-  const detected = detectOpenClawInstallation();
-  const installed = detected.installed;
-  const version = detected.version;
+  try {
+    const detected = detectOpenClawInstallation();
+    const installed = detected.installed;
+    const version = detected.version;
 
-  let latestVersion = '';
-  let updateCheckError = '';
-  if (installed) {
-    try {
-      latestVersion = await getLatestOpenClawVersion();
-    } catch (e) {
-      updateCheckError = e?.message || String(e || '');
+    let latestVersion = '';
+    let updateCheckError = '';
+    if (installed) {
+      try {
+        latestVersion = await getLatestOpenClawVersion();
+      } catch (e) {
+        updateCheckError = e?.message || String(e || '');
+      }
     }
+
+    const hasUpdate = !!(installed && version && latestVersion && compareSemver(latestVersion, version) > 0);
+
+    const invalidConfigKeys = detectInvalidConfigKeysFromText(readGatewayLogTail(300));
+
+    const gatewayRunning = runCommandOk('curl -sS --connect-timeout 1 --max-time 2 http://127.0.0.1:18789/health >/dev/null 2>&1', 2500)
+      || runCommandOk('pgrep -f "[o]penclaw.*gateway" >/dev/null 2>&1', 1200);
+
+    res.json({ installed, version, latestVersion, hasUpdate, updateCheckError, gatewayRunning, invalidConfigKeys, installSource: detected.source });
+  } catch (e) {
+    const detail = e?.message || String(e || '状态读取失败');
+    console.error('[openclaw][status] failed:', detail);
+    res.status(500).json({ error: detail });
   }
-
-  const hasUpdate = !!(installed && version && latestVersion && compareSemver(latestVersion, version) > 0);
-
-  const invalidConfigKeys = detectInvalidConfigKeysFromText(readGatewayLogTail(300));
-
-  const gatewayRunning = runCommandOk('curl -sS --connect-timeout 1 --max-time 2 http://127.0.0.1:18789/health >/dev/null 2>&1', 2500)
-    || runCommandOk('pgrep -f "[o]penclaw.*gateway" >/dev/null 2>&1', 1200);
-
-  res.json({ installed, version, latestVersion, hasUpdate, updateCheckError, gatewayRunning, invalidConfigKeys, installSource: detected.source });
 });
 
 app.post('/api/openclaw/config/repair', (req, res) => {

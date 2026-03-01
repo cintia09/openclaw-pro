@@ -589,9 +589,27 @@ function appendOcLogLine(line){
   appendColored(logEl, `${line}\n`, 6000, shouldAutoScroll(logEl));
 }
 
-async function refreshOpenClaw(){
-  const d = await api('/api/openclaw');
-  if (d.error) return null;
+async function refreshOpenClaw(opts = {}){
+  const retries = Math.max(0, Number(opts.retries ?? 1));
+  let d = null;
+  let lastErr = '';
+
+  for (let i = 0; i <= retries; i++) {
+    d = await api('/api/openclaw', { timeoutMs: 15000 });
+    if (d && !d.error && Object.prototype.hasOwnProperty.call(d, 'installed')) break;
+    lastErr = d?.error || '接口返回异常';
+    if (i < retries) {
+      await new Promise((resolve) => setTimeout(resolve, 350 * (i + 1)));
+    }
+  }
+
+  if (!d || d.error || !Object.prototype.hasOwnProperty.call(d, 'installed')) {
+    const detail = lastErr || '状态读取失败';
+    if ($('oc-update-status')) {
+      $('oc-update-status').textContent = `更新状态：读取失败（${detail}）`;
+    }
+    return { error: detail };
+  }
 
   $('oc-installed').innerHTML = d.installed
     ? `<span class="pulse online"></span>已安装`
@@ -715,7 +733,10 @@ async function pollRepairTask(taskId){
   ocRepairPollTimer = setInterval(tick, 700);
 }
 
-$('btn-oc-refresh').addEventListener('click', refreshOpenClaw);
+$('btn-oc-refresh').addEventListener('click', async ()=>{
+  const r = await refreshOpenClaw({ retries: 1 });
+  if (r?.error) toast('状态刷新失败', r.error);
+});
 
 $('btn-oc-repair-config')?.addEventListener('click', async ()=>{
   appendOcLogLine('[repair] 正在检测并修复 OpenClaw 配置中的无效 key...');
@@ -743,10 +764,11 @@ $('btn-oc-install').addEventListener('click', async ()=>{
   const btn = $('btn-oc-install');
   btn.disabled = true;
   try{
-    const current = await refreshOpenClaw();
-    if (!current) {
-      appendOcLogLine('[openclaw] 状态读取失败，无法继续。');
-      toast('读取失败', '无法获取当前 OpenClaw 状态');
+    const current = await refreshOpenClaw({ retries: 2 });
+    if (!current || current.error) {
+      const detail = current?.error || '无法获取当前 OpenClaw 状态';
+      appendOcLogLine(`[openclaw] 状态读取失败，无法继续（${detail}）。`);
+      toast('读取失败', detail);
       return;
     }
 
