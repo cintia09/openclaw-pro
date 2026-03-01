@@ -518,10 +518,17 @@ async function doHotPatch() {
 // OpenClaw install/update
 // ------------------------
 let ocPollTimer = null;
+
+function shouldAutoScroll(el, threshold = 24){
+  if (!el) return true;
+  const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+  return distance <= threshold;
+}
+
 function appendOcLogLine(line){
   const logEl = $('oc-log');
   if (!logEl) return;
-  appendColored(logEl, `${line}\n`, 6000, true);
+  appendColored(logEl, `${line}\n`, 6000, shouldAutoScroll(logEl));
 }
 
 async function refreshOpenClaw(){
@@ -549,14 +556,15 @@ async function pollTask(taskId){
     const st = await api('/api/openclaw/install/' + taskId + '?since=' + lastSeq);
     if (!st || st.error) return;
 
+    const autoScroll = shouldAutoScroll(logEl);
+
     if (st.delta) {
-      appendColored(logEl, st.delta, 6000, true);
+      appendColored(logEl, st.delta, 6000, autoScroll);
     } else if (!lastSeq && st.log) {
       // First render fallback
-      setColored(logEl, st.log, 6000, true);
+      setColored(logEl, st.log, 6000, autoScroll);
     }
     lastSeq = Number(st.seq || lastSeq || 0);
-    logEl.scrollTop = logEl.scrollHeight;
 
     if (st.status && st.status !== 'running'){
       clearInterval(ocPollTimer);

@@ -1200,15 +1200,9 @@ function runOpenClawTask(command, title) {
 }
 
 app.get('/api/openclaw', (req, res) => {
-  let installed = false;
-  let version = '';
-  version = runCommandText('openclaw --version 2>/dev/null || openclaw -v 2>/dev/null', 2500);
-  if (!version) {
-    version = getCurrentVersion();
-  }
-  if (version && version !== 'unknown') {
-    installed = true;
-  }
+  const rawVersion = runCommandText('openclaw --version 2>/dev/null || openclaw -v 2>/dev/null', 2500);
+  const version = compactOutput(rawVersion).split('\n')[0] || '';
+  const installed = !!version || runCommandOk('command -v openclaw >/dev/null 2>&1', 800);
 
   const gatewayRunning = runCommandOk('curl -sS --connect-timeout 1 --max-time 2 http://127.0.0.1:18789/health >/dev/null 2>&1', 2500)
     || runCommandOk('pgrep -f "[o]penclaw.*gateway" >/dev/null 2>&1', 1200);
