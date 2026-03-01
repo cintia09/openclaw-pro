@@ -521,6 +521,7 @@ app.post('/api/password', (req, res) => {
 // ============================================================
 const VERSION_FILE = '/etc/openclaw-version';
 const DOCKERFILE_HASH_FILE = '/etc/openclaw-dockerfile-hash';
+const IMAGE_TAG_FILE = '/root/.openclaw/image-release-tag.txt';
 const GITHUB_REPO = 'cintia09/openclaw-pro';
 
 function getCurrentVersion() {
@@ -795,6 +796,13 @@ app.post('/api/update/hotpatch', async (req, res) => {
       if (newVersion) {
         fs.writeFileSync(VERSION_FILE, newVersion + '\n');
         log(`版本号更新为: ${newVersion}`);
+        try {
+          fs.mkdirSync(path.dirname(IMAGE_TAG_FILE), { recursive: true });
+          fs.writeFileSync(IMAGE_TAG_FILE, newVersion + '\n');
+          log(`镜像标签元数据已同步: ${newVersion}`);
+        } catch (e) {
+          log(`镜像标签元数据写入失败(非致命): ${e.message}`);
+        }
       }
     } catch {}
 
