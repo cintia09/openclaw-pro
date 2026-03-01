@@ -4029,7 +4029,14 @@ function Main {
                 # 恢复后重试启动容器
                 if ($recoverOK) {
                     Write-Info "正在重试启动容器..."
-                    & docker rm -f $containerName 2>$null | Out-Null
+                    try {
+                        $containerExists = (& docker ps -a --filter "name=^/$containerName$" --format "{{.Names}}" 2>$null | Select-Object -First 1)
+                        if ($containerExists -eq $containerName) {
+                            & docker rm -f $containerName 2>$null | Out-Null
+                        }
+                    } catch {
+                        Write-Log "Ignore container cleanup error before retry: $_"
+                    }
                     Start-Sleep -Seconds 1
                     try {
                         $pushedLocal = $false
@@ -4051,9 +4058,12 @@ function Main {
                         if ($retryCode -eq 0) {
                             Write-OK "容器启动成功"
                             $launched = $true
+                        } else {
+                            Write-Log "retry docker run failed: $($retryResult | Out-String)"
                         }
                         if ($pushedLocal) { Pop-Location }
                     } catch {
+                        Write-Log "retry start container exception: $_"
                         Pop-Location -ErrorAction SilentlyContinue
                     }
                 }
