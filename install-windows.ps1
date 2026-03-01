@@ -1035,50 +1035,8 @@ function Get-ContainerReleaseVersion {
         }
     } catch { }
 
-    # 其余来源仅保留为诊断提示，不再作为版本返回值
-    if ($HomeBaseDir) {
-        try {
-            $tagHomeDataName = "home-data"
-            if ($ContainerName -match '^openclaw-pro-(\d+)$') {
-                $tagHomeDataName = "home-data-$($Matches[1])"
-            }
-            $imageTagFile = Join-Path $HomeBaseDir "$tagHomeDataName\.openclaw\image-release-tag.txt"
-            if (Test-Path $imageTagFile) {
-                $fver = (Get-Content $imageTagFile -ErrorAction SilentlyContinue | Select-Object -First 1)
-                if ($fver) {
-                    $fver = ("$fver").Trim()
-                    Write-Log "VersionDetect[$ContainerName]: home-data image-release-tag (hint only) => '$fver'"
-                }
-            }
-        } catch { }
-    }
-
     Write-Log "VersionDetect[$ContainerName]: no version resolved"
 
-    return ""
-}
-
-function Get-ContainerImageTagVersion {
-    param(
-        [string]$ContainerName,
-        [string]$HomeBaseDir = ""
-    )
-    if (-not $ContainerName -or -not $HomeBaseDir) { return "" }
-    try {
-        $tagHomeDataName = "home-data"
-        if ($ContainerName -match '^openclaw-pro-(\d+)$') {
-            $tagHomeDataName = "home-data-$($Matches[1])"
-        }
-        $imageTagFile = Join-Path $HomeBaseDir "$tagHomeDataName\.openclaw\image-release-tag.txt"
-        if (Test-Path $imageTagFile) {
-            $fver = (Get-Content $imageTagFile -ErrorAction SilentlyContinue | Select-Object -First 1)
-            if ($fver) {
-                $fver = ("$fver").Trim()
-                if ($fver -match '^([^\|]+)\|') { return $Matches[1] }
-                if ($fver) { return $fver }
-            }
-        }
-    } catch { }
     return ""
 }
 
@@ -2929,24 +2887,16 @@ function Main {
                 $rcPorts = if ($parts.Count -ge 3) { $parts[2] } else { "" }
                 Write-Log "RunningContainer found: name=$rcName status='$rcStatus' ports='$rcPorts'"
                 $rcVersion = Get-ContainerReleaseVersion -ContainerName $rcName -HomeBaseDir $homeBaseDir
-                $rcImageTagVersion = Get-ContainerImageTagVersion -ContainerName $rcName -HomeBaseDir $homeBaseDir
                 $rcVersionText = if ($rcVersion) { $rcVersion } else { "未知" }
-                $rcImageTagText = if ($rcImageTagVersion) { $rcImageTagVersion } else { "" }
                 $runningContainerMeta += @{
                     Name = $rcName
                     Status = $rcStatus
                     Ports = $rcPorts
                     VersionRaw = $rcVersion
                     VersionNorm = (Normalize-ReleaseVersion $rcVersion)
-                    ImageTagVersionRaw = $rcImageTagVersion
-                    ImageTagVersionNorm = (Normalize-ReleaseVersion $rcImageTagVersion)
                 }
                 Write-Log "RunningContainer version resolved: name=$rcName raw='$rcVersion' norm='$(Normalize-ReleaseVersion $rcVersion)'"
-                if ($rcImageTagText -and (Normalize-ReleaseVersion $rcImageTagText) -ne (Normalize-ReleaseVersion $rcVersionText)) {
-                    Write-Host "     容器: ${rcName}  版本: ${rcVersionText}（镜像标签: ${rcImageTagText}） 状态: ${rcStatus}  端口: ${rcPorts}" -ForegroundColor DarkGray
-                } else {
-                    Write-Host "     容器: ${rcName}  版本: ${rcVersionText}  状态: ${rcStatus}  端口: ${rcPorts}" -ForegroundColor DarkGray
-                }
+                Write-Host "     容器: ${rcName}  版本: ${rcVersionText}  状态: ${rcStatus}  端口: ${rcPorts}" -ForegroundColor DarkGray
             }
             Write-Host ""
 
@@ -2955,9 +2905,7 @@ function Main {
             $targetReleaseNorm = Normalize-ReleaseVersion $latestReleaseTag
             if ($targetReleaseNorm) {
                 $outdated = @($runningContainerMeta | Where-Object {
-                    $versionMismatch = ($_.VersionNorm -and ($_.VersionNorm -ne $targetReleaseNorm))
-                    $tagMismatch = ($_.ImageTagVersionNorm -and ($_.ImageTagVersionNorm -ne $targetReleaseNorm))
-                    $versionMismatch -and (-not $_.ImageTagVersionNorm -or $tagMismatch)
+                    $_.VersionNorm -and ($_.VersionNorm -ne $targetReleaseNorm)
                 })
                 if ($outdated.Count -gt 0) {
                     $hotUpdateEligible = @()
@@ -3338,13 +3286,6 @@ function Main {
                 if ($containerName -match '^openclaw-pro-(\d+)$') {
                     $tagHomeDataName = "home-data-$($Matches[1])"
                 }
-                $imageTagFile = Join-Path $homeBaseDir "$tagHomeDataName\.openclaw\image-release-tag.txt"
-                if (Test-Path $imageTagFile) {
-                    $localImageReleaseTag = (Get-Content $imageTagFile -ErrorAction SilentlyContinue | Select-Object -First 1)
-                    if ($localImageReleaseTag) {
-                        Write-Info "本地镜像版本标记: $localImageReleaseTag"
-                    }
-                }
 
                 # 检测本地镜像的 tag（lite/full/latest）以便与用户选择的镜像类型比对
                 $localImageEdition = "unknown"
@@ -3369,11 +3310,6 @@ function Main {
                             if ($derived) {
                                 $localImageReleaseTag = $derived
                                 Write-Info "根据本地镜像标签推断版本: $localImageReleaseTag"
-                                try {
-                                    $inferConfigDir = Join-Path $homeBaseDir "$tagHomeDataName\.openclaw"
-                                    if (-not (Test-Path $inferConfigDir)) { New-Item -ItemType Directory -Path $inferConfigDir -Force | Out-Null }
-                                    $localImageReleaseTag | Set-Content (Join-Path $inferConfigDir "image-release-tag.txt") -Force
-                                } catch { }
                                 break
                             }
                         }
