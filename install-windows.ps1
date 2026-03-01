@@ -1879,6 +1879,60 @@ function Get-DeployConfig {
     return $config
 }
 
+function Write-LaunchAccessSummary {
+    param(
+        [bool]$IsDockerDesktop = $false,
+        [int]$GatewayPort = 18789,
+        [int]$PanelPort = 3000,
+        [string]$Domain = "",
+        [string]$CertMode = "letsencrypt",
+        [int]$HttpPort = 0,
+        [int]$HttpsPort = 0,
+        [int]$SshPort = 2222
+    )
+
+    if ($IsDockerDesktop) {
+        Write-Host "  ✅ Docker Desktop" -ForegroundColor Green
+    } else {
+        Write-Host "  ✅ WSL2" -ForegroundColor Green
+        Write-Host "  ✅ Ubuntu ($UBUNTU_DISTRO)" -ForegroundColor Green
+        Write-Host "  ✅ Docker Engine" -ForegroundColor Green
+    }
+    Write-Host "  🚀 OpenClaw Pro 容器已启动" -ForegroundColor Cyan
+    Write-Host ""
+
+    if ($Domain) {
+        Write-Host "  📝 端口映射:" -ForegroundColor White
+        if ($CertMode -eq "letsencrypt") {
+            Write-Host "     HTTP   ${HttpPort} → 证书验证 + 跳转HTTPS" -ForegroundColor Gray
+        }
+        Write-Host "     HTTPS  ${HttpsPort} → 主入口（Caddy 反代）" -ForegroundColor Gray
+        Write-Host "     SSH    ${SshPort} → 远程登录（密钥认证）" -ForegroundColor Gray
+        if ($CertMode -eq "internal") {
+            Write-Host "     证书模式: 自签证书（局域网测试）" -ForegroundColor Yellow
+            Write-Host "     ⚠️  首次访问浏览器会提示「不安全」，点击「继续访问」/「高级」即可" -ForegroundColor Yellow
+        } else {
+            Write-Host "     证书模式: Let's Encrypt 公网证书" -ForegroundColor Gray
+        }
+        Write-Host "     Gateway/Web 面板 → 仅容器内部（不占宿主机端口）" -ForegroundColor Gray
+        Write-Host ""
+        Write-Host "  🌐 访问地址:" -ForegroundColor White
+        $httpsUrl = if ($HttpsPort -eq 443) { "https://${Domain}" } else { "https://${Domain}:${HttpsPort}" }
+        Write-Host "     🔗 主站:     $httpsUrl" -ForegroundColor Cyan
+        Write-Host "     🔗 管理面板: ${httpsUrl}/admin" -ForegroundColor Cyan
+    } else {
+        Write-Host "  📝 端口映射:" -ForegroundColor White
+        Write-Host "     Gateway ${GatewayPort} → 容器 18789 (API入口)" -ForegroundColor Gray
+        Write-Host "     Web面板 ${PanelPort} → 容器 3000  (管理面板)" -ForegroundColor Gray
+        Write-Host "     SSH    ${SshPort} → 容器 22    (远程登录)" -ForegroundColor Gray
+        Write-Host ""
+        Write-Host "  🌐 访问地址:" -ForegroundColor White
+        Write-Host "     🔗 Gateway:  http://localhost:${GatewayPort}" -ForegroundColor Cyan
+        Write-Host "     🔗 管理面板: http://localhost:${PanelPort}" -ForegroundColor Cyan
+    }
+    Write-Host ""
+}
+
 # --- Phase 5: Cleanup + Summary -----------------------------------------------
 function Show-Completion {
     param(
@@ -1907,51 +1961,7 @@ function Show-Completion {
     }
     Write-Host ""
 
-    if ($IsDockerDesktop) {
-        Write-Host "  ✅ Docker Desktop" -ForegroundColor Green
-    } else {
-        Write-Host "  ✅ WSL2" -ForegroundColor Green
-        Write-Host "  ✅ Ubuntu ($UBUNTU_DISTRO)" -ForegroundColor Green
-        Write-Host "  ✅ Docker Engine" -ForegroundColor Green
-    }
-
     if ($DeployLaunched) {
-        Write-Host "  🚀 OpenClaw Pro 容器已启动" -ForegroundColor Cyan
-        Write-Host ""
-
-        if ($Domain) {
-            # HTTPS 模式
-            Write-Host "  📝 端口映射:" -ForegroundColor White
-            if ($CertMode -eq "letsencrypt") {
-                Write-Host "     HTTP   ${HttpPort} → 证书验证 + 跳转HTTPS" -ForegroundColor Gray
-            }
-            Write-Host "     HTTPS  ${HttpsPort} → 主入口（Caddy 反代）" -ForegroundColor Gray
-            Write-Host "     SSH    ${SshPort} → 远程登录（密钥认证）" -ForegroundColor Gray
-            if ($CertMode -eq "internal") {
-                Write-Host "     证书模式: 自签证书（局域网测试）" -ForegroundColor Yellow
-                Write-Host "     ⚠️  首次访问浏览器会提示「不安全」，点击「继续访问」/「高级」即可" -ForegroundColor Yellow
-            } else {
-                Write-Host "     证书模式: Let's Encrypt 公网证书" -ForegroundColor Gray
-            }
-            Write-Host "     Gateway/Web 面板 → 仅容器内部（不占宿主机端口）" -ForegroundColor Gray
-            Write-Host ""
-            Write-Host "  🌐 访问地址:" -ForegroundColor White
-            $httpsUrl = if ($HttpsPort -eq 443) { "https://${Domain}" } else { "https://${Domain}:${HttpsPort}" }
-            Write-Host "     🔗 主站:     $httpsUrl" -ForegroundColor Cyan
-            Write-Host "     🔗 管理面板: ${httpsUrl}/admin" -ForegroundColor Cyan
-        } else {
-            # HTTP 直连模式
-            Write-Host "  📝 端口映射:" -ForegroundColor White
-            Write-Host "     Gateway ${GatewayPort} → 容器 18789 (API入口)" -ForegroundColor Gray
-            Write-Host "     Web面板 ${PanelPort} → 容器 3000  (管理面板)" -ForegroundColor Gray
-            Write-Host "     SSH    ${SshPort} → 容器 22    (远程登录)" -ForegroundColor Gray
-            Write-Host ""
-            Write-Host "  🌐 访问地址:" -ForegroundColor White
-            Write-Host "     🔗 Gateway:  http://localhost:${GatewayPort}" -ForegroundColor Cyan
-            Write-Host "     🔗 管理面板: http://localhost:${PanelPort}" -ForegroundColor Cyan
-        }
-
-        Write-Host ""
         Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray
         Write-Host ""
 
@@ -4946,6 +4956,7 @@ function Main {
 
     if ($launched) {
         $enterContainerName = if ($script:deployedContainerName) { $script:deployedContainerName } else { "openclaw-pro" }
+        Write-LaunchAccessSummary -IsDockerDesktop $dockerDesktopMode -GatewayPort $gwPort -PanelPort $wpPort -Domain $dom -CertMode $cmode -HttpPort $hPort -HttpsPort $hsPort -SshPort $sPort
         Write-Host "  ==================================================" -ForegroundColor DarkCyan
         Write-Host "  🚪 默认进入容器终端（输入 exit 返回）" -ForegroundColor Cyan
         Write-Host "     docker exec -it $enterContainerName bash" -ForegroundColor Yellow
