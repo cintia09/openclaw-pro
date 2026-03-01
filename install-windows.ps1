@@ -2916,6 +2916,11 @@ function Main {
                         Write-Host "  推荐操作:" -ForegroundColor Cyan
                         Write-Host "     [默认 N] 先执行 Web 热更新（推荐）" -ForegroundColor White
                         Write-Host "     [输入 y] 继续完整重装流程" -ForegroundColor White
+                        Write-Host "" 
+                        Write-Host "  ⚠️  完整重装风险提示:" -ForegroundColor Yellow
+                        Write-Host "     - 将删除并重建容器（容器文件系统会重置）" -ForegroundColor Yellow
+                        Write-Host "     - 容器内手动安装的软件/临时文件可能丢失" -ForegroundColor Yellow
+                        Write-Host "     - 挂载的 home-data 与配置会保留" -ForegroundColor Green
                         Write-Host ""
                         Write-Host "  是否继续执行安装重装流程？[y/N]: " -NoNewline -ForegroundColor White
                         $continueInstall = (Read-Host).Trim().ToLower()
