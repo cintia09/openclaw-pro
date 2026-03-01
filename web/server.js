@@ -223,15 +223,29 @@ function writeDockerConfig(cfg) {
   writeJson(DOCKER_CONFIG_PATH, cfg);
 }
 
-function restartGatewayForeground(callback) {
-  const cmd = [
-    'pkill -f "[o]penclaw.*gateway" >/dev/null 2>&1 || true',
-    'nohup openclaw gateway run --allow-unconfigured >> /root/.openclaw/logs/gateway.log 2>&1 &',
-    'sleep 1',
-    'pgrep -f "[o]penclaw.*gateway" >/dev/null 2>&1'
-  ].join('\n');
+const GATEWAY_WATCHDOG_SCRIPT = '/usr/local/bin/openclaw-gateway-watchdog.sh';
+const GATEWAY_WATCHDOG_LOG = '/root/.openclaw/logs/gateway-watchdog.log';
 
+function ensureGatewayWatchdog(callback) {
+  const cmd = [
+    'pgrep -f "[o]penclaw-gateway-watchdog.sh" >/dev/null 2>&1 && exit 0',
+    `[ -x "${GATEWAY_WATCHDOG_SCRIPT}" ] || exit 21`,
+    `nohup bash "${GATEWAY_WATCHDOG_SCRIPT}" >> "${GATEWAY_WATCHDOG_LOG}" 2>&1 &`,
+    'sleep 1',
+    'pgrep -f "[o]penclaw-gateway-watchdog.sh" >/dev/null 2>&1'
+  ].join('\n');
   exec(`bash --noprofile --norc -lc '${cmd}'`, { env: { ...process.env, TERM: 'dumb' } }, callback);
+}
+
+function restartGatewayForeground(callback) {
+  ensureGatewayWatchdog((watchdogErr, watchdogStdout, watchdogStderr) => {
+    if (watchdogErr) {
+      return callback(watchdogErr, watchdogStdout, watchdogStderr);
+    }
+
+    const killCmd = 'pkill -f "[o]penclaw.*gateway" >/dev/null 2>&1 || true';
+    exec(`bash --noprofile --norc -lc '${killCmd}'`, { env: { ...process.env, TERM: 'dumb' } }, callback);
+  });
 }
 
 function stripAnsi(input) {
@@ -924,6 +938,7 @@ const HOTPATCH_FILES = [
   ['web/public/style.css', '/opt/openclaw-web/public/style.css'],
   ['web/server.js', '/opt/openclaw-web/server.js'],
   ['start-services.sh', '/usr/local/bin/start-services.sh'],
+  ['scripts/openclaw-gateway-watchdog.sh', '/usr/local/bin/openclaw-gateway-watchdog.sh'],
   ['Caddyfile.template', '/etc/caddy/Caddyfile.template'],
 ];
 
@@ -1108,6 +1123,7 @@ app.get('/api/status', (req, res) => {
   status.domain = dockerConfig.domain || '';
   status.port = dockerConfig.port || 18789;
   status.browserEnabled = !!dockerConfig.browserEnabled;
+  status.gatewayWatchdog = runCommandOk('pgrep -f "[o]penclaw-gateway-watchdog.sh" >/dev/null 2>&1', 1200);
 
   if (status.browserEnabled) {
     status.browser = runCommandOk('pgrep -f "websockify.*6080" >/dev/null 2>&1', 1200);
@@ -1189,10 +1205,13 @@ app.post('/api/restart', (req, res) => {
   try {
     restartGatewayForeground((err, stdout, stderr) => {
       if (!err) {
-        return res.json({ success: true, message: 'Gateway 重启请求已提交' });
+        return res.json({ success: true, message: 'Gateway 进程已终止，watchdog 将自动拉起' });
       }
       const detail = compactOutput(stderr || stdout || err.message || '');
-      res.json({ success: false, error: detail || 'Gateway 重启失败，请查看日志' });
+      if (String(detail || '').includes('exit 21')) {
+        return res.json({ success: false, error: 'watchdog 脚本不存在，无法自动拉起 Gateway' });
+      }
+      res.json({ success: false, error: detail || 'Gateway 重启失败，请查看 watchdog 日志' });
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -1313,10 +1332,13 @@ app.post('/api/openclaw/update', (req, res) => {
 app.post('/api/openclaw/start', (req, res) => {
   restartGatewayForeground((err, stdout, stderr) => {
     if (!err) {
-      return res.json({ success: true, message: 'Gateway 重启请求已提交' });
+      return res.json({ success: true, message: 'Gateway 进程已终止，watchdog 将自动拉起' });
     }
     const detail = compactOutput(stderr || stdout || err.message || '');
-    res.json({ success: false, error: detail || 'Gateway 重启失败，请查看日志' });
+    if (String(detail || '').includes('exit 21')) {
+      return res.json({ success: false, error: 'watchdog 脚本不存在，无法自动拉起 Gateway' });
+    }
+    res.json({ success: false, error: detail || 'Gateway 重启失败，请查看 watchdog 日志' });
   });
 });
 

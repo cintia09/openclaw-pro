@@ -267,7 +267,15 @@ async function refreshStatus(){
   $('kpi-gateway').innerHTML = s.gateway
     ? `<span class="pulse online"></span>在线`
     : `<span class="pulse offline"></span>离线`;
-  $('kpi-gateway-sub').textContent = s.gateway ? '进程检测正常' : '未检测到进程';
+  const gatewayParts = [s.gateway ? '进程检测正常' : '未检测到进程'];
+  if (s.gatewayWatchdog === false) {
+    gatewayParts.push('watchdog未运行');
+  }
+  if (s.terminal && (s.terminal.reason || s.terminal.ready === false)) {
+    const reasonText = s.terminal.reason || '终端后端未就绪';
+    gatewayParts.push(`终端: ${reasonText}`);
+  }
+  $('kpi-gateway-sub').textContent = gatewayParts.join(' · ');
 
   $('kpi-caddy').innerHTML = s.caddy
     ? `<span class="pulse online"></span>在线`
