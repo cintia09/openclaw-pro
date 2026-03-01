@@ -299,7 +299,7 @@ async function checkForUpdate(force = false) {
 
   // Dashboard banner
   const banner = $('update-banner');
-    if (banner && u.hasUpdate) {
+  if (banner && u.hasUpdate) {
     $('update-latest').textContent = u.latestVersion;
     $('update-current').textContent = u.currentVersion;
     $('update-link').href = u.releaseUrl || '#';
@@ -323,6 +323,8 @@ async function checkForUpdate(force = false) {
     } else if (fullHint) {
       fullHint.style.color = '#f59e0b';
     }
+  } else if (banner) {
+    banner.style.display = 'none';
   }
 
   // Sidebar red dot
@@ -449,13 +451,40 @@ async function doHotPatch() {
             }
 
             if (hasFrontend || hasWebServer) {
-              const reloadDelayMs = hasWebServer ? 8000 : 3000;
               if (logPre) {
                 logPre.textContent += hasWebServer
-                  ? '\n检测到后端已更新，8 秒后自动刷新页面并重连...'
-                  : '\n前端文件已更新，3 秒后自动刷新页面...';
+                  ? '\n检测到后端已更新，正在等待服务恢复后自动重查更新状态（不再强制刷新页面）。'
+                  : '\n前端文件已更新，将自动重查更新状态；如需立即加载新前端可手动刷新页面。';
               }
-              setTimeout(() => location.reload(), reloadDelayMs);
+
+              const waitMs = hasWebServer ? 30000 : 10000;
+              const intervalMs = 2000;
+              const deadline = Date.now() + waitMs;
+
+              const recoverAndRecheck = async () => {
+                while (Date.now() < deadline) {
+                  await new Promise(r => setTimeout(r, intervalMs));
+                  try {
+                    const st = await api('/api/status');
+                    if (st && !st.error) {
+                      await refreshStatus();
+                      await checkForUpdate(true);
+                      if (hasWebServer) {
+                        toast('热更新完成', 'Web 面板已恢复，已自动刷新更新状态');
+                      }
+                      return;
+                    }
+                  } catch {
+                    // server may still be restarting
+                  }
+                }
+                await checkForUpdate(true);
+                if (hasWebServer) {
+                  toast('提示', 'Web 面板重启中，如状态未更新请稍后手动刷新页面');
+                }
+              };
+
+              recoverAndRecheck();
             } else {
               const recheckUpdateState = async () => {
                 for (let t = 0; t < 8; t++) {
