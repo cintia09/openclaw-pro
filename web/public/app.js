@@ -843,6 +843,7 @@ let termWs = null;
 let terminalBound = false;
 let termResizeTimer = null;
 let termReconnectTimer = null;
+let termWsToken = null;
 
 function termAppendText(text){
   const el = $('terminal');
@@ -932,12 +933,24 @@ function bindTerminalInteraction(){
   terminalBound = true;
 }
 
-function terminalConnect(){
+async function ensureTerminalWsToken(){
+  if (termWsToken) return termWsToken;
+  const r = await api('/api/terminal/ws-token');
+  if (r && !r.error && r.token) {
+    termWsToken = r.token;
+    return termWsToken;
+  }
+  return null;
+}
+
+async function terminalConnect(){
   if (!$('page-terminal').classList.contains('active')) return;
   if (termWs && (termWs.readyState === WebSocket.OPEN || termWs.readyState === WebSocket.CONNECTING)) return;
 
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const url = `${proto}//${location.host}/api/ws/terminal`;
+  const token = await ensureTerminalWsToken();
+  const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : '';
+  const url = `${proto}//${location.host}/api/ws/terminal${tokenQuery}`;
 
   $('term-state').textContent = '连接中...';
 
@@ -954,9 +967,14 @@ function terminalConnect(){
     $('terminal')?.focus();
     sendTerminalResize();
   };
-  termWs.onclose = ()=> {
-    $('term-state').textContent = '已断开';
-    termAppendText('\n[terminal] 连接已断开。\n');
+  termWs.onclose = (ev)=> {
+    const code = Number(ev?.code || 0);
+    const reason = ev?.reason ? ` reason=${ev.reason}` : '';
+    $('term-state').textContent = code === 1008 ? '认证失效' : '已断开';
+    termAppendText(`\n[terminal] 连接已断开 (code=${code}${reason}).\n`);
+    if (code === 1008) {
+      termWsToken = null;
+    }
     termWs = null;
     if ($('page-terminal').classList.contains('active')) {
       if (termReconnectTimer) clearTimeout(termReconnectTimer);
@@ -970,6 +988,7 @@ function terminalConnect(){
   termWs.onerror = ()=> {
     $('term-state').textContent = '连接错误';
     termAppendText('\n[terminal] 连接错误。\n');
+    termWsToken = null;
   };
 
   termWs.onmessage = (ev)=>{

@@ -13,6 +13,7 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const net = require('net');
+const { URL } = require('url');
 const { execSync, exec, spawn } = require('child_process');
 const crypto = require('crypto');
 const dns = require('dns');
@@ -121,6 +122,23 @@ try {
 
 const app = express();
 app.set('trust proxy', true);
+
+const terminalWsTokens = new Map();
+
+function issueTerminalWsToken(username) {
+  const token = crypto.randomBytes(24).toString('hex');
+  terminalWsTokens.set(token, { username, expireAt: Date.now() + 2 * 60 * 1000 });
+  return token;
+}
+
+function consumeTerminalWsToken(token) {
+  const key = String(token || '');
+  if (!key) return false;
+  const item = terminalWsTokens.get(key);
+  if (!item) return false;
+  terminalWsTokens.delete(key);
+  return item.expireAt > Date.now();
+}
 
 // ------------------------
 // Security headers
@@ -581,6 +599,14 @@ app.use('/gateway-proxy', (req, res) => {
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/api', requireAuthApi);
+
+app.get('/api/terminal/ws-token', (req, res) => {
+  const secret = readDockerConfig().webAuth?.secret;
+  const sess = secret ? getSession(req, secret) : null;
+  const username = sess?.u || 'admin';
+  const token = issueTerminalWsToken(username);
+  res.json({ token, expiresInSec: 120 });
+});
 
 // ============================================================
 // API: bootstrap (首次设置密码)
@@ -1542,7 +1568,16 @@ if (WebSocketServer) {
   });
 
   termWss.on('connection', (ws, req) => {
-    if (!isAuthenticated(req)) {
+    let authenticated = isAuthenticated(req);
+    if (!authenticated) {
+      try {
+        const reqUrl = new URL(String(req.url || ''), 'http://localhost');
+        const token = reqUrl.searchParams.get('token');
+        authenticated = consumeTerminalWsToken(token);
+      } catch {}
+    }
+
+    if (!authenticated) {
       try { ws.close(1008, 'unauthorized'); } catch {}
       return;
     }
