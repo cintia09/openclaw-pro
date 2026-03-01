@@ -575,6 +575,7 @@ async function doHotPatch() {
 // OpenClaw install/update
 // ------------------------
 let ocPollTimer = null;
+let ocRepairPollTimer = null;
 
 function shouldAutoScroll(el, threshold = 24){
   if (!el) return true;
@@ -685,16 +686,44 @@ async function pollTask(taskId){
   ocPollTimer = setInterval(tick, 600);
 }
 
+async function pollRepairTask(taskId){
+  if (ocRepairPollTimer) clearInterval(ocRepairPollTimer);
+  let lastSeq = 0;
+
+  const tick = async () => {
+    const st = await api('/api/openclaw/config/repair/' + taskId + '?since=' + lastSeq);
+    if (!st || st.error) return;
+
+    if (st.delta) {
+      appendColored($('oc-log'), st.delta, 6000, shouldAutoScroll($('oc-log')));
+    }
+    lastSeq = Number(st.seq || lastSeq || 0);
+
+    if (st.status && st.status !== 'running') {
+      if (ocRepairPollTimer) clearInterval(ocRepairPollTimer);
+      ocRepairPollTimer = null;
+      if (st.status === 'success') {
+        toast('配置恢复完成', st.changed ? '已修复并建议重启 Gateway' : '未发现需要修复的配置项');
+      } else {
+        toast('配置恢复失败', st.error || '请查看日志');
+      }
+      setTimeout(refreshOpenClaw, 800);
+    }
+  };
+
+  await tick();
+  ocRepairPollTimer = setInterval(tick, 700);
+}
+
 $('btn-oc-refresh').addEventListener('click', refreshOpenClaw);
 
 $('btn-oc-repair-config')?.addEventListener('click', async ()=>{
   appendOcLogLine('[repair] 正在检测并修复 OpenClaw 配置中的无效 key...');
-  appendOcLogLine('[repair] 该操作可能持续 30~120 秒，请稍候...');
-  const r = await api('/api/openclaw/config/repair', { method:'POST', timeoutMs: 180000 });
-  if (r.success) {
-    if (r.log) appendOcLogLine(r.log);
-    toast('配置恢复完成', r.changed ? '已修复并建议重启 Gateway' : '未发现需要修复的配置项');
-    setTimeout(refreshOpenClaw, 800);
+  appendOcLogLine('[repair] 已提交修复任务，后台执行中（约 30~120 秒）...');
+  const r = await api('/api/openclaw/config/repair', { method:'POST', timeoutMs: 15000 });
+  if (r.success && r.taskId) {
+    appendOcLogLine(`[repair] 任务已启动: ${r.taskId}`);
+    pollRepairTask(r.taskId);
   } else {
     const isEmptyResponse = r && typeof r === 'object' && Object.keys(r).length === 0;
     const err = r.error || (isEmptyResponse

@@ -1575,6 +1575,7 @@ app.post('/api/restart', (req, res) => {
 // API: OpenClaw install/status/update/start
 // ============================================================
 const installLogs = {};
+const repairLogs = {};
 
 function appendInstallLog(task, chunk) {
   const text = String(chunk || '');
@@ -1586,6 +1587,87 @@ function appendInstallLog(task, chunk) {
   if (task.chunks.length > 3000) {
     task.chunks = task.chunks.slice(task.chunks.length - 3000);
   }
+}
+
+function appendRepairLog(task, chunk) {
+  const text = String(chunk || '');
+  if (!text) return;
+  task.log += text;
+  task.seq = (task.seq || 0) + 1;
+  task.chunks = task.chunks || [];
+  task.chunks.push(text);
+  if (task.chunks.length > 3000) {
+    task.chunks = task.chunks.slice(task.chunks.length - 3000);
+  }
+}
+
+function runOpenClawRepairTask() {
+  const taskId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  repairLogs[taskId] = {
+    status: 'running',
+    log: '',
+    startedAt: Date.now(),
+    seq: 0,
+    chunks: [],
+    changed: false,
+    removed: [],
+    detected: []
+  };
+
+  const task = repairLogs[taskId];
+
+  (async () => {
+    appendRepairLog(task, '[repair] 正在执行 openclaw doctor --fix ...\n');
+
+    let doctorOutput = '';
+    if (runCommandOk('command -v openclaw >/dev/null 2>&1', 800)) {
+      const doctor = await runOpenClawCli('openclaw doctor --fix 2>&1', 120000);
+      doctorOutput = compactOutput(doctor.output || '');
+      if (doctorOutput) appendRepairLog(task, `[repair] doctor 输出: ${doctorOutput}\n`);
+      if (doctor.ok) appendRepairLog(task, '[repair] doctor --fix 执行完成。\n');
+      else appendRepairLog(task, '[repair] doctor --fix 返回非0，继续执行兜底修复。\n');
+    } else {
+      appendRepairLog(task, '[repair] openclaw 命令不可用，跳过 doctor，直接执行兜底修复。\n');
+    }
+
+    const gatewayLog = readGatewayLogTail(500);
+    const detected = Array.from(new Set([
+      ...detectInvalidConfigKeysFromText(gatewayLog),
+      ...detectInvalidConfigKeysFromText(doctorOutput)
+    ]));
+    if (!detected.includes('providers')) detected.push('providers');
+    task.detected = detected;
+
+    const repair = repairOpenClawConfigInvalidKeys(detected);
+    appendRepairLog(task, `[repair] 检测到潜在无效 key: ${detected.length ? detected.join(', ') : '无'}\n`);
+
+    if (!repair.changed) {
+      appendRepairLog(task, '[repair] 未发现可删除项（可能已被 doctor 修复）。\n');
+      appendRepairLog(task, '[repair] 请点击“重启 Gateway”验证配置是否恢复。\n');
+      task.changed = false;
+      task.removed = [];
+      task.status = 'success';
+    } else {
+      appendRepairLog(task, `[repair] 已移除无效 key: ${repair.removed.join(', ')}\n`);
+      if (repair.backupPath) appendRepairLog(task, `[repair] 已备份原配置: ${repair.backupPath}\n`);
+      appendRepairLog(task, '[repair] 修复完成，请点击“重启 Gateway”使配置重新加载。\n');
+      task.changed = true;
+      task.removed = repair.removed || [];
+      task.backupPath = repair.backupPath || '';
+      task.status = 'success';
+    }
+  })().catch((e) => {
+    const detail = e?.message || String(e || '配置恢复失败');
+    console.error('[openclaw][repair] failed:', detail);
+    appendRepairLog(task, `[repair] 失败: ${detail}\n`);
+    task.status = 'failed';
+    task.error = detail;
+  }).finally(() => {
+    const keys = Object.keys(repairLogs).sort();
+    while (keys.length > 8) delete repairLogs[keys.shift()];
+  });
+
+  return taskId;
 }
 
 function runOpenClawTask(command, title) {
@@ -1649,62 +1731,28 @@ app.get('/api/openclaw', async (req, res) => {
   res.json({ installed, version, latestVersion, hasUpdate, updateCheckError, gatewayRunning, invalidConfigKeys, installSource: detected.source });
 });
 
-app.post('/api/openclaw/config/repair', async (req, res) => {
+app.post('/api/openclaw/config/repair', (req, res) => {
   try {
-    const lines = [];
-    lines.push('[repair] 正在执行 openclaw doctor --fix ...');
-
-    let doctorOutput = '';
-    if (runCommandOk('command -v openclaw >/dev/null 2>&1', 800)) {
-      const doctor = await runOpenClawCli('openclaw doctor --fix 2>&1', 120000);
-      doctorOutput = compactOutput(doctor.output || '');
-      if (doctorOutput) lines.push(`[repair] doctor 输出: ${doctorOutput}`);
-      if (doctor.ok) lines.push('[repair] doctor --fix 执行完成。');
-      else lines.push('[repair] doctor --fix 返回非0，继续执行兜底修复。');
-    } else {
-      lines.push('[repair] openclaw 命令不可用，跳过 doctor，直接执行兜底修复。');
-    }
-
-    const gatewayLog = readGatewayLogTail(500);
-    const detected = Array.from(new Set([
-      ...detectInvalidConfigKeysFromText(gatewayLog),
-      ...detectInvalidConfigKeysFromText(doctorOutput)
-    ]));
-    if (!detected.includes('providers')) detected.push('providers');
-
-    const repair = repairOpenClawConfigInvalidKeys(detected);
-    lines.push(`[repair] 检测到潜在无效 key: ${detected.length ? detected.join(', ') : '无'}`);
-
-    if (!repair.changed) {
-      lines.push('[repair] 未发现可删除项（可能已被 doctor 修复）。');
-      lines.push('[repair] 请点击“重启 Gateway”验证配置是否恢复。');
-      return res.json({
-        success: true,
-        changed: false,
-        detected,
-        removed: [],
-        backupPath: '',
-        doctorOutput,
-        log: lines.join('\n')
-      });
-    }
-
-    lines.push(`[repair] 已移除无效 key: ${repair.removed.join(', ')}`);
-    if (repair.backupPath) lines.push(`[repair] 已备份原配置: ${repair.backupPath}`);
-    lines.push('[repair] 修复完成，请点击“重启 Gateway”使配置重新加载。');
-
-    res.json({
-      success: true,
-      changed: true,
-      detected,
-      removed: repair.removed,
-      backupPath: repair.backupPath,
-      doctorOutput,
-      log: lines.join('\n')
-    });
+    const taskId = runOpenClawRepairTask();
+    if (!taskId) return res.status(500).json({ success: false, error: '修复任务创建失败：未生成 taskId' });
+    res.json({ success: true, taskId });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ success: false, error: e?.message || '修复任务创建失败' });
   }
+});
+
+app.get('/api/openclaw/config/repair/:taskId', (req, res) => {
+  const task = repairLogs[req.params.taskId];
+  if (!task) return res.status(404).json({ error: 'not found' });
+  const since = Math.max(0, parseInt(req.query.since || '0', 10) || 0);
+  let delta = '';
+  if (since <= 0) {
+    delta = task.log || '';
+  } else if (since < (task.seq || 0)) {
+    const chunks = task.chunks || [];
+    delta = chunks.slice(since).join('');
+  }
+  res.json({ ...task, delta });
 });
 
 app.post('/api/openclaw/install', (req, res) => {
