@@ -1173,6 +1173,9 @@ function Download-Robust {
     if ($Urls.Count -gt 1 -and $selectedUrl) {
         $shortSelected = if ($selectedUrl.Length -gt 70) { $selectedUrl.Substring(0, 67) + "..." } else { $selectedUrl }
         Write-Info "已锁定下载源: $shortSelected"
+        Write-Log "Download-Robust source locked: $selectedUrl"
+    } elseif ($selectedUrl) {
+        Write-Log "Download-Robust source locked(single): $selectedUrl"
     }
     $Urls = @($selectedUrl)
 
@@ -4481,12 +4484,47 @@ function Main {
                         # ── 加载前校验 tar 完整性（快速读取归档头部条目） ──
                         Write-Info "校验镜像文件完整性..."
                         $tarValid = $false
+                        $tarExitCode = -1
+                        $tarErrorSample = @()
                         try {
                             & tar -tf $recoverTar *> $null
-                            if ($LASTEXITCODE -eq 0) { $tarValid = $true }
-                        } catch { }
+                            $tarExitCode = $LASTEXITCODE
+                            if ($tarExitCode -eq 0) {
+                                $tarValid = $true
+                            } else {
+                                try {
+                                    $tarErrorSample = @(& tar -tf $recoverTar 2>&1 | Select-Object -First 6)
+                                } catch { }
+                            }
+                        } catch {
+                            $tarExitCode = if ($LASTEXITCODE) { $LASTEXITCODE } else { -1 }
+                            $tarErrorSample = @("tar exception: $($_.Exception.Message)")
+                        }
 
                         if (-not $tarValid) {
+                            $tarSizeMB = -1
+                            $tarSizeBytes = 0
+                            $tarLastWrite = "unknown"
+                            if (Test-Path $recoverTar) {
+                                try {
+                                    $tarItem = Get-Item $recoverTar
+                                    $tarSizeBytes = [long]$tarItem.Length
+                                    $tarSizeMB = [math]::Round($tarSizeBytes / 1MB, 2)
+                                    $tarLastWrite = $tarItem.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
+                                } catch { }
+                            }
+                            Write-Log "Tar validate failed: attempt=$loadAttempt exitCode=$tarExitCode file=$recoverTar sizeBytes=$tarSizeBytes sizeMB=$tarSizeMB lastWrite=$tarLastWrite targetTag=$recoverTag edition=$script:imageEdition"
+                            if (Test-Path $recoverTagFile) {
+                                try {
+                                    $tagMeta = (Get-Content $recoverTagFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+                                    if ($tagMeta) { Write-Log "Tar tag metadata: $tagMeta" }
+                                } catch { }
+                            }
+                            if ($tarErrorSample -and $tarErrorSample.Count -gt 0) {
+                                foreach ($te in $tarErrorSample) {
+                                    if ($te) { Write-Log "tar check stderr: $te" }
+                                }
+                            }
                             if ($loadAttempt -ge 2) {
                                 Write-Warn "重新下载后镜像文件仍无法通过完整性校验"
                                 $releaseRecoverReason = "download"
