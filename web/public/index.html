@@ -21,7 +21,6 @@
       <nav class="nav" id="nav">
         <a href="#dashboard" data-route="dashboard" class="active"><span class="ico">📊</span><span>仪表盘</span></a>
         <a href="#openclaw" data-route="openclaw"><span class="ico">🐾</span><span>OpenClaw</span></a>
-        <a href="#ai" data-route="ai"><span class="ico">🤖</span><span>AI 配置</span></a>
         <a href="#messaging" data-route="messaging"><span class="ico">💬</span><span>消息平台</span></a>
         <a href="#trading" data-route="trading"><span class="ico">📈</span><span>交易系统</span></a>
         <a href="#plugins" data-route="plugins"><span class="ico">🧩</span><span>插件市场</span></a>
@@ -170,56 +169,51 @@
               <h2>安装/更新日志</h2>
               <pre class="terminal" id="oc-log" style="height:260px"></pre>
             </div>
-          </div>
-        </div>
-      </section>
 
-      <!-- AI -->
-      <section class="page" id="page-ai" data-title="AI 配置">
-        <div class="grid">
-          <div class="card" style="grid-column: span 12;">
-            <div class="row" style="justify-content:space-between">
-              <div>
-                <div style="font-weight:900;font-size:18px">AI Provider</div>
-                <div class="muted small" style="margin-top:4px">设置 Provider / API Key / 模型</div>
-              </div>
-              <div class="row">
-                <button class="btn" id="btn-ai-load">读取当前配置</button>
-                <button class="btn btn-primary" id="btn-ai-save">保存</button>
-              </div>
-            </div>
-            <div class="sep"></div>
-            <div class="grid">
-              <div style="grid-column: span 6;">
-                <div class="field">
-                  <div class="label"><span>Provider</span></div>
-                  <select class="input" id="ai-provider">
-                    <option value="anthropic">Anthropic (Claude)</option>
-                    <option value="openai">OpenAI (GPT)</option>
-                    <option value="github-copilot">GitHub Copilot</option>
-                    <option value="gemini">Google Gemini</option>
-                    <option value="openrouter">OpenRouter</option>
-                    <option value="custom">自定义</option>
-                  </select>
+            <div class="card" style="grid-column: span 12;">
+              <div class="row" style="justify-content:space-between">
+                <div>
+                  <div style="font-weight:900;font-size:18px">AI Provider</div>
+                  <div class="muted small" style="margin-top:4px">设置 Provider / API Key / 模型</div>
+                </div>
+                <div class="row">
+                  <button class="btn" id="btn-ai-load">读取当前配置</button>
+                  <button class="btn btn-primary" id="btn-ai-save">保存</button>
                 </div>
               </div>
-              <div style="grid-column: span 6;">
-                <div class="field">
-                  <div class="label"><span>模型</span></div>
-                  <input class="input" id="ai-model" placeholder="claude-sonnet-4-20250514" />
+              <div class="sep"></div>
+              <div class="grid">
+                <div style="grid-column: span 6;">
+                  <div class="field">
+                    <div class="label"><span>Provider</span></div>
+                    <select class="input" id="ai-provider">
+                      <option value="anthropic">Anthropic (Claude)</option>
+                      <option value="openai">OpenAI (GPT)</option>
+                      <option value="github-copilot">GitHub Copilot</option>
+                      <option value="gemini">Google Gemini</option>
+                      <option value="openrouter">OpenRouter</option>
+                      <option value="custom">自定义</option>
+                    </select>
+                  </div>
                 </div>
-              </div>
-              <div style="grid-column: span 6;">
-                <div class="field">
-                  <div class="label"><span>API Key</span></div>
-                  <input class="input" type="password" id="ai-apikey" placeholder="sk-..." autocomplete="off" />
-                  <div class="muted small" style="margin-top:6px">不输入则保持原值（如后端支持 mask 逻辑）。</div>
+                <div style="grid-column: span 6;">
+                  <div class="field">
+                    <div class="label"><span>模型</span></div>
+                    <input class="input" id="ai-model" placeholder="claude-sonnet-4-20250514" />
+                  </div>
                 </div>
-              </div>
-              <div style="grid-column: span 6;" id="ai-custom-url-wrap" hidden>
-                <div class="field">
-                  <div class="label"><span>Base URL（自定义）</span></div>
-                  <input class="input" id="ai-custom-url" placeholder="https://api.example.com/v1" />
+                <div style="grid-column: span 6;">
+                  <div class="field">
+                    <div class="label"><span>API Key</span></div>
+                    <input class="input" type="password" id="ai-apikey" placeholder="sk-..." autocomplete="off" />
+                    <div class="muted small" style="margin-top:6px">不输入则保持原值（如后端支持 mask 逻辑）。</div>
+                  </div>
+                </div>
+                <div style="grid-column: span 6;" id="ai-custom-url-wrap" hidden>
+                  <div class="field">
+                    <div class="label"><span>Base URL（自定义）</span></div>
+                    <input class="input" id="ai-custom-url" placeholder="https://api.example.com/v1" />
+                  </div>
                 </div>
               </div>
             </div>

@@ -135,7 +135,6 @@ function toast(title, detail=''){
 const ROUTES = [
   { id: 'dashboard', title: '仪表盘' },
   { id: 'openclaw', title: 'OpenClaw' },
-  { id: 'ai', title: 'AI 配置' },
   { id: 'messaging', title: '消息平台' },
   { id: 'trading', title: '交易系统' },
   { id: 'plugins', title: '插件市场' },
@@ -147,6 +146,7 @@ const ROUTES = [
 
 function getRouteFromHash(){
   const h = (location.hash || '').replace('#','').trim();
+  if (h === 'ai') return 'openclaw';
   const found = ROUTES.find(r => r.id === h);
   return found ? found.id : 'dashboard';
 }
@@ -165,8 +165,7 @@ function setActiveRoute(route){
 
   // hooks
   if (route === 'dashboard') refreshStatus();
-  if (route === 'openclaw') refreshOpenClaw();
-  if (route === 'ai') loadAIConfig();
+  if (route === 'openclaw') { refreshOpenClaw(); loadAIConfig(); }
   if (route === 'messaging') loadMessagingConfig();
   if (route === 'trading') refreshTrading();
   if (route === 'plugins') refreshPlugins();
