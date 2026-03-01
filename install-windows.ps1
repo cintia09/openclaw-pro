@@ -3036,6 +3036,22 @@ function Main {
                 if (-not $choice) { $choice = '2' }
             }
 
+            if ($choice -eq '2' -or $choice -eq '3') {
+                Write-Host ""
+                if ($choice -eq '3') {
+                    Write-Host "  ⚠️  高风险操作：将删除旧容器 + 配置 + home-data（不可恢复）" -ForegroundColor Yellow
+                } else {
+                    Write-Host "  ⚠️  将删除并重建旧容器（配置与 home-data 保留）" -ForegroundColor Yellow
+                }
+                Write-Host "  请输入 YES 确认继续: " -NoNewline -ForegroundColor White
+                $confirmReinstall = (Read-Host).Trim()
+                if ($confirmReinstall -ne 'YES') {
+                    Write-Host ""
+                    Write-Host "  未输入 YES，已取消本次操作。" -ForegroundColor Yellow
+                    return
+                }
+            }
+
             if ($choice -eq '1') {
                 # 保留旧容器，生成新容器名和独立数据目录
                 $idx = 2
