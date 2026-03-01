@@ -635,9 +635,34 @@ app.get('/api/update/check', async (req, res) => {
         // 仅当 release 版本有变化时，才需要展示“完整更新”或“热更新”提示
         result.requiresFullUpdate = !!hasUpdate && (remoteHash !== localHash);
       } else if (remoteHash && !localHash) {
-        // 缺少本地 hash：仅在 release 版本确实变化时再提示完整更新
-        result.dockerfileChanged = !!hasUpdate;
-        result.requiresFullUpdate = !!hasUpdate;
+        // 缺少本地 hash：尝试用“当前版本 tag 的 Dockerfile”进行对比，避免误报完整更新
+        let currentRefHash = '';
+        const currentRefs = [];
+        if (currentVersion) currentRefs.push(currentVersion);
+        const currentNormTag = normalizeVersionTag(currentVersion);
+        if (currentNormTag && !currentRefs.includes(currentNormTag)) currentRefs.push(currentNormTag);
+
+        for (const ref of currentRefs) {
+          try {
+            const curResp = await fetchWithFallback(`${GITHUB_RAW_BASE}/${ref}/Dockerfile`, {
+              headers: { 'User-Agent': 'openclaw-pro' },
+              timeout: 10000
+            });
+            if (!curResp.ok) continue;
+            const curDockerfile = await curResp.text();
+            currentRefHash = crypto.createHash('sha256').update(curDockerfile).digest('hex');
+            break;
+          } catch {}
+        }
+
+        if (currentRefHash) {
+          result.dockerfileChanged = remoteHash !== currentRefHash;
+          result.requiresFullUpdate = !!hasUpdate && (remoteHash !== currentRefHash);
+        } else {
+          // 无法确定底层是否变更：不强制完整更新，保留热更新入口
+          result.dockerfileChanged = false;
+          result.requiresFullUpdate = false;
+        }
       } else {
         // 无法比较 Dockerfile：不强制完整更新
         result.dockerfileChanged = false;
