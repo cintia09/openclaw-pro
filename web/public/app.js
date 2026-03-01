@@ -170,6 +170,7 @@ function setActiveRoute(route){
   if (route === 'trading') refreshTrading();
   if (route === 'plugins') refreshPlugins();
   if (route === 'terminal') terminalConnect();
+  if (route !== 'terminal') terminalDisconnect();
   if (route === 'browser') loadBrowserFrame();
   if (route === 'settings') { loadSttConfig(); bindSttVisibility(); loadBrowserSettings(); checkForUpdate(); }
   if (route === 'logs') refreshLogs();
@@ -1023,6 +1024,12 @@ async function terminalConnect(){
     $('term-state').textContent = '连接错误';
     termAppendText('\n[terminal] 连接错误。\n');
     termWsToken = null;
+    api('/api/status').then((s) => {
+      const reason = s?.terminal?.reason;
+      if (reason) {
+        termAppendText(`[terminal] 后端状态: ${reason}\n`);
+      }
+    }).catch(() => {});
   };
 
   termWs.onmessage = (ev)=>{
@@ -1043,11 +1050,6 @@ async function terminalConnect(){
 
 $('btn-term-clear').addEventListener('click', ()=>{ $('terminal').innerHTML=''; });
 bindTerminalInteraction();
-
-// clean ws when leaving
-setInterval(()=>{
-  if (!$('page-terminal').classList.contains('active')) terminalDisconnect();
-}, 1000);
 
 // ------------------------
 // Logs (poll)
