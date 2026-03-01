@@ -4480,7 +4480,7 @@ function Main {
                         }
                         Write-Host ""
                         $loadTimer.Stop()
-                        $loadOutput = Receive-Job $loadJob
+                        $loadOutput = Receive-Job $loadJob -ErrorAction SilentlyContinue 2>&1
                         Remove-Job $loadJob -Force
                         $totalLoadSec = [math]::Floor($loadTimer.Elapsed.TotalSeconds)
 
@@ -4527,8 +4527,13 @@ function Main {
                         $releaseRecoverReason = "download"
                     }
                 } catch {
-                    if (-not $releaseRecoverReason) { $releaseRecoverReason = "download" }
-                    Write-Log "Recovery Release download failed: $_"
+                    if (-not $releaseRecoverReason) {
+                        if ($recoverDownloadOK) { $releaseRecoverReason = "load" } else { $releaseRecoverReason = "download" }
+                    }
+                    Write-Log "Recovery Release step failed: $_"
+                    if ($releaseRecoverReason -eq "load") {
+                        Write-Warn "Release 镜像加载阶段异常，将尝试 GHCR 回退"
+                    }
                 }
 
                 # 恢复方式 2: GHCR 拉取
