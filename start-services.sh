@@ -250,7 +250,7 @@ start_web_panel() {
 
 web_is_healthy() {
     local web_code
-    web_code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/ 2>/dev/null)
+    web_code=$(curl -sS --connect-timeout 2 --max-time 4 -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/ 2>/dev/null)
     if [ "$web_code" = "200" ] || [ "$web_code" = "302" ] || [ "$web_code" = "401" ]; then
         return 0
     fi
@@ -260,7 +260,7 @@ web_is_healthy() {
 gateway_is_healthy() {
     # 优先用健康检查接口判断（进程存在但卡死也能识别）
     local code
-    code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:18789/health 2>/dev/null)
+    code=$(curl -sS --connect-timeout 2 --max-time 4 -o /dev/null -w "%{http_code}" http://127.0.0.1:18789/health 2>/dev/null)
     if [ "$code" = "200" ] || [ "$code" = "401" ] || [ "$code" = "403" ]; then
         return 0
     fi
@@ -301,7 +301,7 @@ start_web_panel
 
 # 等待 Web 面板就绪（仅用于日志诊断，不阻塞启动）
 for i in 1 2 3 4 5 6 7 8 9 10; do
-    web_code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/ 2>/dev/null)
+    web_code=$(curl -sS --connect-timeout 2 --max-time 4 -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/ 2>/dev/null)
     if [ "$web_code" = "200" ] || [ "$web_code" = "302" ] || [ "$web_code" = "401" ]; then
         echo "[start-services] Web panel healthy (attempt $i, code=$web_code)"
         break
