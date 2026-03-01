@@ -358,6 +358,8 @@ button, input, select, textarea{font-family:inherit}
 .term-date{color:rgba(148,163,184,.70)}
 .term-warn{color:#fbbf24}
 .term-error{color:#fb7185}
+.term-info{color:#86efac}
+.term-cmd{color:#93c5fd}
 
 /* Toast */
 .toast{

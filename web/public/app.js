@@ -70,6 +70,49 @@ let toastTimer = null;
 function escapeHtml(s){
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+
+function colorizeLine(rawLine){
+  const line = String(rawLine ?? '');
+  const dateLike = /^\s*(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)/;
+  let safe = escapeHtml(line);
+
+  if (/^\s*(\$|#)\s+/.test(line)) {
+    safe = `<span class="term-cmd">${safe}</span>`;
+  } else if (/\b(ERROR|Error|ERR|failed|失败|异常|fatal)\b/.test(line)) {
+    safe = `<span class="term-error">${safe}</span>`;
+  } else if (/\b(WARN|Warning|timeout|超时|占用|冲突)\b/i.test(line)) {
+    safe = `<span class="term-warn">${safe}</span>`;
+  } else if (/\b(INFO|started|listening|connected|完成|成功|已启动)\b/i.test(line)) {
+    safe = `<span class="term-info">${safe}</span>`;
+  }
+
+  const m = line.match(dateLike);
+  if (m) {
+    const prefix = escapeHtml(m[1]);
+    safe = safe.replace(prefix, `<span class="term-date">${prefix}</span>`);
+  }
+
+  if (!line) safe = '&nbsp;';
+  return `<span class="term-line">${safe}</span>`;
+}
+
+function appendColored(el, text, maxLines = 5000, autoscroll = true){
+  if (!el) return;
+  const html = String(text ?? '').split('\n').map(colorizeLine).join('');
+  el.insertAdjacentHTML('beforeend', html);
+  const nodes = el.querySelectorAll('.term-line');
+  if (nodes.length > maxLines) {
+    for (let i = 0; i < nodes.length - maxLines; i++) nodes[i].remove();
+  }
+  if (autoscroll) el.scrollTop = el.scrollHeight;
+}
+
+function setColored(el, text, maxLines = 5000, autoscroll = true){
+  if (!el) return;
+  el.innerHTML = '';
+  appendColored(el, text, maxLines, autoscroll);
+}
+
 function toast(title, detail=''){
   const old = q('.toast');
   if (old) old.remove();
@@ -446,8 +489,7 @@ let ocPollTimer = null;
 function appendOcLogLine(line){
   const logEl = $('oc-log');
   if (!logEl) return;
-  logEl.textContent += `${line}\n`;
-  logEl.scrollTop = logEl.scrollHeight;
+  appendColored(logEl, `${line}\n`, 6000, true);
 }
 
 async function refreshOpenClaw(){
@@ -467,7 +509,7 @@ async function pollTask(taskId){
   if (ocPollTimer) clearInterval(ocPollTimer);
   const logEl = $('oc-log');
   if (!logEl) return;
-  logEl.textContent = '';
+  logEl.innerHTML = '';
 
   let lastSeq = 0;
 
@@ -476,10 +518,10 @@ async function pollTask(taskId){
     if (!st || st.error) return;
 
     if (st.delta) {
-      logEl.textContent += st.delta;
+      appendColored(logEl, st.delta, 6000, true);
     } else if (!lastSeq && st.log) {
       // First render fallback
-      logEl.textContent = st.log;
+      setColored(logEl, st.log, 6000, true);
     }
     lastSeq = Number(st.seq || lastSeq || 0);
     logEl.scrollTop = logEl.scrollHeight;
@@ -753,23 +795,7 @@ let termWs = null;
 
 function termAppendText(text){
   const el = $('terminal');
-  const chunks = String(text || '').split('\n');
-  const html = chunks
-    .filter(x => x !== undefined && x !== null)
-    .map(l => `<span class="term-line">${escapeHtml(l)}${l === '' ? '&nbsp;' : ''}</span>`)
-    .join('');
-
-  el.insertAdjacentHTML('beforeend', html);
-
-  const maxLines = 4000;
-  const nodes = el.querySelectorAll('.term-line');
-  if (nodes.length > maxLines) {
-    for (let i = 0; i < nodes.length - maxLines; i++) nodes[i].remove();
-  }
-
-  if ($('term-autoscroll').checked) {
-    el.scrollTop = el.scrollHeight;
-  }
+  appendColored(el, text, 5000, !!$('term-autoscroll')?.checked);
 }
 
 function terminalDisconnect(){
@@ -852,7 +878,7 @@ let logsTimer = null;
 async function refreshLogs(){
   const d = await api('/api/logs?lines=400');
   if (d.error) return;
-  $('log-viewer').textContent = d.logs || '';
+  setColored($('log-viewer'), d.logs || '', 6000, true);
   $('log-viewer').scrollTop = $('log-viewer').scrollHeight;
 }
 

@@ -525,6 +525,15 @@ function buildUpgradeRequestText(req, upstreamPath, gatewayPort) {
 
 app.use(requireAuthPage);
 
+app.use((req, res, next) => {
+  if (req.method === 'GET' && /\.(html|js|css)$/i.test(req.path || '')) {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+  }
+  next();
+});
+
 app.get('/gateway', (req, res) => {
   if (!isAuthenticated(req)) return res.redirect('/login.html');
   res.redirect('/gateway-proxy/');
