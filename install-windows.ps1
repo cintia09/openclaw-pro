@@ -3092,6 +3092,7 @@ function Main {
                 }
 
                 if ($downloadOK) {
+                    try { "$tagText|$script:imageEdition" | Set-Content -Path "$imageTar.tag" -Force -ErrorAction SilentlyContinue } catch { }
                         Write-OK "镜像下载完成"
                         $loadSizeText = "未知大小"
                         if (Test-Path $imageTar) {
@@ -3846,6 +3847,7 @@ function Main {
                                 }
                                 Write-Host ""
                                 if ((Test-Path $recoverTar) -and (Get-Item $recoverTar).Length -gt 50MB) {
+                                    try { "$recoverTag|$script:imageEdition" | Set-Content -Path "$recoverTagFile" -Force -ErrorAction SilentlyContinue } catch { }
                                     $recoverDownloadOK = $true
                                     break
                                 }
@@ -3855,6 +3857,7 @@ function Main {
                     } # end if (-not $recoverDownloadOK)
 
                     if ($recoverDownloadOK) {
+                        try { "$recoverTag|$script:imageEdition" | Set-Content -Path "$recoverTagFile" -Force -ErrorAction SilentlyContinue } catch { }
                         Write-OK "镜像下载完成"
                         $recoverLoadSizeText = "未知大小"
                         if (Test-Path $recoverTar) {
