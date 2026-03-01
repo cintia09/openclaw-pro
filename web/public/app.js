@@ -386,7 +386,7 @@ $('btn-refresh-status').addEventListener('click', async ()=>{
     btn.textContent = oldText;
   }
 });
-$('btn-restart-gateway').addEventListener('click', async ()=>{
+$('btn-restart-gateway')?.addEventListener('click', async ()=>{
   const r = await api('/api/restart', { method:'POST' });
   if (r.success) {
     toast('已触发重启', r.message || 'Gateway 正在重启，请稍候');
