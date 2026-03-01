@@ -1344,7 +1344,7 @@ $('btn-password').addEventListener('click', async ()=>{
   }
 });
 
-$('btn-browser-save').addEventListener('click', async ()=> {
+$('btn-browser-save')?.addEventListener('click', async ()=> {
   const browserEnabled = $('settings-browser-enabled')?.value === 'true';
   const r = await api('/api/docker-config', { method: 'POST', body: { browserEnabled } });
   if (r.success) {
