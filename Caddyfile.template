@@ -1,4 +1,8 @@
 ${GLOBAL_OPTIONS}
+http://${DOMAIN_HTTP} {
+    redir https://${DOMAIN_HTTP}{uri} permanent
+}
+
 ${DOMAIN} {
     ${TLS_BLOCK}
 

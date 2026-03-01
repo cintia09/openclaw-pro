@@ -798,29 +798,28 @@ first_time_setup() {
     CERT_MODE="letsencrypt"
 
     # ============================================
-    # 第一步：确定部署模式（域名/IP/HTTP直连）
+    # 第一步：确定部署模式（仅 HTTPS）
     # ============================================
     echo ""
     echo -e "${BOLD}━━━ 部署模式 ━━━${NC}"
-    echo -e "  ${CYAN}[1]${NC} HTTP 直连（默认，内网/本地测试用）"
-    echo -e "  ${CYAN}[2]${NC} 域名 + Let's Encrypt 自动 HTTPS（推荐公网）"
-    echo -e "  ${CYAN}[3]${NC} IP + 自签名 HTTPS（内网 HTTPS）"
+    echo -e "  ${CYAN}[1]${NC} 域名 + Let's Encrypt 自动 HTTPS（推荐公网）"
+    echo -e "  ${CYAN}[2]${NC} IP + 自签名 HTTPS（默认，内网 HTTPS）"
     local mode_choice=""
-    read -p "$(echo -e "请选择部署模式 [${GREEN}1${NC}/2/3]: ")" mode_choice || true
+    read -p "$(echo -e "请选择部署模式 [1/${GREEN}2${NC}]: ")" mode_choice || true
     echo ""
 
     case "$mode_choice" in
-        2)
+        1)
             read -p "请输入域名（如 git.example.com）: " DOMAIN || true
             if [ -z "$DOMAIN" ]; then
-                warn "未输入域名，回退到 HTTP 直连模式"
-                CERT_MODE=""
+                warn "未输入域名，回退到 IP + 自签名 HTTPS"
+                mode_choice="2"
             else
                 CERT_MODE="letsencrypt"
                 info "模式: 域名 + Let's Encrypt (${DOMAIN})"
             fi
             ;;
-        3)
+        2|*)
             # 自动检测本机 IP（排除 docker/虚拟网卡）
             local local_ip=""
             local_ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
@@ -844,13 +843,10 @@ first_time_setup() {
                 info "模式: IP 自签名 HTTPS (${DOMAIN})"
                 echo -e "  ${YELLOW}访问时浏览器会提示「不安全」，点击「继续访问」即可${NC}"
             else
-                warn "IP 格式无效，回退到 HTTP 直连模式"
-                CERT_MODE=""
+                warn "IP 格式无效，回退到 127.0.0.1 自签名 HTTPS"
+                DOMAIN="127.0.0.1"
+                CERT_MODE="internal"
             fi
-            ;;
-        *)
-            info "模式: HTTP 直连"
-            CERT_MODE=""
             ;;
     esac
 
@@ -883,13 +879,6 @@ first_time_setup() {
         HTTPS_PORT="$PICKED_PORT"
 
         PORT_ARGS="-p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000 -p ${SSH_PORT}:22"
-
-    else
-        # HTTP 直连: GW + Web + SSH
-        ask_port 3000 3001 "Web管理面板" 3000
-        WEB_PORT="$PICKED_PORT"
-
-        PORT_ARGS="-p ${GW_PORT}:18789 -p ${WEB_PORT}:3000 -p ${SSH_PORT}:22"
     fi
 
     echo ""
@@ -1066,11 +1055,7 @@ F2B
     fi
 
     # 显示安装完成摘要
-    if [ -n "$DOMAIN" ]; then
-        show_install_summary "$GW_PORT" "$HTTP_PORT" "$HTTPS_PORT" "$DOMAIN" "$TZ_VAL" "$SSH_PORT" "$CERT_MODE"
-    else
-        show_install_summary "$GW_PORT" "$HTTP_PORT" "$WEB_PORT" "" "$TZ_VAL" "$SSH_PORT" ""
-    fi
+    show_install_summary "$GW_PORT" "$HTTP_PORT" "$HTTPS_PORT" "$DOMAIN" "$TZ_VAL" "$SSH_PORT" "$CERT_MODE"
 
     # 进入容器
     show_command_hint

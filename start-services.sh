@@ -344,6 +344,8 @@ if [ -f "$CONFIG_FILE" ]; then
         echo "[start-services] HTTPS domain configured: $DOMAIN"
         echo "[start-services] Certificate mode: $CERT_MODE"
 
+        DOMAIN_HTTP="$DOMAIN"
+
         # IP 地址需要加 https:// 前缀，Caddy 才会为其启用 HTTPS
         GLOBAL_OPTIONS=""
         if echo "$DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
@@ -354,6 +356,7 @@ if [ -f "$CONFIG_FILE" ]; then
         fi
 
         export DOMAIN
+        export DOMAIN_HTTP
         export GLOBAL_OPTIONS
         if [ "$CERT_MODE" = "internal" ]; then
             TLS_BLOCK="tls internal"
@@ -365,7 +368,7 @@ if [ -f "$CONFIG_FILE" ]; then
             echo "[start-services] Using Let's Encrypt certificate"
         fi
         # 只替换我们定义的三个变量，避免 envsubst 误替换模板中的其他 $ 符号
-        envsubst '${DOMAIN} ${GLOBAL_OPTIONS} ${TLS_BLOCK}' \
+        envsubst '${DOMAIN} ${DOMAIN_HTTP} ${GLOBAL_OPTIONS} ${TLS_BLOCK}' \
             < /etc/caddy/Caddyfile.template > /tmp/Caddyfile
 
         # 验证渲染结果非空
@@ -373,10 +376,11 @@ if [ -f "$CONFIG_FILE" ]; then
             echo "[start-services] ERROR: Caddyfile is empty after envsubst!"
             echo "[start-services] Template content:"
             cat /etc/caddy/Caddyfile.template >> "$LOG_DIR/caddy.log" 2>&1
-            echo "[start-services] Env: DOMAIN=$DOMAIN GLOBAL_OPTIONS=$GLOBAL_OPTIONS TLS_BLOCK=$TLS_BLOCK"
+            echo "[start-services] Env: DOMAIN=$DOMAIN DOMAIN_HTTP=$DOMAIN_HTTP GLOBAL_OPTIONS=$GLOBAL_OPTIONS TLS_BLOCK=$TLS_BLOCK"
             # 直接用 sed 做变量替换作为兜底
             echo "[start-services] Falling back to sed-based substitution..."
             sed -e "s|\${DOMAIN}|${DOMAIN}|g" \
+                -e "s|\${DOMAIN_HTTP}|${DOMAIN_HTTP}|g" \
                 -e "s|\${TLS_BLOCK}|${TLS_BLOCK}|g" \
                 -e "s|\${GLOBAL_OPTIONS}|${GLOBAL_OPTIONS}|g" \
                 /etc/caddy/Caddyfile.template > /tmp/Caddyfile

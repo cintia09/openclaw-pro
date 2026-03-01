@@ -1590,9 +1590,9 @@ function Get-DeployConfig {
     Write-Host ""
     Write-Host "  💡 输入域名可启用 HTTPS（自动申请 Let's Encrypt 证书）" -ForegroundColor DarkGray
     Write-Host "     需要域名已解析到本机IP，且 80/443 端口可从外网访问" -ForegroundColor DarkGray
-    Write-Host "     留空则使用 HTTP 直连模式（局域网/本机访问）" -ForegroundColor DarkGray
+    Write-Host "     留空将自动使用 IP + 自签名 HTTPS（局域网/本机访问）" -ForegroundColor DarkGray
     Write-Host ""
-    Write-Host "  HTTPS 域名 (可选，留空跳过): " -NoNewline -ForegroundColor White
+    Write-Host "  HTTPS 域名 (可选，留空使用IP自签名HTTPS): " -NoNewline -ForegroundColor White
     $domain = (Read-Host).Trim()
 
     if ($domain -and $domain -match '^[a-zA-Z0-9]([a-zA-Z0-9.\-]*[a-zA-Z0-9])?$') {
@@ -1669,97 +1669,93 @@ function Get-DeployConfig {
                 "-p", "$($config.HttpsPort):443"
             )
         }
-    } elseif ($domain) {
-        Write-Warn "域名格式无效，将使用 HTTP 直连模式"
-        $config.Domain = ""
     } else {
-        # 域名为空 — 提供 IP 自签名 HTTPS 选项
+        if ($domain) {
+            Write-Warn "域名格式无效，将自动使用 IP 自签名 HTTPS"
+        }
+
+        # 域名为空或无效 — 自动启用 IP 自签名 HTTPS
         Write-Host ""
-        Write-Host "  🔒 是否启用 HTTPS（自签证书 + 本机 IP）？" -ForegroundColor White
+        Write-Host "  🔒 将启用 HTTPS（自签证书 + 本机 IP）" -ForegroundColor White
         Write-Host "     无需域名，Caddy 自动为本机 IP 生成自签名证书" -ForegroundColor DarkGray
         Write-Host "     浏览器会提示「不安全」，点击「继续访问」即可" -ForegroundColor DarkGray
-        Write-Host ""
-        Write-Host "     [1] 不需要，使用 HTTP 直连" -ForegroundColor Gray
-        Write-Host "     [2] 启用 IP 自签名 HTTPS（默认，推荐）" -ForegroundColor Gray
-        Write-Host ""
-        Write-Host "  输入选择 [1/2，默认2]: " -NoNewline -ForegroundColor White
-        $ipHttpsChoice = (Read-Host).Trim()
-        if (-not $ipHttpsChoice -or $ipHttpsChoice -eq '2') {
-            # 获取本机局域网 IP（排除虚拟网卡：WSL, Docker, Hyper-V, VPN 等）
-            $localIp = ""
+        # 获取本机局域网 IP（排除虚拟网卡：WSL, Docker, Hyper-V, VPN 等）
+        $localIp = ""
+        try {
+            $virtualKeywords = @('vEthernet', 'WSL', 'Docker', 'Hyper-V', 'VirtualBox', 'VMware', 'Loopback', 'Bluetooth')
+            $allAdapters = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' }
+            if (-not $allAdapters) {
+                # -Physical 不可用时回退：按名称排除虚拟网卡
+                $allAdapters = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' } | Where-Object {
+                    $n = $_.Name + ' ' + $_.InterfaceDescription
+                    $isVirtual = $false
+                    foreach ($kw in $virtualKeywords) { if ($n -match $kw) { $isVirtual = $true; break } }
+                    -not $isVirtual
+                }
+            }
+            if ($allAdapters) {
+                $localIp = ($allAdapters | ForEach-Object {
+                    Get-NetIPAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
+                } | Where-Object {
+                    $_.IPAddress -ne '127.0.0.1' -and
+                    $_.IPAddress -notmatch '^169\.254\.' -and   # APIPA
+                    $_.PrefixOrigin -ne 'WellKnown'
+                } | Select-Object -First 1).IPAddress
+            }
+        } catch { }
+        # 回退方案：排除常见虚拟网段
+        if (-not $localIp) {
             try {
-                $virtualKeywords = @('vEthernet', 'WSL', 'Docker', 'Hyper-V', 'VirtualBox', 'VMware', 'Loopback', 'Bluetooth')
-                $allAdapters = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' }
-                if (-not $allAdapters) {
-                    # -Physical 不可用时回退：按名称排除虚拟网卡
-                    $allAdapters = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' } | Where-Object {
-                        $n = $_.Name + ' ' + $_.InterfaceDescription
-                        $isVirtual = $false
-                        foreach ($kw in $virtualKeywords) { if ($n -match $kw) { $isVirtual = $true; break } }
-                        -not $isVirtual
-                    }
-                }
-                if ($allAdapters) {
-                    $localIp = ($allAdapters | ForEach-Object {
-                        Get-NetIPAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
-                    } | Where-Object {
-                        $_.IPAddress -ne '127.0.0.1' -and
-                        $_.IPAddress -notmatch '^169\.254\.' -and   # APIPA
-                        $_.PrefixOrigin -ne 'WellKnown'
-                    } | Select-Object -First 1).IPAddress
-                }
+                $localIp = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {
+                    $_.IPAddress -ne '127.0.0.1' -and
+                    $_.IPAddress -notmatch '^169\.254\.' -and
+                    $_.IPAddress -notmatch '^172\.(1[6-9]|2\d|3[01])\.' -and  # Docker/WSL 常用网段
+                    $_.PrefixOrigin -ne 'WellKnown'
+                } | Select-Object -First 1).IPAddress
             } catch { }
-            # 回退方案：排除常见虚拟网段
-            if (-not $localIp) {
-                try {
-                    $localIp = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {
-                        $_.IPAddress -ne '127.0.0.1' -and
-                        $_.IPAddress -notmatch '^169\.254\.' -and
-                        $_.IPAddress -notmatch '^172\.(1[6-9]|2\d|3[01])\.' -and  # Docker/WSL 常用网段
-                        $_.PrefixOrigin -ne 'WellKnown'
-                    } | Select-Object -First 1).IPAddress
-                } catch { }
-            }
-            # 最终回退
-            if (-not $localIp) {
-                try {
-                    $localIp = ([System.Net.Dns]::GetHostAddresses([System.Net.Dns]::GetHostName()) | Where-Object {
-                        $_.AddressFamily -eq 'InterNetwork' -and $_.ToString() -ne '127.0.0.1' -and $_.ToString() -notmatch '^172\.(1[6-9]|2\d|3[01])\.'
-                    } | Select-Object -First 1).ToString()
-                } catch { }
-            }
-            if ($localIp) {
-                Write-Host "  检测到本机 IP: $localIp" -ForegroundColor Cyan
-                # Prompt for IP confirmation; accept Enter or 'y' to confirm, or allow entering a new IP.
-                $chosenIp = $null
-                while ($true) {
-                    Write-Host "  使用此 IP？按回车或输入 'y' 确认，或输入其他 IP: " -NoNewline -ForegroundColor White
-                    $customIp = (Read-Host).Trim()
-                    if (-not $customIp -or $customIp.ToLower() -eq 'y') { $chosenIp = $localIp; break }
-                    if ($customIp -match '^\d{1,3}(?:\.\d{1,3}){3}$') {
-                        $valid = $true
-                        foreach ($octet in ($customIp -split '\.')) { if ([int]$octet -lt 0 -or [int]$octet -gt 255) { $valid = $false } }
-                        if ($valid) { $chosenIp = $customIp; break } else { Write-Warn "IP 段必须在 0-255 之间，请重试" }
-                    } else {
-                        Write-Warn "输入不是有效的 IP 地址，请重试，或按回车确认使用 $localIp"
-                    }
+        }
+        # 最终回退
+        if (-not $localIp) {
+            try {
+                $localIp = ([System.Net.Dns]::GetHostAddresses([System.Net.Dns]::GetHostName()) | Where-Object {
+                    $_.AddressFamily -eq 'InterNetwork' -and $_.ToString() -ne '127.0.0.1' -and $_.ToString() -notmatch '^172\.(1[6-9]|2\d|3[01])\.'
+                } | Select-Object -First 1).ToString()
+            } catch { }
+        }
+        if ($localIp) {
+            Write-Host "  检测到本机 IP: $localIp" -ForegroundColor Cyan
+            # Prompt for IP confirmation; accept Enter or 'y' to confirm, or allow entering a new IP.
+            $chosenIp = $null
+            while ($true) {
+                Write-Host "  使用此 IP？按回车或输入 'y' 确认，或输入其他 IP: " -NoNewline -ForegroundColor White
+                $customIp = (Read-Host).Trim()
+                if (-not $customIp -or $customIp.ToLower() -eq 'y') { $chosenIp = $localIp; break }
+                if ($customIp -match '^\d{1,3}(?:\.\d{1,3}){3}$') {
+                    $valid = $true
+                    foreach ($octet in ($customIp -split '\.')) { if ([int]$octet -lt 0 -or [int]$octet -gt 255) { $valid = $false } }
+                    if ($valid) { $chosenIp = $customIp; break } else { Write-Warn "IP 段必须在 0-255 之间，请重试" }
+                } else {
+                    Write-Warn "输入不是有效的 IP 地址，请重试，或按回车确认使用 $localIp"
                 }
-                $localIp = $chosenIp
-                $config.Domain = $localIp
+            }
+            $localIp = $chosenIp
+            $config.Domain = $localIp
+            $config.HttpsEnabled = $true
+            $config.CertMode = "internal"
+            Write-OK "已启用 IP 自签名 HTTPS: $localIp"
+        } else {
+            Write-Host "  请输入本机 IP 地址: " -NoNewline -ForegroundColor White
+            $manualIp = (Read-Host).Trim()
+            if ($manualIp -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') {
+                $config.Domain = $manualIp
                 $config.HttpsEnabled = $true
                 $config.CertMode = "internal"
-                Write-OK "已启用 IP 自签名 HTTPS: $localIp"
+                Write-OK "已启用 IP 自签名 HTTPS: $manualIp"
             } else {
-                Write-Host "  请输入本机 IP 地址: " -NoNewline -ForegroundColor White
-                $manualIp = (Read-Host).Trim()
-                if ($manualIp -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') {
-                    $config.Domain = $manualIp
-                    $config.HttpsEnabled = $true
-                    $config.CertMode = "internal"
-                    Write-OK "已启用 IP 自签名 HTTPS: $manualIp"
-                } else {
-                    Write-Warn "IP 格式无效，将使用 HTTP 直连模式"
-                }
+                $config.Domain = '127.0.0.1'
+                $config.HttpsEnabled = $true
+                $config.CertMode = "internal"
+                Write-Warn "IP 格式无效，已回退到 127.0.0.1 自签名 HTTPS"
             }
         }
 
@@ -1793,17 +1789,7 @@ function Get-DeployConfig {
     }
 
     if (-not $config.HttpsEnabled) {
-        # HTTP 直连模式: Gateway + Web 面板直接暴露
-        $webPort = Find-AvailablePort -PreferredPort ([int]$WEB_PANEL_PORT) -RangeStart 3001 -RangeEnd 3099
-        if ($webPort -ne [int]$WEB_PANEL_PORT) {
-            Write-Warn "端口 $WEB_PANEL_PORT 已被占用，Web面板使用端口 $webPort"
-        }
-        $config.WebPort = $webPort
-
-        $config.PortArgs = @(
-            "-p", "$($config.GatewayPort):18789",
-            "-p", "$($config.WebPort):3000"
-        )
+        throw "部署配置错误：HTTPS 未启用。请重新运行安装器。"
     }
 
     # SSH 端口（所有模式通用）
@@ -1819,45 +1805,34 @@ function Get-DeployConfig {
     Write-Host ""
     Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray
     Write-Host "  📝 端口映射:" -ForegroundColor White
-    if ($config.HttpsEnabled) {
-        if ($config.CertMode -eq 'letsencrypt') {
-            Write-Host "     HTTP   $($config.HttpPort) → 容器 80  (证书验证+跳转)" -ForegroundColor Gray
-        }
-        Write-Host "     HTTPS  $($config.HttpsPort) → 容器 443 (主入口)" -ForegroundColor Gray
-        Write-Host "     SSH    $($config.SshPort) → 容器 22  (远程登录)" -ForegroundColor Gray
-        if ($config.CertMode -eq "internal") {
-            Write-Host "     证书: 自签证书（Caddy Internal）" -ForegroundColor Yellow
-        } else {
-            Write-Host "     证书: Let's Encrypt 公网证书" -ForegroundColor Gray
-        }
-        Write-Host "     Gateway/Web 面板: 仅容器内部访问（不占宿主机端口）" -ForegroundColor Gray
-        $isIpDomain = ($config.Domain -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')
-        if ($isIpDomain) {
-            Write-Host "     IP: $($config.Domain) (自签名 HTTPS)" -ForegroundColor Cyan
-            Write-Host "     ⚠️  浏览器会提示不安全，点击「继续访问」即可" -ForegroundColor Yellow
-        } else {
-            Write-Host "     域名: $($config.Domain)" -ForegroundColor Cyan
-        }
+    if ($config.CertMode -eq 'letsencrypt') {
+        Write-Host "     HTTP   $($config.HttpPort) → 容器 80  (证书验证+跳转)" -ForegroundColor Gray
+    }
+    Write-Host "     HTTPS  $($config.HttpsPort) → 容器 443 (主入口)" -ForegroundColor Gray
+    Write-Host "     SSH    $($config.SshPort) → 容器 22  (远程登录)" -ForegroundColor Gray
+    if ($config.CertMode -eq "internal") {
+        Write-Host "     证书: 自签证书（Caddy Internal）" -ForegroundColor Yellow
     } else {
-        Write-Host "     Gateway $($config.GatewayPort) → 容器 18789" -ForegroundColor Gray
-        Write-Host "     Web面板 $($config.WebPort) → 容器 3000" -ForegroundColor Gray
-        Write-Host "     SSH    $($config.SshPort) → 容器 22  (远程登录)" -ForegroundColor Gray
+        Write-Host "     证书: Let's Encrypt 公网证书" -ForegroundColor Gray
+    }
+    Write-Host "     Gateway/Web 面板: 仅容器内部访问（不占宿主机端口）" -ForegroundColor Gray
+    $isIpDomain = ($config.Domain -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')
+    if ($isIpDomain) {
+        Write-Host "     IP: $($config.Domain) (自签名 HTTPS)" -ForegroundColor Cyan
+        Write-Host "     ⚠️  浏览器会提示不安全，点击「继续访问」即可" -ForegroundColor Yellow
+    } else {
+        Write-Host "     域名: $($config.Domain)" -ForegroundColor Cyan
     }
     Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray
     Write-Host ""
 
     # 统一防火墙策略（由用户选择是否自动开放）
     $fwPortList = @()
-    if ($config.HttpsEnabled) {
-        # Only include HTTP port for firewall when using Let's Encrypt (ACME) mode
-        if ($config.CertMode -eq 'letsencrypt') {
-            if ($config.HttpPort -and $config.HttpPort -gt 0) { $fwPortList += $config.HttpPort }
-        }
-        if ($config.HttpsPort -and $config.HttpsPort -gt 0) { $fwPortList += $config.HttpsPort }
-    } else {
-        if ($config.GatewayPort -and $config.GatewayPort -gt 0) { $fwPortList += $config.GatewayPort }
-        if ($config.WebPort -and $config.WebPort -gt 0) { $fwPortList += $config.WebPort }
+    # Only include HTTP port for Let's Encrypt (ACME) mode
+    if ($config.CertMode -eq 'letsencrypt') {
+        if ($config.HttpPort -and $config.HttpPort -gt 0) { $fwPortList += $config.HttpPort }
     }
+    if ($config.HttpsPort -and $config.HttpsPort -gt 0) { $fwPortList += $config.HttpsPort }
     if ($config.SshPort -and $config.SshPort -gt 0) { $fwPortList += $config.SshPort }
     $fwPortsText = ($fwPortList | Sort-Object -Unique) -join ','
     $defaultAutoOpen = "Y"
@@ -1901,35 +1876,25 @@ function Write-LaunchAccessSummary {
     Write-Host "  🚀 OpenClaw Pro 容器已启动" -ForegroundColor Cyan
     Write-Host ""
 
-    if ($Domain) {
-        Write-Host "  📝 端口映射:" -ForegroundColor White
-        if ($CertMode -eq "letsencrypt") {
-            Write-Host "     HTTP   ${HttpPort} → 证书验证 + 跳转HTTPS" -ForegroundColor Gray
-        }
-        Write-Host "     HTTPS  ${HttpsPort} → 主入口（Caddy 反代）" -ForegroundColor Gray
-        Write-Host "     SSH    ${SshPort} → 远程登录（密钥认证）" -ForegroundColor Gray
-        if ($CertMode -eq "internal") {
-            Write-Host "     证书模式: 自签证书（局域网测试）" -ForegroundColor Yellow
-            Write-Host "     ⚠️  首次访问浏览器会提示「不安全」，点击「继续访问」/「高级」即可" -ForegroundColor Yellow
-        } else {
-            Write-Host "     证书模式: Let's Encrypt 公网证书" -ForegroundColor Gray
-        }
-        Write-Host "     Gateway/Web 面板 → 仅容器内部（不占宿主机端口）" -ForegroundColor Gray
-        Write-Host ""
-        Write-Host "  🌐 访问地址:" -ForegroundColor White
-        $httpsUrl = if ($HttpsPort -eq 443) { "https://${Domain}" } else { "https://${Domain}:${HttpsPort}" }
-        Write-Host "     🔗 主站:     $httpsUrl" -ForegroundColor Cyan
-        Write-Host "     🔗 管理面板: ${httpsUrl}/admin" -ForegroundColor Cyan
-    } else {
-        Write-Host "  📝 端口映射:" -ForegroundColor White
-        Write-Host "     Gateway ${GatewayPort} → 容器 18789 (API入口)" -ForegroundColor Gray
-        Write-Host "     Web面板 ${PanelPort} → 容器 3000  (管理面板)" -ForegroundColor Gray
-        Write-Host "     SSH    ${SshPort} → 容器 22    (远程登录)" -ForegroundColor Gray
-        Write-Host ""
-        Write-Host "  🌐 访问地址:" -ForegroundColor White
-        Write-Host "     🔗 Gateway:  http://localhost:${GatewayPort}" -ForegroundColor Cyan
-        Write-Host "     🔗 管理面板: http://localhost:${PanelPort}" -ForegroundColor Cyan
+    Write-Host "  📝 端口映射:" -ForegroundColor White
+    if ($CertMode -eq "letsencrypt") {
+        Write-Host "     HTTP   ${HttpPort} → 证书验证 + 跳转HTTPS" -ForegroundColor Gray
     }
+    Write-Host "     HTTPS  ${HttpsPort} → 主入口（Caddy 反代）" -ForegroundColor Gray
+    Write-Host "     SSH    ${SshPort} → 远程登录（密钥认证）" -ForegroundColor Gray
+    if ($CertMode -eq "internal") {
+        Write-Host "     证书模式: 自签证书（局域网测试）" -ForegroundColor Yellow
+        Write-Host "     ⚠️  首次访问浏览器会提示「不安全」，点击「继续访问」/「高级」即可" -ForegroundColor Yellow
+    } else {
+        Write-Host "     证书模式: Let's Encrypt 公网证书" -ForegroundColor Gray
+    }
+    Write-Host "     Gateway/Web 面板 → 仅容器内部（不占宿主机端口）" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "  🌐 访问地址:" -ForegroundColor White
+    $httpsDomain = if ($Domain) { $Domain } else { "localhost" }
+    $httpsUrl = if ($HttpsPort -eq 443) { "https://${httpsDomain}" } else { "https://${httpsDomain}:${HttpsPort}" }
+    Write-Host "     🔗 主站:     $httpsUrl" -ForegroundColor Cyan
+    Write-Host "     🔗 管理面板: ${httpsUrl}/admin" -ForegroundColor Cyan
     Write-Host "" 
     Write-Host "  ⏳ 访问提示: 服务启动后通常需等待 30-120 秒；首次安装可能需要 3-5 分钟" -ForegroundColor Yellow
     Write-Host "     若暂时无法访问，请稍等后刷新页面" -ForegroundColor DarkGray
@@ -1970,17 +1935,11 @@ function Show-Completion {
 
         # Windows 防火墙提醒（仅实际对外暴露的端口）
         $portList = @()
-        if ($Domain) {
-            # HTTPS 模式: Gateway/Web 绑定 127.0.0.1，只需开放 HTTP/HTTPS
-            if ($CertMode -eq "letsencrypt") {
-                if ($HttpPort -and $HttpPort -gt 0) { $portList += $HttpPort }
-            }
-            if ($HttpsPort -and $HttpsPort -gt 0) { $portList += $HttpsPort }
-        } else {
-            # HTTP 模式: Gateway/Web 直接对外
-            $portList += $GatewayPort
-            $portList += $PanelPort
+        # HTTPS 模式: Gateway/Web 绑定 127.0.0.1，只需开放 HTTP/HTTPS
+        if ($CertMode -eq "letsencrypt") {
+            if ($HttpPort -and $HttpPort -gt 0) { $portList += $HttpPort }
         }
+        if ($HttpsPort -and $HttpsPort -gt 0) { $portList += $HttpsPort }
         if ($SshPort -and $SshPort -gt 0) { $portList += $SshPort }
         if ($portList.Count -gt 0 -and $AutoOpenFirewall) {
             $ports = ($portList | Sort-Object -Unique) -join ','
