@@ -1692,7 +1692,9 @@ function Show-Completion {
         if ($Domain) {
             # HTTPS 模式
             Write-Host "  📝 端口映射:" -ForegroundColor White
-            Write-Host "     HTTP   ${HttpPort} → 证书验证 + 跳转HTTPS" -ForegroundColor Gray
+            if ($CertMode -eq "letsencrypt") {
+                Write-Host "     HTTP   ${HttpPort} → 证书验证 + 跳转HTTPS" -ForegroundColor Gray
+            }
             Write-Host "     HTTPS  ${HttpsPort} → 主入口（Caddy 反代）" -ForegroundColor Gray
             Write-Host "     SSH    ${SshPort} → 远程登录（密钥认证）" -ForegroundColor Gray
             if ($CertMode -eq "internal") {
@@ -1727,7 +1729,9 @@ function Show-Completion {
         $portList = @()
         if ($Domain) {
             # HTTPS 模式: Gateway/Web 绑定 127.0.0.1，只需开放 HTTP/HTTPS
-            if ($HttpPort -and $HttpPort -gt 0) { $portList += $HttpPort }
+            if ($CertMode -eq "letsencrypt") {
+                if ($HttpPort -and $HttpPort -gt 0) { $portList += $HttpPort }
+            }
             if ($HttpsPort -and $HttpsPort -gt 0) { $portList += $HttpsPort }
         } else {
             # HTTP 模式: Gateway/Web 直接对外
@@ -2911,6 +2915,11 @@ function Main {
                             if ($derived) {
                                 $localImageReleaseTag = $derived
                                 Write-Info "根据本地镜像标签推断版本: $localImageReleaseTag"
+                                try {
+                                    $inferConfigDir = Join-Path $homeBaseDir "$tagHomeDataName\.openclaw"
+                                    if (-not (Test-Path $inferConfigDir)) { New-Item -ItemType Directory -Path $inferConfigDir -Force | Out-Null }
+                                    $localImageReleaseTag | Set-Content (Join-Path $inferConfigDir "image-release-tag.txt") -Force
+                                } catch { }
                                 break
                             }
                         }
