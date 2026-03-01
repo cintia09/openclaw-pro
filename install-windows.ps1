@@ -4158,6 +4158,7 @@ function Main {
                     # 强制应用 SSH 安全配置（禁用密码登录，仅允许密钥）
                     # 使用 /etc/ssh/sshd_config.d/99-openclaw-security.conf 覆盖，避免被其他 include 文件反向覆盖
                     & docker exec $containerName bash -lc "mkdir -p /etc/ssh/sshd_config.d && printf '%s\n' 'PermitRootLogin prohibit-password' 'PasswordAuthentication no' 'KbdInteractiveAuthentication no' 'ChallengeResponseAuthentication no' 'PubkeyAuthentication yes' > /etc/ssh/sshd_config.d/99-openclaw-security.conf" 2>$null | Out-Null
+                    & docker exec $containerName bash -lc "chmod 700 /root 2>/dev/null || true" 2>$null | Out-Null
                     & docker exec $containerName bash -lc "if [ -f /etc/ssh/sshd_config ]; then sed -i -E 's|^[#[:space:]]*PermitRootLogin[[:space:]]+.*|PermitRootLogin prohibit-password|' /etc/ssh/sshd_config; sed -i -E 's|^[#[:space:]]*PasswordAuthentication[[:space:]]+.*|PasswordAuthentication no|' /etc/ssh/sshd_config; sed -i -E 's|^[#[:space:]]*KbdInteractiveAuthentication[[:space:]]+.*|KbdInteractiveAuthentication no|' /etc/ssh/sshd_config; sed -i -E 's|^[#[:space:]]*ChallengeResponseAuthentication[[:space:]]+.*|ChallengeResponseAuthentication no|' /etc/ssh/sshd_config; fi" 2>$null | Out-Null
                     & docker exec $containerName bash -lc "mkdir -p /run/sshd; pkill -x sshd >/dev/null 2>&1 || true; (/usr/sbin/sshd >/dev/null 2>&1 || service ssh restart >/dev/null 2>&1 || true)" 2>$null | Out-Null
 
@@ -4197,7 +4198,7 @@ function Main {
                     $injected = $false
                     foreach ($keyFile in $pubKeyCandidates) {
                         if (-not (Test-Path $keyFile)) { continue }
-                        & docker exec $containerName bash -lc "mkdir -p /root/.ssh && chmod 700 /root/.ssh" 2>$null | Out-Null
+                        & docker exec $containerName bash -lc "chmod 700 /root 2>/dev/null || true; mkdir -p /root/.ssh && chmod 700 /root/.ssh" 2>$null | Out-Null
                         & docker cp $keyFile "${containerName}:/root/.ssh/authorized_keys.tmp" 2>$null | Out-Null
                         if ($LASTEXITCODE -ne 0) { continue }
                         & docker exec $containerName bash -lc "cat /root/.ssh/authorized_keys.tmp >> /root/.ssh/authorized_keys && sort -u -o /root/.ssh/authorized_keys /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && rm -f /root/.ssh/authorized_keys.tmp" 2>$null | Out-Null
@@ -4228,7 +4229,7 @@ function Main {
                             }
 
                             if (Test-Path $pubPath) {
-                                & docker exec $containerName bash -lc "mkdir -p /root/.ssh && chmod 700 /root/.ssh" 2>$null | Out-Null
+                                & docker exec $containerName bash -lc "chmod 700 /root 2>/dev/null || true; mkdir -p /root/.ssh && chmod 700 /root/.ssh" 2>$null | Out-Null
                                 & docker cp $pubPath "${containerName}:/root/.ssh/authorized_keys.tmp" 2>$null | Out-Null
                                 if ($LASTEXITCODE -eq 0) {
                                     & docker exec $containerName bash -lc "cat /root/.ssh/authorized_keys.tmp >> /root/.ssh/authorized_keys && sort -u -o /root/.ssh/authorized_keys /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && rm -f /root/.ssh/authorized_keys.tmp" 2>$null | Out-Null
