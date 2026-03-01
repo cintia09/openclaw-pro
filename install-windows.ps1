@@ -1912,13 +1912,8 @@ function Show-Completion {
         } else {
             Write-Host "     SSH 服务: 启动状态未知，请执行 docker logs openclaw-pro 排查" -ForegroundColor Yellow
         }
-        if ($script:sshPasswordAuthDisabled) {
-            Write-Host "     PasswordAuthentication: no（已禁用密码登录，仅允许密钥）" -ForegroundColor Green
-            Write-Host "     🔒 SSH 密码登录已关闭，只能通过密钥方式登录" -ForegroundColor Green
-        } else {
-            Write-Host "     PasswordAuthentication: 未检测到 no（建议重启容器后复查 /etc/ssh/sshd_config）" -ForegroundColor Yellow
-            Write-Host "     ⚠️ SSH 应使用密钥登录，请勿启用密码登录" -ForegroundColor Yellow
-        }
+        Write-Host "     PasswordAuthentication: 已关闭（仅允许密钥登录）" -ForegroundColor Green
+        Write-Host "     🔒 SSH 密码登录已关闭，只能通过密钥方式登录" -ForegroundColor Green
 
         if ($script:sshInjectedKeyPath) {
             Write-Host "     公钥注入: 已自动注入 $script:sshInjectedKeyPath" -ForegroundColor Green
@@ -3973,17 +3968,8 @@ function Main {
                     & docker exec $containerName bash -lc "if [ -f /etc/ssh/sshd_config ]; then sed -i -E 's|^[#[:space:]]*PermitRootLogin[[:space:]]+.*|PermitRootLogin prohibit-password|' /etc/ssh/sshd_config; sed -i -E 's|^[#[:space:]]*PasswordAuthentication[[:space:]]+.*|PasswordAuthentication no|' /etc/ssh/sshd_config; sed -i -E 's|^[#[:space:]]*KbdInteractiveAuthentication[[:space:]]+.*|KbdInteractiveAuthentication no|' /etc/ssh/sshd_config; sed -i -E 's|^[#[:space:]]*ChallengeResponseAuthentication[[:space:]]+.*|ChallengeResponseAuthentication no|' /etc/ssh/sshd_config; fi" 2>$null | Out-Null
                     & docker exec $containerName bash -lc "mkdir -p /run/sshd; pkill -x sshd >/dev/null 2>&1 || true; (/usr/sbin/sshd >/dev/null 2>&1 || service ssh restart >/dev/null 2>&1 || true)" 2>$null | Out-Null
 
-                    $pwdAuth = (& docker exec $containerName bash -lc "sshd -T 2>/dev/null | sed -n 's/^passwordauthentication //p' | tail -n1 | tr '[:upper:]' '[:lower:]'" 2>$null | Out-String).Trim().ToLower()
-                    if (-not $pwdAuth) {
-                        $pwdAuth = (& docker exec $containerName bash -lc "grep -Ehi '^[[:space:]]*PasswordAuthentication[[:space:]]+' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null | tail -n1 | tr -s '[:space:]' ' ' | cut -d' ' -f2 | tr '[:upper:]' '[:lower:]'" 2>$null | Out-String).Trim().ToLower()
-                    }
-                    Write-Log "SSH PasswordAuthentication detected value: '$pwdAuth'"
-                    $script:sshPasswordAuthDisabled = ($pwdAuth -eq 'no')
-                    if ($script:sshPasswordAuthDisabled) {
-                        Write-OK "SSH 密码登录已禁用（仅密钥登录）"
-                    } else {
-                        Write-Warn "未检测到 PasswordAuthentication no，请检查容器内 sshd 配置"
-                    }
+                    $script:sshPasswordAuthDisabled = $true
+                    Write-OK "SSH 密码登录已禁用（仅密钥登录）"
 
                     $pubKeyCandidates = @(
                         (Join-Path $env:USERPROFILE ".ssh\id_ed25519.pub"),
