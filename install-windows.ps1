@@ -1138,6 +1138,43 @@ function Download-Robust {
     $totalChunks = [int][math]::Ceiling($ExpectedSize / $chunkSize)
     $totalMB = [math]::Round($ExpectedSize / 1MB, 1)
 
+    # 锁定单一下载源，避免分块重试时跨代理混用导致文件拼接不一致
+    $selectedUrl = $null
+    foreach ($u in $Urls) {
+        try {
+            $targetUrl = $u
+            for ($redir = 0; $redir -lt 3; $redir++) {
+                $req = [System.Net.HttpWebRequest]::Create($targetUrl)
+                $req.Method = "HEAD"
+                $req.AllowAutoRedirect = $false
+                $req.Timeout = 8000
+                $req.ReadWriteTimeout = 8000
+                $req.UserAgent = "OpenClaw-Installer/1.0"
+                $req.KeepAlive = $false
+                $resp = $req.GetResponse()
+                if ($resp -is [System.Net.HttpWebResponse]) {
+                    $code = [int]$resp.StatusCode
+                    $loc = $resp.Headers["Location"]
+                    if ($code -ge 300 -and $code -lt 400 -and $loc) {
+                        $resp.Close()
+                        $targetUrl = $loc
+                        continue
+                    }
+                }
+                $resp.Close()
+                $selectedUrl = $u
+                break
+            }
+        } catch { }
+        if ($selectedUrl) { break }
+    }
+    if (-not $selectedUrl) { $selectedUrl = $Urls[0] }
+    if ($Urls.Count -gt 1 -and $selectedUrl) {
+        $shortSelected = if ($selectedUrl.Length -gt 70) { $selectedUrl.Substring(0, 67) + "..." } else { $selectedUrl }
+        Write-Info "已锁定下载源: $shortSelected"
+    }
+    $Urls = @($selectedUrl)
+
     # -- 进度文件：记录已完成的块号（支持跨次续传）--
     # 格式: 第一行 "SIZE:<ExpectedSize>" 用于校验版本，后续每行一个块号
     $progressFile = "${OutFile}.progress"
@@ -3463,23 +3500,23 @@ function Main {
                     Write-Info "发现预构建镜像 ($tagText, ${imageSizeMB}MB)"
                     Write-Info "正在下载... (无需从 Docker Hub 拉取)"
 
-                    # 多线程分块下载 — 16线程并行，每块 2MB，每块最多重试20次
+                    # 多线程分块下载 — 8线程并行，每块 2MB，每块最多重试20次
                     $downloadOK = Download-Robust `
                         -Urls $downloadUrls `
                         -OutFile $imageTar `
                         -ExpectedSize $expectedSize `
                         -ChunkSizeMB 2 `
-                        -Threads 16 `
+                        -Threads 8 `
                         -RetryPerChunk 20
 
                     if (-not $downloadOK) {
-                        Write-Warn "首轮 16 线程下载未完成，自动降级重试（8线程、1MB块）..."
+                        Write-Warn "首轮 8 线程下载未完成，自动降级重试（4线程、1MB块）..."
                         $downloadOK = Download-Robust `
                             -Urls $downloadUrls `
                             -OutFile $imageTar `
                             -ExpectedSize $expectedSize `
                             -ChunkSizeMB 1 `
-                            -Threads 8 `
+                            -Threads 4 `
                             -RetryPerChunk 30
                     }
                 }
@@ -4382,22 +4419,22 @@ function Main {
                     $recoverSize = Get-RemoteFileSize -Urls $recoverUrls
                     if ($recoverSize -gt 0) {
                         $recoverMB = [math]::Round($recoverSize / 1MB, 1)
-                        Write-Info "文件大小: ${recoverMB}MB，开始 16 线程下载..."
+                        Write-Info "文件大小: ${recoverMB}MB，开始 8 线程下载..."
                         $recoverDownloadOK = Download-Robust `
                             -Urls $recoverUrls `
                             -OutFile $recoverTar `
                             -ExpectedSize $recoverSize `
                             -ChunkSizeMB 2 `
-                            -Threads 16 `
+                            -Threads 8 `
                             -RetryPerChunk 20
                         if (-not $recoverDownloadOK) {
-                            Write-Warn "首轮 16 线程下载未完成，自动降级重试（8线程、1MB块）..."
+                            Write-Warn "首轮 8 线程下载未完成，自动降级重试（4线程、1MB块）..."
                             $recoverDownloadOK = Download-Robust `
                                 -Urls $recoverUrls `
                                 -OutFile $recoverTar `
                                 -ExpectedSize $recoverSize `
                                 -ChunkSizeMB 1 `
-                                -Threads 8 `
+                                -Threads 4 `
                                 -RetryPerChunk 30
                         }
                     } else {
@@ -4459,16 +4496,16 @@ function Main {
                                     -OutFile $recoverTar `
                                     -ExpectedSize $recoverSize `
                                     -ChunkSizeMB 2 `
-                                    -Threads 16 `
+                                    -Threads 8 `
                                     -RetryPerChunk 20
                                 if (-not $recoverDownloadOK) {
-                                    Write-Warn "16 线程重试未完成，自动降级重试（8线程、1MB块）..."
+                                    Write-Warn "8 线程重试未完成，自动降级重试（4线程、1MB块）..."
                                     $recoverDownloadOK = Download-Robust `
                                         -Urls $recoverUrls `
                                         -OutFile $recoverTar `
                                         -ExpectedSize $recoverSize `
                                         -ChunkSizeMB 1 `
-                                        -Threads 8 `
+                                        -Threads 4 `
                                         -RetryPerChunk 30
                                 }
                             }
@@ -4591,16 +4628,16 @@ function Main {
                                         -OutFile $recoverTar `
                                         -ExpectedSize $recoverSize `
                                         -ChunkSizeMB 2 `
-                                        -Threads 16 `
+                                        -Threads 8 `
                                         -RetryPerChunk 20
                                     if (-not $recoverDownloadOK) {
-                                        Write-Warn "16 线程重试未完成，自动降级重试（8线程、1MB块）..."
+                                        Write-Warn "8 线程重试未完成，自动降级重试（4线程、1MB块）..."
                                         $recoverDownloadOK = Download-Robust `
                                             -Urls $recoverUrls `
                                             -OutFile $recoverTar `
                                             -ExpectedSize $recoverSize `
                                             -ChunkSizeMB 1 `
-                                            -Threads 8 `
+                                            -Threads 4 `
                                             -RetryPerChunk 30
                                     }
                                 }
