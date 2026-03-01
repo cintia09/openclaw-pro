@@ -6,93 +6,61 @@
 
 ### 一键安装（推荐）
 
-**Linux / macOS：**
+#### Linux / macOS
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.sh | bash
 ```
 
-**Windows（推荐 — 双击 bat 文件）：**
+#### Windows
 
-> 下载仓库后，右键 `install-windows.bat` → **以管理员身份运行**
+优先方式（更稳）：下载仓库后，右键 `install-windows.bat` → **以管理员身份运行**。
 
 或在 **管理员 PowerShell** 中执行：
+
 ```powershell
 irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1 | iex
 ```
 
-> 注意（远程执行默认行为）：通过 `irm | iex` 直接远程执行安装脚本时，安装器会默认启用 ImageOnly 模式——即只会下载并加载 Release 发布的镜像，然后启动容器（不会克隆或下载源码仓库）。
+#### 安装器会自动做什么
 
-如果你需要通过脚本进行完整安装（克隆仓库并执行全部部署步骤），请先把脚本下载为本地文件再运行：
-```powershell
-irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1 -OutFile .\install-windows.ps1
-powershell -ExecutionPolicy Bypass -File .\install-windows.ps1
-```
+- 检测并准备环境（Windows 下自动处理 WSL2 / Ubuntu / Docker）
+- 拉取并部署 Release 镜像（ImageOnly 优先）
+- 自动检查 SSH 状态并关闭 SSH 密码登录（仅密钥登录）
+- 尝试注入公钥（无公钥时自动生成 `id_ed25519` 再注入）
+- 生成 root 初始密码文件（仅用于容器内本地管理）
+- 安装结束后默认进入容器终端（`docker exec -it <container> bash`）
 
-或者下载仓库并使用 `install-windows.bat`（双击运行）将执行完整安装流程。
+> 目录说明：安装目录在当前路径的 `openclaw-pro/`，持久化数据目录在 `openclaw-pro/home-data/`（多实例时为 `home-data-2`、`home-data-3` ...）。
 
-> **提示：** 如果 PowerShell 报 TLS 错误，先执行 `[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12` 再重试。推荐直接用 `.bat` 文件，无需操心兼容问题。
+### 一键升级（推荐）
 
-自动完成：安装 WSL2/Docker → 构建镜像 → 启动配置向导。
+统一方式：**重新执行一键安装脚本**。安装器会自动识别已部署实例并执行升级。
 
-### 一键更新
-
-**Windows（推荐 — 双击 bat 文件）：**
-
-> 双击运行 `update-windows.bat`（自动检测热更新或完整重建）
-
-或在 PowerShell 中执行：
-```powershell
-irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/update-windows.ps1 | iex
-```
-
-> **目录说明：** curl 安装后，程序部署在当前目录下的 `openclaw-pro/`，运行时数据目录在 `openclaw-pro/home-data/`。
-
-### 手动安装（Linux / macOS）
-
-### Linux 一键安装（默认 ImageOnly，保留交互）
-
-- 交互式（会提示选择安装方式）：
+Linux / macOS：
 
 ```bash
-# 下载到本地并交互运行，会提示安装方式（1=源码安装，2=ImageOnly）
-curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.sh -o install.sh
-bash install.sh
-```
-
-运行时会提示选择：
-- `1` — 源码安装（克隆仓库并执行完整部署）
-- `2` — ImageOnly（默认，仅下载 Release 镜像并部署容器，无需克隆源码）
-
-- 远程一键 pipe（默认 ImageOnly，仍可通过终端交互配置端口/密码/镜像版本）：
-
-```bash
-# 一键安装默认执行 ImageOnly（不克隆源码），并保留交互提示
 curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.sh | bash
 ```
 
-- 直接运行 ImageOnly 脚本（本地或已下载脚本）：
+Windows：
 
-```bash
-# 若已下载 install-imageonly.sh 或在本地运行
-sudo bash install-imageonly.sh
+```powershell
+irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1 | iex
 ```
 
-先决条件与提示：
-- 需要 Docker 权限（root 或 sudo）。
-- 若在 WSL2/Windows 下使用，请确保对应的防火墙/端口转发设置（见原 README 的 WSL2 段）。
-- 若需静默/CI 部署，我可以将 `install-imageonly.sh` 增加对环境变量（如 `ROOT_PASS`, `GW_PORT`, `WEB_PORT`, `SSH_PORT`, `EDITION=lite|full`）的无交互支持。
+> 升级默认保留 `home-data` 与配置。
 
-
+### 手动安装（源码模式）
 
 ```bash
 git clone https://github.com/cintia09/openclaw-pro.git openclaw-pro
 cd openclaw-pro
-
 chmod +x openclaw-docker.sh
 ./openclaw-docker.sh run
 ```
 
-首次运行会引导你完成配置（root密码、端口、HTTPS域名等）。
+首次运行会引导你完成配置（root 密码、端口、HTTPS 域名等）。
 
 访问地址：
 - **内网/直连模式（不填域名）**:
@@ -139,6 +107,7 @@ bash openclaw-docker.sh run
 
 > 如果脚本提示需要重启，重启后会**自动继续**（已创建 Windows 计划任务）。
 > 所有操作日志保存在 `install-log.txt`。
+> 安装完成后会默认进入容器终端；如需返回 PowerShell，输入 `exit`。
 
 **Windows 管理命令（部署完成后，在 WSL 终端中运行）：**
 ```bash
@@ -183,8 +152,8 @@ openclaw-pro/          ← 部署脚本和Docker文件
 │       └── app.js
 ├── install-windows.bat   # Windows安装入口（双击运行）
 ├── install-windows.ps1   # Windows安装脚本（WSL2+Docker）
-├── update-windows.bat    # Windows更新入口（双击运行）
-├── update-windows.ps1    # Windows更新脚本（热更新/完整重建）
+├── update-windows.bat    # 兼容保留（建议优先使用安装脚本执行升级）
+├── update-windows.ps1    # 兼容保留（建议优先使用安装脚本执行升级）
 ├── README.md
 └── home-data/            ← 持久化数据（自动创建，挂载为容器/root）
     ├── .openclaw/
