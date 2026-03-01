@@ -2973,9 +2973,10 @@ function Main {
                     }
 
                     if ($hotUpdateEligible.Count -gt 0) {
-                        Write-Host "  💡 检测到新 Release 且可热更新（无需完整重装）:" -ForegroundColor Cyan
+                        Write-Host "  💡 检测到新 Release 且可热更新（目标版本: $latestReleaseTag，无需完整重装）:" -ForegroundColor Cyan
                         foreach ($item in $hotUpdateEligible) {
-                            Write-Host "     $($item.Name): 建议先在 Web 面板 → 系统更新 执行热更新" -ForegroundColor DarkGray
+                            $oldV = if ($item.VersionRaw) { $item.VersionRaw } else { "未知" }
+                            Write-Host "     $($item.Name): $oldV -> $latestReleaseTag，建议先在 Web 面板 → 系统更新 执行热更新" -ForegroundColor DarkGray
                         }
                         Write-Host ""
                         Write-Host "  推荐操作:" -ForegroundColor Cyan
