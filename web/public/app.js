@@ -334,14 +334,34 @@ async function doHotPatch() {
         if (s.status === 'done' || s.status === 'error') {
           done = true;
           if (s.status === 'done') {
-            toast('热更新完成', `${(s.updated||[]).length} 个文件已更新`);
-            if (s.updated && s.updated.length > 0) {
-              // If front-end files were updated, prompt refresh
-              const hasFrontend = s.updated.some(f => f.startsWith('web/public/'));
-              if (hasFrontend) {
-                if (logPre) logPre.textContent += '\n前端文件已更新，3 秒后自动刷新页面...';
-                setTimeout(() => location.reload(), 3000);
-              }
+            const updated = s.updated || [];
+            const hasFrontend = updated.some(f => f.startsWith('web/public/'));
+            const hasWebServer = updated.includes('web/server.js');
+            const hasStartServices = updated.includes('start-services.sh');
+
+            if (hasWebServer) {
+              toast('热更新完成', 'Web 面板将自动重启，约 5-15 秒可恢复');
+              if (logPre) logPre.textContent += '\n检测到 web/server.js 更新：Web 面板将自动重启，请等待 5-15 秒后重连。';
+            } else {
+              toast('热更新完成', `${updated.length} 个文件已更新`);
+            }
+
+            if (hasStartServices && logPre) {
+              logPre.textContent += '\n检测到 start-services.sh 更新：建议重启容器以使入口脚本变更生效。';
+            }
+
+            if (hasFrontend) {
+              if (logPre) logPre.textContent += '\n前端文件已更新，3 秒后自动刷新页面...';
+              setTimeout(() => location.reload(), 3000);
+            } else {
+              const recheckUpdateState = async () => {
+                for (let t = 0; t < 8; t++) {
+                  await new Promise(r => setTimeout(r, 2000));
+                  const u = await checkForUpdate(true);
+                  if (u && !u.error) break;
+                }
+              };
+              recheckUpdateState();
             }
           } else {
             toast('热更新失败', s.log || '');
