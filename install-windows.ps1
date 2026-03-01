@@ -4482,8 +4482,8 @@ function Main {
                         Write-Info "校验镜像文件完整性..."
                         $tarValid = $false
                         try {
-                            $tarTest = & tar -tf $recoverTar 2>&1 | Select-Object -First 5
-                            if ($LASTEXITCODE -eq 0 -and $tarTest) { $tarValid = $true }
+                            & tar -tf $recoverTar *> $null
+                            if ($LASTEXITCODE -eq 0) { $tarValid = $true }
                         } catch { }
 
                         if (-not $tarValid) {
