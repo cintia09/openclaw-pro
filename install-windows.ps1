@@ -2898,6 +2898,25 @@ function Main {
                     if ($localTags) { Write-Info "本地镜像标签: $localTags (detected edition: $localImageEdition)" }
                 } catch { }
 
+                # 若未记录本地版本标记，尝试从本地镜像 tag 反推出 release 版本
+                if (-not $localImageReleaseTag -and $localTags) {
+                    $tagCandidates = $localTags -split ';'
+                    foreach ($repoTag in $tagCandidates) {
+                        if (-not $repoTag) { continue }
+                        # 例: ghcr.io/cintia09/openclaw-pro:v1.1.1-lite / openclaw-pro:v1.1.1
+                        if ($repoTag -match ':(v\d+\.\d+\.\d+(?:[-\w\.]*)?)$') {
+                            $derived = $Matches[1]
+                            # 去掉版本后缀中的 -lite / -full，统一为 release tag 形态
+                            $derived = ($derived -replace '(-lite|-full)$','')
+                            if ($derived) {
+                                $localImageReleaseTag = $derived
+                                Write-Info "根据本地镜像标签推断版本: $localImageReleaseTag"
+                                break
+                            }
+                        }
+                    }
+                }
+
                 # 读取保存的镜像 digest，并与当前实际镜像 ID 对比
                 $localImageDigest = ""
                 $imageDigestFile = Join-Path $homeBaseDir "$tagHomeDataName\.openclaw\image-digest.txt"
