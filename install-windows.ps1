@@ -3463,23 +3463,23 @@ function Main {
                     Write-Info "发现预构建镜像 ($tagText, ${imageSizeMB}MB)"
                     Write-Info "正在下载... (无需从 Docker Hub 拉取)"
 
-                    # 多线程分块下载 — 8线程并行，每块 2MB，每块最多重试20次
+                    # 多线程分块下载 — 16线程并行，每块 2MB，每块最多重试20次
                     $downloadOK = Download-Robust `
                         -Urls $downloadUrls `
                         -OutFile $imageTar `
                         -ExpectedSize $expectedSize `
                         -ChunkSizeMB 2 `
-                        -Threads 8 `
+                        -Threads 16 `
                         -RetryPerChunk 20
 
                     if (-not $downloadOK) {
-                        Write-Warn "首轮 8 线程下载未完成，自动降级重试（4线程、1MB块）..."
+                        Write-Warn "首轮 16 线程下载未完成，自动降级重试（8线程、1MB块）..."
                         $downloadOK = Download-Robust `
                             -Urls $downloadUrls `
                             -OutFile $imageTar `
                             -ExpectedSize $expectedSize `
                             -ChunkSizeMB 1 `
-                            -Threads 4 `
+                            -Threads 8 `
                             -RetryPerChunk 30
                     }
                 }
@@ -4301,6 +4301,7 @@ function Main {
                 # -- 镜像缺失 — 在交互式运行时先询问用户是否尝试从 Release 下载，再尝试 GHCR 拉取 --
                 $recoverOK = $false
                 $doRecover = $true
+                $releaseRecoverReason = ""
 
                 # 如果是交互式运行：若前面尚未选择 edition 才提示选择；否则沿用已选版本
                 if ($MyInvocation.MyCommand.Path -or $ImageOnlyDefaulted) {
@@ -4319,6 +4320,7 @@ function Main {
                 }
 
                 if ($doRecover) { Write-Info "尝试自动从 Release 恢复本地镜像..." } else { Write-Info "跳过 Release 下载，继续尝试 GHCR 拉取或本地构建..." }
+                if (-not $doRecover) { $releaseRecoverReason = "skipped" }
 
                 # 恢复方式 1: Download-Robust 多线程分块下载 Release tar.gz
                 $recoverTag = if ($latestReleaseTag) { $latestReleaseTag } else { "latest" }
@@ -4385,16 +4387,16 @@ function Main {
                             -OutFile $recoverTar `
                             -ExpectedSize $recoverSize `
                             -ChunkSizeMB 2 `
-                            -Threads 8 `
+                            -Threads 16 `
                             -RetryPerChunk 20
                         if (-not $recoverDownloadOK) {
-                            Write-Warn "首轮 8 线程下载未完成，自动降级重试（4线程、1MB块）..."
+                            Write-Warn "首轮 16 线程下载未完成，自动降级重试（8线程、1MB块）..."
                             $recoverDownloadOK = Download-Robust `
                                 -Urls $recoverUrls `
                                 -OutFile $recoverTar `
                                 -ExpectedSize $recoverSize `
                                 -ChunkSizeMB 1 `
-                                -Threads 4 `
+                                -Threads 8 `
                                 -RetryPerChunk 30
                         }
                     } else {
@@ -4517,17 +4519,27 @@ function Main {
                             $recoverOK = $true
                             # 镜像文件始终保留在 tmp 目录（便于重试和排查）
                         } else {
+                            $releaseRecoverReason = "load"
                             Write-Warn "docker load 失败"
                             Write-Info "镜像文件已保留: $recoverTar（下次运行可直接加载，无需重新下载）"
                         }
+                    } else {
+                        $releaseRecoverReason = "download"
                     }
                 } catch {
+                    if (-not $releaseRecoverReason) { $releaseRecoverReason = "download" }
                     Write-Log "Recovery Release download failed: $_"
                 }
 
                 # 恢复方式 2: GHCR 拉取
                 if (-not $recoverOK) {
-                    Write-Info "Release 下载失败，尝试从 GHCR 拉取..."
+                    if (-not $doRecover) {
+                        Write-Info "已跳过 Release 下载，尝试从 GHCR 拉取..."
+                    } elseif ($releaseRecoverReason -eq "load") {
+                        Write-Info "Release 镜像已下载但加载未完成，尝试从 GHCR 拉取..."
+                    } else {
+                        Write-Info "Release 下载失败，尝试从 GHCR 拉取..."
+                    }
                     try {
                         $recoverGhcrTag = $recoverTag
                         if ($script:imageEdition -eq "lite") {
