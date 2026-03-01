@@ -4843,6 +4843,7 @@ function Main {
                         if ($retryCode -eq 0) {
                             Write-OK "容器启动成功"
                             $launched = $true
+                            $script:deployedContainerName = $containerName
                         } else {
                             Write-Log "retry docker run failed: $($retryResult | Out-String)"
                         }
@@ -4865,7 +4866,6 @@ function Main {
                 Write-Err "Docker 操作失败: $_"
             }
             Pop-Location -ErrorAction SilentlyContinue
-            $launched = $false
         }
         }  # end if (-not $launched)
     } else {
