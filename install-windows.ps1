@@ -1920,7 +1920,7 @@ function Show-Completion {
             Write-Host "     公钥注入: 已自动注入 $script:sshInjectedKeyPath" -ForegroundColor Green
         } else {
             Write-Host "     公钥注入: 未检测到宿主机公钥，请手动注入到 /root/.ssh/authorized_keys" -ForegroundColor Yellow
-            Write-Host "     示例: type `%USERPROFILE`%\.ssh\id_ed25519.pub | docker exec -i openclaw-pro bash -lc \"mkdir -p /root/.ssh && cat >> /root/.ssh/authorized_keys && chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys\"" -ForegroundColor DarkGray
+            Write-Host '     示例: type %USERPROFILE%\.ssh\id_ed25519.pub | docker exec -i openclaw-pro bash -lc "mkdir -p /root/.ssh && cat >> /root/.ssh/authorized_keys && chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys"' -ForegroundColor DarkGray
         }
 
         if ($script:rootPasswordFilePath) {
