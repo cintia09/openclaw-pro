@@ -44,8 +44,9 @@ $SCRIPT_DIR      = if ($MyInvocation.MyCommand.Path) {
     $PWD.Path
 }
 # 日志与镜像下载目录将在部署阶段统一设置到部署目录 openclaw-pro
-$TMP_DIR         = $SCRIPT_DIR
-$LOG_FILE        = Join-Path $SCRIPT_DIR "install-log.txt"
+# 在部署目录确定前先写入系统临时目录，避免在安装目录生成 install-log.txt
+$TMP_DIR         = $env:TEMP
+$LOG_FILE        = Join-Path $env:TEMP "openclaw-install-log.txt"
 $STATE_FILE      = Join-Path $SCRIPT_DIR ".install-state.json"
 
 # 如果通过 `irm ... | iex` (远程执行) 运行且用户未显式指定 -ImageOnly，则默认启用 ImageOnly 模式
@@ -2171,7 +2172,19 @@ function Main {
         if (-not (Test-Path $localDeployDir)) { New-Item -ItemType Directory -Path $localDeployDir -Force | Out-Null }
         $homeBaseDir = $localDeployDir
         $TMP_DIR = $localDeployDir
-        $LOG_FILE = Join-Path $localDeployDir "install-log.txt"
+        $newLogFile = Join-Path $localDeployDir "install-log.txt"
+        if ($LOG_FILE -and (Test-Path $LOG_FILE) -and ($LOG_FILE -ne $newLogFile)) {
+            try {
+                $existingContent = Get-Content $LOG_FILE -ErrorAction SilentlyContinue
+                if ($existingContent) { Add-Content -Path $newLogFile -Value $existingContent -ErrorAction SilentlyContinue }
+            } catch { }
+        }
+        $LOG_FILE = $newLogFile
+        # 若安装目录残留旧日志，尽量清理（忽略失败）
+        $legacyInstallLog = Join-Path $SCRIPT_DIR "install-log.txt"
+        if ($legacyInstallLog -ne $LOG_FILE -and (Test-Path $legacyInstallLog)) {
+            Remove-Item $legacyInstallLog -Force -ErrorAction SilentlyContinue
+        }
         $latestReleaseTag = ""
         $latestReleaseInfo = $null
         try {
@@ -2911,46 +2924,29 @@ function Main {
                     } catch { }
                 }
 
-                Write-Host ""
-                Write-Host "  请选择镜像策略:" -ForegroundColor Cyan
-                if ($effectiveLatestTag -and $localImageReleaseTag -and $effectiveLatestTag -eq $localImageReleaseTag) {
-                    $digestOK = (-not $localImageDigest) -or ($currentImageId -eq $localImageDigest)
-                    if ($digestOK) {
-                        Write-Host "     当前本地镜像与远端最新版本一致 ($effectiveLatestTag)" -ForegroundColor Green
-                    } else {
-                        Write-Host "     版本标记一致 ($effectiveLatestTag)，但镜像 digest 已变更" -ForegroundColor Yellow
-                    }
-                    Write-Host "     [1] 使用本地镜像（默认，最快）" -ForegroundColor White
-                    Write-Host "     [2] 仍然强制下载最新镜像" -ForegroundColor White
-                } elseif ($effectiveLatestTag) {
-                    if ($localImageReleaseTag) {
-                        Write-Host "     远端最新: $effectiveLatestTag， 本地: $localImageReleaseTag" -ForegroundColor Yellow
-                    } else {
-                        Write-Host "     远端最新: $effectiveLatestTag， 本地版本未知" -ForegroundColor Yellow
-                    }
-                    Write-Host "     [1] 使用本地镜像" -ForegroundColor White
-                    Write-Host "     [2] 下载最新镜像（默认）" -ForegroundColor White
-                } else {
-                    Write-Host "     [1] 使用本地镜像（默认，最快）" -ForegroundColor White
-                    Write-Host "     [2] 强制下载最新镜像（覆盖更新）" -ForegroundColor White
+                # 自动镜像策略：不再二次询问用户
+                $shouldRefreshImage = $false
+                $refreshReason = ""
+                if ($effectiveLatestTag -and ($localImageReleaseTag -ne $effectiveLatestTag)) {
+                    $shouldRefreshImage = $true
+                    $refreshReason = "远端最新: $effectiveLatestTag，本地: $(if ($localImageReleaseTag) { $localImageReleaseTag } else { '未知' })"
                 }
-                Write-Host ""
-                $defaultImageChoice = '1'
-                if ($effectiveLatestTag -and ($localImageReleaseTag -ne $effectiveLatestTag)) { $defaultImageChoice = '2' }
-                # 如果本地镜像存在但与所选 edition（lite/full）不匹配，默认建议下载最新镜像
-                if ($localImageEdition -and $localImageEdition -ne 'unknown' -and $localImageEdition -ne $script:imageEdition) { $defaultImageChoice = '2' }
-                Write-Host "  请输入选择 [1/2，默认$defaultImageChoice]: " -NoNewline -ForegroundColor White
-                $imageChoice = (Read-Host).Trim()
-                if (-not $imageChoice) { $imageChoice = $defaultImageChoice }
+                if ($localImageEdition -and $localImageEdition -ne 'unknown' -and $localImageEdition -ne $script:imageEdition) {
+                    $shouldRefreshImage = $true
+                    $refreshReason = "本地镜像版本类型: $localImageEdition，与所选 $($script:imageEdition) 不一致"
+                }
+                if ($localImageDigest -and $currentImageId -and $currentImageId -ne $localImageDigest) {
+                    $shouldRefreshImage = $true
+                    $refreshReason = "本地镜像 digest 与记录不一致"
+                }
 
-                if ($imageChoice -eq '2') {
+                if ($shouldRefreshImage) {
                     $forceRefreshImage = $true
-                    Write-Info "已选择强制下载最新镜像"
-                    # 删除本地旧镜像，确保 docker load 后使用最新版本
+                    if ($refreshReason) { Write-Info "自动判定需要刷新镜像：$refreshReason" }
                     & docker rmi -f openclaw-pro 2>&1 | Out-Null
                     Start-Sleep -Milliseconds 500
                 } else {
-                    Write-OK "已选择使用本地镜像，跳过下载/构建"
+                    Write-OK "自动判定使用本地镜像（版本一致），跳过下载/构建"
                     $imageReady = $true
                 }
             }
