@@ -144,7 +144,7 @@ const DOCKER_CONFIG_PATH = '/root/.openclaw/docker-config.json';
 const STT_CONFIG_PATH = '/root/.openclaw/stt-config.json';
 const PLUGINS_STATE_PATH = '/root/.openclaw/plugins-state.json';
 
-const LOG_FILE = '/tmp/openclaw-gateway.log';
+const LOG_FILE = '/root/.openclaw/logs/gateway.log';
 
 const TRADING_DIR = '/root/trading-system';
 const STRATEGY_PARAMS_PATH = path.join(TRADING_DIR, 'strategy_params.json');
@@ -201,6 +201,23 @@ function restartGatewayForeground(callback) {
   ].join(' && ');
 
   exec(`bash -lc '${cmd}'`, callback);
+}
+
+function runCommandOk(cmd, timeoutMs = 1500) {
+  try {
+    execSync(cmd, { stdio: 'ignore', timeout: timeoutMs });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function runCommandText(cmd, timeoutMs = 2500) {
+  try {
+    return execSync(cmd, { encoding: 'utf8', timeout: timeoutMs }).trim();
+  } catch {
+    return '';
+  }
 }
 
 // ============================================================
@@ -856,19 +873,18 @@ app.get('/api/status', (req, res) => {
   const statusStart = Date.now();
   const status = { gateway: false, web: true, caddy: false, uptime: 0, memory: {}, version: getCurrentVersion() };
 
-  try {
-    execSync('pgrep -f "[o]penclaw.*gateway"', { stdio: 'ignore' });
-    status.gateway = true;
-  } catch (e) {
+  status.gateway = runCommandOk('curl -sS --connect-timeout 1 --max-time 2 http://127.0.0.1:18789/health >/dev/null 2>&1', 2500)
+    || runCommandOk('pgrep -f "[o]penclaw.*gateway" >/dev/null 2>&1', 1200);
+  if (!status.gateway) {
+    const e = new Error('gateway not detected');
     if (req.query.debug === '1') {
       console.log(`[status] gateway check miss: ${e.message || e}`);
     }
   }
 
-  try {
-    execSync('pgrep -f caddy', { stdio: 'ignore' });
-    status.caddy = true;
-  } catch (e) {
+  status.caddy = runCommandOk('pgrep -f caddy >/dev/null 2>&1', 1200);
+  if (!status.caddy) {
+    const e = new Error('caddy not detected');
     if (req.query.debug === '1') {
       console.log(`[status] caddy check miss: ${e.message || e}`);
     }
@@ -896,11 +912,9 @@ app.get('/api/status', (req, res) => {
   status.browserEnabled = !!dockerConfig.browserEnabled;
 
   if (status.browserEnabled) {
-    try {
-      execSync('pgrep -f "websockify.*6080"', { stdio: 'ignore' });
-      status.browser = true;
-    } catch (e) {
-      status.browser = false;
+    status.browser = runCommandOk('pgrep -f "websockify.*6080" >/dev/null 2>&1', 1200);
+    if (!status.browser) {
+      const e = new Error('browser bridge not detected');
       if (req.query.debug === '1') {
         console.log(`[status] browser check miss: ${e.message || e}`);
       }
@@ -1031,19 +1045,16 @@ function runOpenClawTask(command, title) {
 app.get('/api/openclaw', (req, res) => {
   let installed = false;
   let version = '';
-  try {
-    version = execSync('openclaw --version 2>/dev/null', { encoding: 'utf8' }).trim();
+  version = runCommandText('openclaw --version 2>/dev/null || openclaw -v 2>/dev/null', 2500);
+  if (!version) {
+    version = getCurrentVersion();
+  }
+  if (version && version !== 'unknown') {
     installed = true;
-  } catch {}
+  }
 
-  const gatewayRunning = (() => {
-    try {
-      execSync('pgrep -f "[o]penclaw.*gateway"', { stdio: 'ignore' });
-      return true;
-    } catch {
-      return false;
-    }
-  })();
+  const gatewayRunning = runCommandOk('curl -sS --connect-timeout 1 --max-time 2 http://127.0.0.1:18789/health >/dev/null 2>&1', 2500)
+    || runCommandOk('pgrep -f "[o]penclaw.*gateway" >/dev/null 2>&1', 1200);
 
   res.json({ installed, version, gatewayRunning });
 });
@@ -1114,7 +1125,7 @@ function sanitizeLogLine(line) {
 
 function tailLogLines(lines = 200) {
   if (!fs.existsSync(LOG_FILE)) return [];
-  const output = execSync(`tail -${Math.max(1, Math.min(lines, 5000))} "${LOG_FILE}"`, { encoding: 'utf8' });
+  const output = execSync(`tail -${Math.max(1, Math.min(lines, 5000))} "${LOG_FILE}"`, { encoding: 'utf8', timeout: 2500 });
   return output
     .split('\n')
     .filter(Boolean)
@@ -1125,7 +1136,7 @@ app.get('/api/logs', (req, res) => {
   const lines = parseInt(req.query.lines, 10) || 100;
   try {
     if (!fs.existsSync(LOG_FILE)) return res.json({ logs: 'No log file found' });
-    const output = execSync(`tail -${Math.max(1, Math.min(lines, 5000))} "${LOG_FILE}"`, { encoding: 'utf8' });
+    const output = execSync(`tail -${Math.max(1, Math.min(lines, 5000))} "${LOG_FILE}"`, { encoding: 'utf8', timeout: 2500 });
     const sanitized = output
       .split('\n')
       .map(sanitizeLogLine)
