@@ -1005,14 +1005,20 @@ function Get-ContainerReleaseVersion {
         [string]$HomeBaseDir = ""
     )
     if (-not $ContainerName) { return "" }
+    Write-Log "VersionDetect[$ContainerName]: start"
     try {
         $verLine = (& docker exec $ContainerName sh -lc "openclaw --version 2>/dev/null || true" 2>$null | Select-Object -First 1)
         if ($verLine) {
             $verLine = ("$verLine").Trim()
+            Write-Log "VersionDetect[$ContainerName]: runtime openclaw --version => '$verLine'"
             if ($verLine -match '(v?\d+\.\d+\.\d+)') {
+                Write-Log "VersionDetect[$ContainerName]: choose runtime parsed => '$($Matches[1])'"
                 return $Matches[1]
             }
-            if ($verLine) { return $verLine }
+            if ($verLine) {
+                Write-Log "VersionDetect[$ContainerName]: choose runtime raw => '$verLine'"
+                return $verLine
+            }
         }
     } catch { }
 
@@ -1020,7 +1026,11 @@ function Get-ContainerReleaseVersion {
         $raw = (& docker exec $ContainerName sh -lc "cat /etc/openclaw-version 2>/dev/null || true" 2>$null | Select-Object -First 1)
         if ($raw) {
             $raw = ("$raw").Trim()
-            if ($raw) { return $raw }
+            Write-Log "VersionDetect[$ContainerName]: /etc/openclaw-version => '$raw'"
+            if ($raw) {
+                Write-Log "VersionDetect[$ContainerName]: choose file version => '$raw'"
+                return $raw
+            }
         }
     } catch { }
 
@@ -1028,10 +1038,14 @@ function Get-ContainerReleaseVersion {
         $imgRef = (& docker inspect $ContainerName --format '{{.Config.Image}}' 2>$null | Select-Object -First 1)
         if ($imgRef) {
             $imgRef = ("$imgRef").Trim()
+            Write-Log "VersionDetect[$ContainerName]: image ref => '$imgRef'"
             if ($imgRef -match ':(v?\d+\.\d+\.\d+(?:[-\w\.]*)?)$') {
                 $tagVer = $Matches[1]
                 $tagVer = ($tagVer -replace '(-lite|-full)$','')
-                if ($tagVer) { return $tagVer }
+                if ($tagVer) {
+                    Write-Log "VersionDetect[$ContainerName]: choose image tag => '$tagVer'"
+                    return $tagVer
+                }
             }
         }
     } catch { }
@@ -1042,7 +1056,11 @@ function Get-ContainerReleaseVersion {
             $labelVer = (& docker image inspect $imageId --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>$null | Select-Object -First 1)
             if ($labelVer) {
                 $labelVer = ("$labelVer").Trim()
-                if ($labelVer) { return $labelVer }
+                Write-Log "VersionDetect[$ContainerName]: image label version => '$labelVer'"
+                if ($labelVer) {
+                    Write-Log "VersionDetect[$ContainerName]: choose image label => '$labelVer'"
+                    return $labelVer
+                }
             }
         }
     } catch { }
@@ -1058,14 +1076,21 @@ function Get-ContainerReleaseVersion {
                 $fver = (Get-Content $imageTagFile -ErrorAction SilentlyContinue | Select-Object -First 1)
                 if ($fver) {
                     $fver = ("$fver").Trim()
+                    Write-Log "VersionDetect[$ContainerName]: home-data image-release-tag => '$fver'"
                     if ($fver -match '^([^\|]+)\|') {
+                        Write-Log "VersionDetect[$ContainerName]: choose home-data parsed => '$($Matches[1])'"
                         return $Matches[1]
                     }
-                    if ($fver) { return $fver }
+                    if ($fver) {
+                        Write-Log "VersionDetect[$ContainerName]: choose home-data raw => '$fver'"
+                        return $fver
+                    }
                 }
             }
         } catch { }
     }
+
+    Write-Log "VersionDetect[$ContainerName]: no version resolved"
 
     return ""
 }
@@ -2913,6 +2938,7 @@ function Main {
                 $rcName = $parts[0]
                 $rcStatus = if ($parts.Count -ge 2) { $parts[1] } else { "" }
                 $rcPorts = if ($parts.Count -ge 3) { $parts[2] } else { "" }
+                Write-Log "RunningContainer found: name=$rcName status='$rcStatus' ports='$rcPorts'"
                 $rcVersion = Get-ContainerReleaseVersion -ContainerName $rcName -HomeBaseDir $homeBaseDir
                 $rcVersionText = if ($rcVersion) { $rcVersion } else { "未知" }
                 $runningContainerMeta += @{
@@ -2922,6 +2948,7 @@ function Main {
                     VersionRaw = $rcVersion
                     VersionNorm = (Normalize-ReleaseVersion $rcVersion)
                 }
+                Write-Log "RunningContainer version resolved: name=$rcName raw='$rcVersion' norm='$(Normalize-ReleaseVersion $rcVersion)'"
                 Write-Host "     容器: ${rcName}  版本: ${rcVersionText}  状态: ${rcStatus}  端口: ${rcPorts}" -ForegroundColor DarkGray
             }
             Write-Host ""
