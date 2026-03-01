@@ -862,7 +862,7 @@ function buildUpgradeRequestText(req, upstreamPath, gatewayPort) {
 app.use(requireAuthPage);
 
 app.use((req, res, next) => {
-  if (req.method === 'GET' && /\.(html|js|css)$/i.test(req.path || '')) {
+  if (req.method === 'GET' && (req.path === '/' || /\.(html|js|css)$/i.test(req.path || ''))) {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
@@ -1418,7 +1418,9 @@ app.post('/api/docker-config', (req, res) => {
     writeDockerConfig(cfg);
     res.json({ success: true, browserEnabled: !!cfg.browserEnabled, restartRequired: true });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    const detail = e?.message || String(e || '配置恢复失败');
+    console.error('[openclaw][repair] failed:', detail);
+    res.status(500).json({ success: false, error: detail });
   }
 });
 

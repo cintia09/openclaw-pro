@@ -49,12 +49,17 @@ async function api(url, opts={}){
       return { error: 'unauthorized' };
     }
 
-    let data = {};
-    try{ data = await res.json(); }catch{ data = {}; }
+    const rawText = await res.text();
+    let data = null;
+    try { data = rawText ? JSON.parse(rawText) : null; } catch { data = null; }
     if (!res.ok) {
-      return { error: data?.error || `请求失败（HTTP ${res.status}）`, status: res.status };
+      const detail = (data && typeof data === 'object' && data.error)
+        ? data.error
+        : (rawText ? compactOutputForUi(rawText) : `请求失败（HTTP ${res.status}）`);
+      return { error: detail, status: res.status };
     }
-    return data;
+    if (data && typeof data === 'object') return data;
+    return { error: rawText ? `响应不是有效 JSON：${compactOutputForUi(rawText)}` : '响应为空（后端未返回 JSON）' };
   }catch(e){
     console.error('api error', e);
     const elapsed = ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt;
@@ -64,6 +69,11 @@ async function api(url, opts={}){
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function compactOutputForUi(text) {
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  return s.length > 220 ? `${s.slice(0, 220)}...` : s;
 }
 
 // ------------------------
