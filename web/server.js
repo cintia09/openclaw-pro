@@ -1027,8 +1027,8 @@ app.get('/api/openclaw', (req, res) => {
 });
 
 app.post('/api/openclaw/install', (req, res) => {
-  const command = 'curl -fsSL --proto "=https" --tlsv1.2 https://openclaw.ai/install-cli.sh | bash';
-  const taskId = runOpenClawTask(command, '使用 OpenClaw 官网安装脚本安装 CLI');
+  const command = buildOpenClawNpmInstallCommand();
+  const taskId = runOpenClawTask(command, '按 NodeSource + npm 镜像安装 OpenClaw');
   res.json({ taskId });
 });
 
@@ -1046,15 +1046,27 @@ app.get('/api/openclaw/install/:taskId', (req, res) => {
   res.json({ ...task, delta });
 });
 
+function buildOpenClawNpmInstallCommand() {
+  return [
+    'set -e',
+    'if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then',
+    '  export DEBIAN_FRONTEND=noninteractive',
+    '  apt-get update -y',
+    '  apt-get install -y ca-certificates curl gnupg',
+    '  curl -fsSL https://deb.nodesource.com/setup_22.x | bash -',
+    '  apt-get install -y nodejs',
+    'fi',
+    'npm config set registry https://registry.npmmirror.com',
+    'npm install -g openclaw@latest',
+    'NPM_PREFIX="$(npm config get prefix 2>/dev/null || echo /usr/local)"',
+    'case ":$PATH:" in *":${NPM_PREFIX}/bin:"*) ;; *) export PATH="$PATH:${NPM_PREFIX}/bin" ;; esac',
+    'openclaw -v || openclaw --version'
+  ].join('; ');
+}
+
 app.post('/api/openclaw/update', (req, res) => {
-  const command = [
-    'if command -v openclaw >/dev/null 2>&1; then',
-    '  openclaw update --channel stable || npm install -g openclaw@latest;',
-    'else',
-    '  curl -fsSL --proto "=https" --tlsv1.2 https://openclaw.ai/install-cli.sh | bash;',
-    'fi'
-  ].join(' ');
-  const taskId = runOpenClawTask(command, '按官方稳定渠道更新 OpenClaw');
+  const command = buildOpenClawNpmInstallCommand();
+  const taskId = runOpenClawTask(command, '按 NodeSource + npm 镜像更新 OpenClaw');
   res.json({ taskId });
 });
 
