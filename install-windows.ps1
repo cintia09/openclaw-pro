@@ -4423,6 +4423,54 @@ function Main {
                     if ($recoverDownloadOK) {
                         try { "$recoverTag|$script:imageEdition" | Set-Content -Path "$recoverTagFile" -Force -ErrorAction SilentlyContinue } catch { }
                         Write-OK "镜像下载完成"
+                    }
+
+                    # ── 校验 + 加载循环（最多 2 轮：首次加载 + 重新下载重试） ──
+                    $loadAttempt = 0
+                    while ($recoverDownloadOK -and -not $recoverOK -and $loadAttempt -lt 2) {
+                        $loadAttempt++
+
+                        # ── 加载前校验 tar 完整性（快速读取归档头部条目） ──
+                        Write-Info "校验镜像文件完整性..."
+                        $tarValid = $false
+                        try {
+                            $tarTest = & tar -tf $recoverTar 2>&1 | Select-Object -First 5
+                            if ($LASTEXITCODE -eq 0 -and $tarTest) { $tarValid = $true }
+                        } catch { }
+
+                        if (-not $tarValid) {
+                            if ($loadAttempt -ge 2) {
+                                Write-Warn "重新下载后镜像文件仍无法通过完整性校验"
+                                $releaseRecoverReason = "download"
+                                $recoverDownloadOK = $false
+                                break
+                            }
+                            Write-Warn "镜像文件损坏或不完整，删除并重新下载..."
+                            Remove-Item $recoverTar -Force -ErrorAction SilentlyContinue
+                            if (Test-Path $recoverTagFile) { Remove-Item $recoverTagFile -Force -ErrorAction SilentlyContinue }
+                            $recoverDownloadOK = $false
+                            $recoverSize = Get-RemoteFileSize -Urls $recoverUrls
+                            if ($recoverSize -gt 0) {
+                                $recoverMB = [math]::Round($recoverSize / 1MB, 1)
+                                Write-Info "文件大小: ${recoverMB}MB，重新下载..."
+                                $recoverDownloadOK = Download-Robust `
+                                    -Urls $recoverUrls `
+                                    -OutFile $recoverTar `
+                                    -ExpectedSize $recoverSize `
+                                    -ChunkSizeMB 2 `
+                                    -Threads 16 `
+                                    -RetryPerChunk 20
+                            }
+                            if (-not $recoverDownloadOK) {
+                                $releaseRecoverReason = "download"
+                                break
+                            }
+                            try { "$recoverTag|$script:imageEdition" | Set-Content -Path "$recoverTagFile" -Force -ErrorAction SilentlyContinue } catch { }
+                            continue  # 回到循环顶部重新校验
+                        }
+
+                        Write-OK "镜像文件校验通过"
+
                         $recoverLoadSizeText = "未知大小"
                         if (Test-Path $recoverTar) {
                             $recoverLoadSizeText = "$( [math]::Round((Get-Item $recoverTar).Length / 1MB, 1) )MB"
@@ -4517,13 +4565,38 @@ function Main {
                         if ($LASTEXITCODE -eq 0) {
                             Write-OK "Release 镜像加载完成 (耗时 ${totalLoadSec} 秒)"
                             $recoverOK = $true
-                            # 镜像文件始终保留在 tmp 目录（便于重试和排查）
                         } else {
-                            $releaseRecoverReason = "load"
-                            Write-Warn "docker load 失败"
-                            Write-Info "镜像文件已保留: $recoverTar（下次运行可直接加载，无需重新下载）"
+                            if ($loadAttempt -lt 2) {
+                                Write-Warn "docker load 失败，删除镜像文件并重新下载重试..."
+                                Remove-Item $recoverTar -Force -ErrorAction SilentlyContinue
+                                if (Test-Path $recoverTagFile) { Remove-Item $recoverTagFile -Force -ErrorAction SilentlyContinue }
+                                $recoverDownloadOK = $false
+                                $recoverSize = Get-RemoteFileSize -Urls $recoverUrls
+                                if ($recoverSize -gt 0) {
+                                    $recoverMB = [math]::Round($recoverSize / 1MB, 1)
+                                    Write-Info "文件大小: ${recoverMB}MB，重新下载..."
+                                    $recoverDownloadOK = Download-Robust `
+                                        -Urls $recoverUrls `
+                                        -OutFile $recoverTar `
+                                        -ExpectedSize $recoverSize `
+                                        -ChunkSizeMB 2 `
+                                        -Threads 16 `
+                                        -RetryPerChunk 20
+                                }
+                                if (-not $recoverDownloadOK) {
+                                    $releaseRecoverReason = "download"
+                                    break
+                                }
+                                try { "$recoverTag|$script:imageEdition" | Set-Content -Path "$recoverTagFile" -Force -ErrorAction SilentlyContinue } catch { }
+                                Write-Info "重新下载完成，重试加载..."
+                            } else {
+                                $releaseRecoverReason = "load"
+                                Write-Warn "docker load 重试仍失败"
+                                Write-Info "镜像文件已保留: $recoverTar（可手动执行 docker load -i 排查）"
+                            }
                         }
-                    } else {
+                    }
+                    if (-not $recoverDownloadOK -and -not $releaseRecoverReason) {
                         $releaseRecoverReason = "download"
                     }
                 } catch {
