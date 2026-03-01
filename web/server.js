@@ -531,6 +531,24 @@ function getLocalDockerfileHash() {
   try { return fs.readFileSync(DOCKERFILE_HASH_FILE, 'utf8').trim(); } catch { return ''; }
 }
 
+async function getRemoteDockerfileHashesByRef(ref) {
+  const hashes = [];
+  const candidates = ['Dockerfile', 'Dockerfile.lite'];
+  for (const fileName of candidates) {
+    try {
+      const dfResp = await fetchWithFallback(`${GITHUB_RAW_BASE}/${ref}/${fileName}`, {
+        headers: { 'User-Agent': 'openclaw-pro' },
+        timeout: 10000
+      });
+      if (!dfResp.ok) continue;
+      const dockerfileText = await dfResp.text();
+      const hash = crypto.createHash('sha256').update(dockerfileText).digest('hex');
+      if (hash) hashes.push(hash);
+    } catch {}
+  }
+  return [...new Set(hashes)];
+}
+
 function normalizeVersionTag(v) {
   const s = String(v || '').trim();
   if (!s) return '';
@@ -612,51 +630,48 @@ app.get('/api/update/check', async (req, res) => {
       if (latestVersion) refs.push(latestVersion);
       if (release && release.target_commitish) refs.push(release.target_commitish);
 
-      let remoteHash = '';
+      let remoteHashes = [];
       let checkedRef = '';
       for (const ref of refs) {
         try {
-          const dfResp = await fetchWithFallback(`${GITHUB_RAW_BASE}/${ref}/Dockerfile`, {
-            headers: { 'User-Agent': 'openclaw-pro' },
-            timeout: 10000
-          });
-          if (!dfResp.ok) continue;
-          const remoteDockerfile = await dfResp.text();
-          remoteHash = crypto.createHash('sha256').update(remoteDockerfile).digest('hex');
+          const hashes = await getRemoteDockerfileHashesByRef(ref);
+          if (!hashes.length) continue;
+          remoteHashes = hashes;
           checkedRef = ref;
           break;
         } catch {}
       }
 
       const localHash = getLocalDockerfileHash();
-      if (remoteHash && localHash) {
-        result.dockerfileChanged = remoteHash !== localHash;
+      if (remoteHashes.length > 0 && localHash) {
+        result.dockerfileChanged = !remoteHashes.includes(localHash);
         // 仅当 release 版本有变化时，才需要展示“完整更新”或“热更新”提示
-        result.requiresFullUpdate = !!hasUpdate && (remoteHash !== localHash);
-      } else if (remoteHash && !localHash) {
+        result.requiresFullUpdate = !!hasUpdate && result.dockerfileChanged;
+      } else if (remoteHashes.length > 0 && !localHash) {
         // 缺少本地 hash：尝试用“当前版本 tag 的 Dockerfile”进行对比，避免误报完整更新
-        let currentRefHash = '';
+        let currentRefHashes = [];
         const currentRefs = [];
         if (currentVersion) currentRefs.push(currentVersion);
         const currentNormTag = normalizeVersionTag(currentVersion);
         if (currentNormTag && !currentRefs.includes(currentNormTag)) currentRefs.push(currentNormTag);
+        if (currentNormTag) {
+          const currentNormWithV = `v${currentNormTag}`;
+          if (!currentRefs.includes(currentNormWithV)) currentRefs.push(currentNormWithV);
+        }
 
         for (const ref of currentRefs) {
           try {
-            const curResp = await fetchWithFallback(`${GITHUB_RAW_BASE}/${ref}/Dockerfile`, {
-              headers: { 'User-Agent': 'openclaw-pro' },
-              timeout: 10000
-            });
-            if (!curResp.ok) continue;
-            const curDockerfile = await curResp.text();
-            currentRefHash = crypto.createHash('sha256').update(curDockerfile).digest('hex');
+            const hashes = await getRemoteDockerfileHashesByRef(ref);
+            if (!hashes.length) continue;
+            currentRefHashes = hashes;
             break;
           } catch {}
         }
 
-        if (currentRefHash) {
-          result.dockerfileChanged = remoteHash !== currentRefHash;
-          result.requiresFullUpdate = !!hasUpdate && (remoteHash !== currentRefHash);
+        if (currentRefHashes.length > 0) {
+          const currentHashSet = new Set(currentRefHashes);
+          result.dockerfileChanged = !remoteHashes.some((h) => currentHashSet.has(h));
+          result.requiresFullUpdate = !!hasUpdate && result.dockerfileChanged;
         } else {
           // 无法确定底层是否变更：不强制完整更新，保留热更新入口
           result.dockerfileChanged = false;
