@@ -673,21 +673,6 @@ async function pollTask(taskId){
 }
 
 $('btn-oc-refresh').addEventListener('click', refreshOpenClaw);
-$('btn-oc-check-update')?.addEventListener('click', async ()=>{
-  const btn = $('btn-oc-check-update');
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = '检查中...';
-  }
-  try {
-    await refreshOpenClaw();
-  } finally {
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = '检查更新';
-    }
-  }
-});
 
 $('btn-oc-repair-config')?.addEventListener('click', async ()=>{
   appendOcLogLine('[repair] 正在检测并修复 OpenClaw 配置中的无效 key...');
