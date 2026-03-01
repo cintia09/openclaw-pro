@@ -49,7 +49,7 @@ irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/update-windows.
 
 ### 手动安装（Linux / macOS）
 
-### Linux 一键安装（交互 & ImageOnly）
+### Linux 一键安装（默认 ImageOnly，保留交互）
 
 - 交互式（会提示选择安装方式）：
 
@@ -60,13 +60,13 @@ bash install.sh
 ```
 
 运行时会提示选择：
-- `1` — 源码安装（默认，克隆仓库并执行完整部署）
-- `2` — ImageOnly（仅下载 Release 镜像并部署容器，无需克隆源码）
+- `1` — 源码安装（克隆仓库并执行完整部署）
+- `2` — ImageOnly（默认，仅下载 Release 镜像并部署容器，无需克隆源码）
 
-- 非交互 pipe（远程一键，等同 Windows 的 ImageOnly 行为）：
+- 远程一键 pipe（默认 ImageOnly，仍可通过终端交互配置端口/密码/镜像版本）：
 
 ```bash
-# 非交互模式（curl | bash）将自动执行 ImageOnly 安装流程（不克隆源码）
+# 一键安装默认执行 ImageOnly（不克隆源码），并保留交互提示
 curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.sh | bash
 ```
 

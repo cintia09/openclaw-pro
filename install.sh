@@ -28,14 +28,14 @@ echo "🐾 OpenClaw Pro Installer"
 echo "========================="
 echo ""
 
-# 如果是交互终端，先询问安装方式：源码安装（默认）或 ImageOnly（仅下载镜像）
+# 如果是交互终端，先询问安装方式：ImageOnly（默认）或源码安装
 if [ -t 0 ]; then
   echo "请选择安装方式："
-  echo "  [1] 源码安装（默认，克隆仓库并进行完整部署）"
-  echo "  [2] ImageOnly（仅下载 Release 镜像并部署容器，无需克隆源码）"
-  read -t 30 -p "请选择 [1/2，默认1]: " INSTALL_MODE || true
+  echo "  [1] 源码安装（克隆仓库并进行完整部署）"
+  echo "  [2] ImageOnly（默认，仅下载 Release 镜像并部署容器，无需克隆源码）"
+  read -t 30 -p "请选择 [1/2，默认2]: " INSTALL_MODE || true
   echo ""
-  if [ "${INSTALL_MODE}" = "2" ]; then
+  if [ -z "${INSTALL_MODE:-}" ] || [ "${INSTALL_MODE}" = "2" ]; then
     # 尝试优先使用本地脚本，否则从 GitHub 拉取并执行
     if [ -f "$(pwd)/install-imageonly.sh" ]; then
       chmod +x "$(pwd)/install-imageonly.sh" || true

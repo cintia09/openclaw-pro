@@ -22,6 +22,25 @@ info(){ echo -e "[INFO] $*"; }
 warn(){ echo -e "[WARN] $*"; }
 success(){ echo -e "[OK] $*"; }
 
+TTY_IN="/dev/tty"
+has_tty(){ [ -r "$TTY_IN" ] && [ -w "$TTY_IN" ]; }
+prompt_line(){
+  local msg="$1"; local default="${2:-}"; local ans=""
+  if has_tty; then
+    if [ -n "$default" ]; then
+      printf "%s" "$msg" > "$TTY_IN"
+      IFS= read -r ans < "$TTY_IN" || true
+      ans="${ans:-$default}"
+    else
+      printf "%s" "$msg" > "$TTY_IN"
+      IFS= read -r ans < "$TTY_IN" || true
+    fi
+  else
+    ans="$default"
+  fi
+  echo "$ans"
+}
+
 ensure_docker(){
   if command -v docker &>/dev/null; then return 0; fi
   warn "未检测到 Docker，请先安装 Docker 并重试"
@@ -91,8 +110,17 @@ load_image(){
 
 prompt_password(){
   while true; do
-    read -s -p "设置容器 root 密码: " ROOT_PASS; echo
-    read -s -p "确认密码: " ROOT_PASS2; echo
+    if has_tty; then
+      printf "设置容器 root 密码: " > "$TTY_IN"
+      IFS= read -r -s ROOT_PASS < "$TTY_IN" || true
+      printf "\n" > "$TTY_IN"
+      printf "确认密码: " > "$TTY_IN"
+      IFS= read -r -s ROOT_PASS2 < "$TTY_IN" || true
+      printf "\n" > "$TTY_IN"
+    else
+      ROOT_PASS=""
+      ROOT_PASS2=""
+    fi
     if [ "$ROOT_PASS" = "$ROOT_PASS2" ] && [ -n "$ROOT_PASS" ]; then
       break
     fi
@@ -101,9 +129,9 @@ prompt_password(){
 }
 
 prompt_ports(){
-  read -p "Gateway 端口 (默认 18789): " GW_PORT; GW_PORT=${GW_PORT:-18789}
-  read -p "Web 面板端口 (默认 3000): " WEB_PORT; WEB_PORT=${WEB_PORT:-3000}
-  read -p "SSH 端口 (默认 2222): " SSH_PORT; SSH_PORT=${SSH_PORT:-2222}
+  GW_PORT="$(prompt_line "Gateway 端口 (默认 18789): " "18789")"
+  WEB_PORT="$(prompt_line "Web 面板端口 (默认 3000): " "3000")"
+  SSH_PORT="$(prompt_line "SSH 端口 (默认 2222): " "2222")"
 }
 
 create_and_start(){
@@ -154,8 +182,10 @@ main(){
     info "检测到最新 release: $tag"
   fi
 
-  echo "选择镜像版本：1) 精简(lite) 2) 完整(full) （回车默认1）"
-  read -t 15 -p "选择 [1/2]: " choice || true; echo
+  if has_tty; then
+    echo "选择镜像版本：1) 精简(lite) 2) 完整(full) （回车默认1）"
+  fi
+  choice="$(prompt_line "选择 [1/2]: " "1")"
   if [ "$choice" = "2" ]; then IMAGE_TARBALL="openclaw-pro-image.tar.gz"; else IMAGE_TARBALL="openclaw-pro-image-lite.tar.gz"; fi
 
   if ! download_tarball "$tag"; then
