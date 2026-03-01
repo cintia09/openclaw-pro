@@ -3616,6 +3616,30 @@ function Main {
                             }
                         }
 
+                        # 强化校验：若加载到了 lite 镜像，强制执行 lite->latest 多次修复，避免误回退 GHCR
+                        $sawLiteLoaded = $false
+                        if ($script:imageEdition -eq 'lite') {
+                            foreach ($ref in $loadedRefs) {
+                                if (("$ref").ToLower() -match 'openclaw-pro:lite$' -or ("$ref").ToLower() -match ':v\d+\.\d+\.\d+.*-lite$') {
+                                    $sawLiteLoaded = $true
+                                    break
+                                }
+                            }
+                            if (-not $sawLiteLoaded) {
+                                $liteProbe = & docker image inspect openclaw-pro:lite 2>$null
+                                if ($LASTEXITCODE -eq 0) { $sawLiteLoaded = $true }
+                            }
+                        }
+                        if ($sawLiteLoaded) {
+                            Write-Info "检测到已加载 lite 镜像，执行强化 tag 修复（openclaw-pro:lite -> openclaw-pro:latest）..."
+                            for ($ti = 1; $ti -le 3; $ti++) {
+                                try { & docker tag "openclaw-pro:lite" "openclaw-pro:latest" 2>$null } catch { }
+                                Start-Sleep -Milliseconds 300
+                                $tagChk = & docker image inspect openclaw-pro:latest 2>$null
+                                if ($LASTEXITCODE -eq 0) { break }
+                            }
+                        }
+
                         # 有些 tar 里只有 ghcr.io/... 或 openclaw-pro:lite；尝试补一个 openclaw-pro:latest
                         $preTagCheck = & docker image inspect openclaw-pro:latest 2>$null
                         if ($LASTEXITCODE -ne 0) {
@@ -4648,15 +4672,43 @@ function Main {
                         Remove-Job $loadJob -Force
                         $totalLoadSec = [math]::Floor($loadTimer.Elapsed.TotalSeconds)
 
+                        $recoverLoadedRefs = @()
+
                         $loadOutput | ForEach-Object {
                             Write-Log "docker load(recover): $_"
                             if ($_ -match "Loaded image") {
                                 Write-Host "  $_" -ForegroundColor DarkGray
                                 if ($_ -match '^Loaded image:\s*(.+)\s*$') {
+                                    $recoverLoadedRefs += $Matches[1].Trim()
                                     try { & docker tag $Matches[1].Trim() "openclaw-pro:latest" 2>$null } catch { }
                                 }
                             } elseif ($_ -match '^Loaded image ID:\s*(sha256:[0-9a-f]+)\s*$') {
+                                $recoverLoadedRefs += $Matches[1].Trim()
                                 try { & docker tag $Matches[1].Trim() "openclaw-pro:latest" 2>$null } catch { }
+                            }
+                        }
+
+                        # 强化校验：recover 路径同样对 lite->latest 做强制修复，减少误回退 GHCR
+                        $recoverSawLite = $false
+                        if ($script:imageEdition -eq 'lite') {
+                            foreach ($ref in $recoverLoadedRefs) {
+                                if (("$ref").ToLower() -match 'openclaw-pro:lite$' -or ("$ref").ToLower() -match ':v\d+\.\d+\.\d+.*-lite$') {
+                                    $recoverSawLite = $true
+                                    break
+                                }
+                            }
+                            if (-not $recoverSawLite) {
+                                $recoverLiteProbe = & docker image inspect openclaw-pro:lite 2>$null
+                                if ($LASTEXITCODE -eq 0) { $recoverSawLite = $true }
+                            }
+                        }
+                        if ($recoverSawLite) {
+                            Write-Info "检测到已加载 lite 镜像，执行强化 tag 修复（openclaw-pro:lite -> openclaw-pro:latest）..."
+                            for ($rti = 1; $rti -le 3; $rti++) {
+                                try { & docker tag "openclaw-pro:lite" "openclaw-pro:latest" 2>$null } catch { }
+                                Start-Sleep -Milliseconds 300
+                                $recoverTagChk = & docker image inspect openclaw-pro:latest 2>$null
+                                if ($LASTEXITCODE -eq 0) { break }
                             }
                         }
 
