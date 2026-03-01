@@ -3970,7 +3970,10 @@ function Main {
                     # 强制应用 SSH 安全配置（禁用密码登录，仅允许密钥）
                     & docker exec $containerName bash -lc "if [ -f /etc/ssh/sshd_config ]; then sed -i -E 's|^[#[:space:]]*PermitRootLogin[[:space:]]+.*|PermitRootLogin prohibit-password|' /etc/ssh/sshd_config; sed -i -E 's|^[#[:space:]]*PasswordAuthentication[[:space:]]+.*|PasswordAuthentication no|' /etc/ssh/sshd_config; sed -i -E 's|^[#[:space:]]*KbdInteractiveAuthentication[[:space:]]+.*|KbdInteractiveAuthentication no|' /etc/ssh/sshd_config; sed -i -E 's|^[#[:space:]]*ChallengeResponseAuthentication[[:space:]]+.*|ChallengeResponseAuthentication no|' /etc/ssh/sshd_config; fi; mkdir -p /run/sshd; pkill -x sshd >/dev/null 2>&1 || true; (/usr/sbin/sshd >/dev/null 2>&1 || service ssh restart >/dev/null 2>&1 || true)" 2>$null | Out-Null
 
-                    $pwdAuth = (& docker exec $containerName bash -lc "grep -Ei '^[[:space:]]*PasswordAuthentication[[:space:]]+' /etc/ssh/sshd_config | tail -n1 | tr -s '[:space:]' ' ' | cut -d' ' -f2 | tr '[:upper:]' '[:lower:]'" 2>$null | Out-String).Trim().ToLower()
+                    $pwdAuth = (& docker exec $containerName bash -lc "sshd -T 2>/dev/null | sed -n 's/^passwordauthentication //p' | tail -n1 | tr '[:upper:]' '[:lower:]'" 2>$null | Out-String).Trim().ToLower()
+                    if (-not $pwdAuth) {
+                        $pwdAuth = (& docker exec $containerName bash -lc "grep -Ehi '^[[:space:]]*PasswordAuthentication[[:space:]]+' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null | tail -n1 | sed -E 's/.*[Pp]asswordAuthentication[[:space:]]+([^[:space:]#]+).*/\\1/' | tr '[:upper:]' '[:lower:]'" 2>$null | Out-String).Trim().ToLower()
+                    }
                     $script:sshPasswordAuthDisabled = ($pwdAuth -eq 'no')
                     if ($script:sshPasswordAuthDisabled) {
                         Write-OK "SSH 密码登录已禁用（仅密钥登录）"
