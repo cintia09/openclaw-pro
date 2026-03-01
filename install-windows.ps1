@@ -1070,6 +1070,57 @@ function Get-ContainerReleaseVersion {
     return ""
 }
 
+function Get-ContainerEdition {
+    param([string]$ContainerName)
+    if (-not $ContainerName) { return "" }
+    try {
+        $ed = (& docker exec $ContainerName sh -lc "cat /etc/openclaw-edition 2>/dev/null || true" 2>$null | Select-Object -First 1)
+        $ed = ("$ed").Trim().ToLower()
+        if ($ed -in @('lite','full')) { return $ed }
+    } catch { }
+    try {
+        $imgRef = (& docker inspect $ContainerName --format '{{.Config.Image}}' 2>$null | Select-Object -First 1)
+        $imgRef = ("$imgRef").Trim().ToLower()
+        if ($imgRef -match 'lite') { return 'lite' }
+        if ($imgRef) { return 'full' }
+    } catch { }
+    return ""
+}
+
+function Get-ContainerDockerfileHash {
+    param([string]$ContainerName)
+    if (-not $ContainerName) { return "" }
+    try {
+        $h = (& docker exec $ContainerName sh -lc "cat /etc/openclaw-dockerfile-hash 2>/dev/null || true" 2>$null | Select-Object -First 1)
+        $h = ("$h").Trim().ToLower()
+        if ($h -match '^[0-9a-f]{64}$') { return $h }
+    } catch { }
+    return ""
+}
+
+function Get-RemoteDockerfileHash {
+    param(
+        [string]$ReleaseTag,
+        [string]$Edition = "full"
+    )
+    $tag = ("$ReleaseTag").Trim()
+    if (-not $tag) { return "" }
+    $fileName = if (("$Edition").Trim().ToLower() -eq 'lite') { 'Dockerfile.lite' } else { 'Dockerfile' }
+    $url = "https://raw.githubusercontent.com/$GITHUB_REPO/$tag/$fileName"
+    try {
+        $resp = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 12 -ErrorAction Stop
+        $content = [Text.Encoding]::UTF8.GetBytes([string]$resp.Content)
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $hashBytes = $sha.ComputeHash($content)
+            return ([System.BitConverter]::ToString($hashBytes) -replace '-', '').ToLower()
+        } finally {
+            $sha.Dispose()
+        }
+    } catch { }
+    return ""
+}
+
 # --- Robust Multi-threaded Chunked Download (多线程分块断点续传) --------------
 # 将大文件拆成 2MB 小块，N 个线程并行下载，每块独立 HTTP Range 请求。
 # 断线只影响单个块的单个线程，自动重试。支持跨次运行续传（.progress 文件）。
@@ -2806,6 +2857,33 @@ function Main {
                     $_.VersionNorm -and ($_.VersionNorm -ne $targetReleaseNorm)
                 })
                 if ($outdated.Count -gt 0) {
+                    $hotUpdateEligible = @()
+                    foreach ($item in $outdated) {
+                        $ed = Get-ContainerEdition -ContainerName $item.Name
+                        if (-not $ed) { $ed = 'full' }
+                        $localDfHash = Get-ContainerDockerfileHash -ContainerName $item.Name
+                        $remoteDfHash = Get-RemoteDockerfileHash -ReleaseTag $latestReleaseTag -Edition $ed
+                        if ($localDfHash -and $remoteDfHash -and ($localDfHash -eq $remoteDfHash)) {
+                            $hotUpdateEligible += $item
+                        }
+                    }
+
+                    if ($hotUpdateEligible.Count -gt 0) {
+                        Write-Host "  💡 检测到新 Release 且可热更新（无需完整重装）:" -ForegroundColor Cyan
+                        foreach ($item in $hotUpdateEligible) {
+                            Write-Host "     $($item.Name): 建议先在 Web 面板 → 系统更新 执行热更新" -ForegroundColor DarkGray
+                        }
+                        Write-Host ""
+                        Write-Host "  是否继续执行安装重装流程？[y/N]: " -NoNewline -ForegroundColor White
+                        $continueInstall = (Read-Host).Trim().ToLower()
+                        if ($continueInstall -ne 'y' -and $continueInstall -ne 'yes') {
+                            Write-Host ""
+                            Write-Host "  已取消本次安装流程，请在 Web 面板执行热更新。" -ForegroundColor Yellow
+                            Write-Host "  热更新后可再次运行安装脚本（如有需要）。" -ForegroundColor DarkGray
+                            return
+                        }
+                    }
+
                     Write-Warn "检测到容器版本与目标版本不匹配（目标: $latestReleaseTag）"
                     foreach ($item in $outdated) {
                         $oldV = if ($item.VersionRaw) { $item.VersionRaw } else { "未知" }
