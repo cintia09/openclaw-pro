@@ -1006,14 +1006,6 @@ function Get-ContainerReleaseVersion {
     )
     if (-not $ContainerName) { return "" }
     try {
-        $raw = (& docker exec $ContainerName sh -lc "cat /etc/openclaw-version 2>/dev/null || true" 2>$null | Select-Object -First 1)
-        if ($raw) {
-            $raw = ("$raw").Trim()
-            if ($raw) { return $raw }
-        }
-    } catch { }
-
-    try {
         $verLine = (& docker exec $ContainerName sh -lc "openclaw --version 2>/dev/null || true" 2>$null | Select-Object -First 1)
         if ($verLine) {
             $verLine = ("$verLine").Trim()
@@ -1021,6 +1013,14 @@ function Get-ContainerReleaseVersion {
                 return $Matches[1]
             }
             if ($verLine) { return $verLine }
+        }
+    } catch { }
+
+    try {
+        $raw = (& docker exec $ContainerName sh -lc "cat /etc/openclaw-version 2>/dev/null || true" 2>$null | Select-Object -First 1)
+        if ($raw) {
+            $raw = ("$raw").Trim()
+            if ($raw) { return $raw }
         }
     } catch { }
 
