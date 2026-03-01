@@ -1913,20 +1913,26 @@ function Show-Completion {
         if ($script:sshPasswordAuthDisabled) {
             Write-Host "     PasswordAuthentication: no（已禁用密码登录，仅允许密钥）" -ForegroundColor Green
         } else {
-            Write-Host "     PasswordAuthentication: 未检测到 no，请检查容器 sshd_config" -ForegroundColor Yellow
+            Write-Host "     PasswordAuthentication: 未检测到 no（建议重启容器后复查 /etc/ssh/sshd_config）" -ForegroundColor Yellow
         }
 
         if ($script:sshInjectedKeyPath) {
             Write-Host "     公钥注入: 已自动注入 $script:sshInjectedKeyPath" -ForegroundColor Green
         } else {
-            Write-Host "     公钥注入: 未检测到宿主机公钥，请手动注入到 /root/.ssh/authorized_keys" -ForegroundColor Yellow
-            Write-Host '     示例: type %USERPROFILE%\.ssh\id_ed25519.pub | docker exec -i openclaw-pro bash -lc "mkdir -p /root/.ssh && cat >> /root/.ssh/authorized_keys && chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys"' -ForegroundColor DarkGray
+            Write-Host "     公钥注入: 未自动注入，你可以使用任意来源的公钥手动写入 /root/.ssh/authorized_keys" -ForegroundColor Yellow
+            Write-Host "     示例(Linux/macOS): cat /path/to/your_key.pub | docker exec -i openclaw-pro bash -lc 'mkdir -p /root/.ssh && cat >> /root/.ssh/authorized_keys && chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys'" -ForegroundColor DarkGray
+            Write-Host "     示例(Windows): type C:\path\to\your_key.pub | docker exec -i openclaw-pro bash -lc \"mkdir -p /root/.ssh && cat >> /root/.ssh/authorized_keys && chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys\"" -ForegroundColor DarkGray
         }
 
         if ($script:rootPasswordFilePath) {
             Write-Host "     Root 初始密码: 已生成并保存到 $script:rootPasswordFilePath" -ForegroundColor Green
             Write-Host "     注意: 该密码仅供容器内本地管理使用，SSH 仍为密钥登录" -ForegroundColor DarkGray
+            Write-Host "     建议立即修改: docker exec -it openclaw-pro bash -lc 'passwd root'" -ForegroundColor DarkGray
         }
+        Write-Host ""
+        Write-Host "  ⬆ 手动升级（容器内测试）：" -ForegroundColor White
+        Write-Host "     docker exec -it openclaw-pro bash -lc \"openclaw update --channel stable || npm install -g openclaw@latest\"" -ForegroundColor Gray
+        Write-Host "     docker exec -it openclaw-pro bash -lc \"openclaw --version\"" -ForegroundColor Gray
         Write-Host ""
         Write-Host "  🔄 升级到新版本：" -ForegroundColor White
         Write-Host "     重新运行安装命令即可，脚本会自动检测版本差异：" -ForegroundColor DarkGray
@@ -3952,7 +3958,7 @@ function Main {
                         Write-Warn "SSH 服务状态未确认，请稍后执行 docker logs $containerName 查看"
                     }
 
-                    $pwdAuth = (& docker exec $containerName bash -lc "sshd -T 2>/dev/null | awk '/^passwordauthentication /{print `$2}'" 2>$null | Out-String).Trim().ToLower()
+                    $pwdAuth = (& docker exec $containerName bash -lc "grep -Ei '^[[:space:]]*PasswordAuthentication[[:space:]]+' /etc/ssh/sshd_config | tail -n1 | awk '{print tolower(\$2)}'" 2>$null | Out-String).Trim().ToLower()
                     $script:sshPasswordAuthDisabled = ($pwdAuth -eq 'no')
                     if ($script:sshPasswordAuthDisabled) {
                         Write-OK "SSH 密码登录已禁用（仅密钥登录）"
