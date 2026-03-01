@@ -531,6 +531,12 @@ function getLocalDockerfileHash() {
   try { return fs.readFileSync(DOCKERFILE_HASH_FILE, 'utf8').trim(); } catch { return ''; }
 }
 
+function normalizeVersionTag(v) {
+  const s = String(v || '').trim();
+  if (!s) return '';
+  return s.replace(/^v/i, '');
+}
+
 let updateCache = { data: null, checkedAt: 0 };
 
 app.get('/api/update/check', async (req, res) => {
@@ -582,9 +588,11 @@ app.get('/api/update/check', async (req, res) => {
     if (!latestVersion) {
       return res.json({ currentVersion, latestVersion: null, error: '无法连接 GitHub（API 和 raw 均不可达）' });
     }
+    const currentNorm = normalizeVersionTag(currentVersion);
+    const latestNorm = normalizeVersionTag(latestVersion);
     // Only consider a release version difference as the primary "hasUpdate" trigger
-    const hasUpdate = currentVersion !== 'unknown' && currentVersion !== 'dev'
-      && latestVersion && latestVersion !== currentVersion;
+    const hasUpdate = currentNorm !== 'unknown' && currentNorm !== 'dev'
+      && !!latestNorm && latestNorm !== currentNorm;
 
     const result = {
       currentVersion,
@@ -598,26 +606,47 @@ app.get('/api/update/check', async (req, res) => {
       dockerfileChanged: false
     };
 
-    // Always check Dockerfile hash — even when versions match
-    // (hotpatch updates version file but doesn't rebuild image)
+    // Check Dockerfile hash against release ref first (avoid false positives from main branch drift)
     try {
-      const dfResp = await fetchWithFallback(`${GITHUB_RAW_BASE}/main/Dockerfile`, {
-        headers: { 'User-Agent': 'openclaw-pro' },
-        timeout: 10000
-      });
-        if (dfResp.ok) {
-        const remoteDockerfile = await dfResp.text();
-        const remoteHash = crypto.createHash('sha256').update(remoteDockerfile).digest('hex');
-        const localHash = getLocalDockerfileHash();
-        if (localHash) {
-            result.dockerfileChanged = remoteHash !== localHash;
-            // If Dockerfile differs, a full update (rebuild/redeploy) is required
-            result.requiresFullUpdate = remoteHash !== localHash;
-        } else {
-            // Old image without hash file: image predates hash feature
-            result.dockerfileChanged = true;
-            result.requiresFullUpdate = true;
-        }
+      const refs = [];
+      if (latestVersion) refs.push(latestVersion);
+      if (release && release.target_commitish) refs.push(release.target_commitish);
+      if (!refs.includes('main')) refs.push('main');
+
+      let remoteHash = '';
+      let checkedRef = '';
+      for (const ref of refs) {
+        try {
+          const dfResp = await fetchWithFallback(`${GITHUB_RAW_BASE}/${ref}/Dockerfile`, {
+            headers: { 'User-Agent': 'openclaw-pro' },
+            timeout: 10000
+          });
+          if (!dfResp.ok) continue;
+          const remoteDockerfile = await dfResp.text();
+          remoteHash = crypto.createHash('sha256').update(remoteDockerfile).digest('hex');
+          checkedRef = ref;
+          break;
+        } catch {}
+      }
+
+      const localHash = getLocalDockerfileHash();
+      if (remoteHash && localHash) {
+        result.dockerfileChanged = remoteHash !== localHash;
+        // If Dockerfile differs, a full update (rebuild/redeploy) is required
+        result.requiresFullUpdate = remoteHash !== localHash;
+      } else if (remoteHash && !localHash) {
+        // Missing local hash in image: avoid flagging brand-new same-version installs as full update required.
+        // Keep conservative behavior only when there is a real release version difference.
+        result.dockerfileChanged = !!hasUpdate;
+        result.requiresFullUpdate = !!hasUpdate;
+      } else {
+        // Could not compare Dockerfile hash remotely; do not force full update on unknown state.
+        result.dockerfileChanged = false;
+        result.requiresFullUpdate = false;
+      }
+
+      if (checkedRef) {
+        console.log(`[update] Dockerfile hash checked against ref: ${checkedRef}`);
       }
     } catch {}
 
@@ -895,6 +924,45 @@ app.post('/api/restart', (req, res) => {
 // ============================================================
 const installLogs = {};
 
+function appendInstallLog(task, chunk) {
+  const text = String(chunk || '');
+  if (!text) return;
+  task.log += text;
+  task.seq = (task.seq || 0) + 1;
+  task.chunks = task.chunks || [];
+  task.chunks.push(text);
+  if (task.chunks.length > 3000) {
+    task.chunks = task.chunks.slice(task.chunks.length - 3000);
+  }
+}
+
+function runOpenClawTask(command, title) {
+  const taskId = Date.now().toString();
+  installLogs[taskId] = {
+    status: 'running',
+    log: '',
+    startedAt: Date.now(),
+    seq: 0,
+    chunks: []
+  };
+
+  const task = installLogs[taskId];
+  appendInstallLog(task, `[openclaw] ${title}\n`);
+  appendInstallLog(task, `[openclaw] command: ${command}\n\n`);
+
+  const child = exec(`bash -lc '${command}'`, { timeout: 900000 });
+  child.stdout.on('data', d => appendInstallLog(task, d));
+  child.stderr.on('data', d => appendInstallLog(task, d));
+  child.on('close', code => {
+    task.status = code === 0 ? 'success' : 'failed';
+    task.exitCode = code;
+    const keys = Object.keys(installLogs).sort();
+    while (keys.length > 5) delete installLogs[keys.shift()];
+  });
+
+  return taskId;
+}
+
 app.get('/api/openclaw', (req, res) => {
   let installed = false;
   let version = '';
@@ -916,39 +984,29 @@ app.get('/api/openclaw', (req, res) => {
 });
 
 app.post('/api/openclaw/install', (req, res) => {
-  const taskId = Date.now().toString();
-  installLogs[taskId] = { status: 'running', log: '', startedAt: Date.now() };
+  const command = 'curl -fsSL --proto "=https" --tlsv1.2 https://openclaw.ai/install-cli.sh | bash';
+  const taskId = runOpenClawTask(command, '使用 OpenClaw 官网安装脚本安装 CLI');
   res.json({ taskId });
-
-  const child = exec('npm install -g openclaw 2>&1', { timeout: 600000 });
-  child.stdout.on('data', d => (installLogs[taskId].log += d));
-  child.stderr.on('data', d => (installLogs[taskId].log += d));
-  child.on('close', code => {
-    installLogs[taskId].status = code === 0 ? 'success' : 'failed';
-    installLogs[taskId].exitCode = code;
-    const keys = Object.keys(installLogs).sort();
-    while (keys.length > 5) delete installLogs[keys.shift()];
-  });
 });
 
 app.get('/api/openclaw/install/:taskId', (req, res) => {
   const task = installLogs[req.params.taskId];
   if (!task) return res.status(404).json({ error: 'not found' });
-  res.json(task);
+  const since = Math.max(0, parseInt(req.query.since || '0', 10) || 0);
+  let delta = '';
+  if (since <= 0) {
+    delta = task.log || '';
+  } else if (since < (task.seq || 0)) {
+    const chunks = task.chunks || [];
+    delta = chunks.slice(since).join('');
+  }
+  res.json({ ...task, delta });
 });
 
 app.post('/api/openclaw/update', (req, res) => {
-  const taskId = Date.now().toString();
-  installLogs[taskId] = { status: 'running', log: '', startedAt: Date.now() };
+  const command = 'openclaw update --channel stable || npm install -g openclaw@latest';
+  const taskId = runOpenClawTask(command, '按官方稳定渠道更新 OpenClaw');
   res.json({ taskId });
-
-  const child = exec('npm install -g openclaw@latest 2>&1', { timeout: 600000 });
-  child.stdout.on('data', d => (installLogs[taskId].log += d));
-  child.stderr.on('data', d => (installLogs[taskId].log += d));
-  child.on('close', code => {
-    installLogs[taskId].status = code === 0 ? 'success' : 'failed';
-    installLogs[taskId].exitCode = code;
-  });
 });
 
 app.post('/api/openclaw/start', (req, res) => {

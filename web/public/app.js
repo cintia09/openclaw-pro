@@ -376,10 +376,19 @@ async function pollTask(taskId){
   const logEl = $('oc-log');
   logEl.textContent = '';
 
-  ocPollTimer = setInterval(async ()=>{
-    const st = await api('/api/openclaw/install/' + taskId);
+  let lastSeq = 0;
+
+  const tick = async () => {
+    const st = await api('/api/openclaw/install/' + taskId + '?since=' + lastSeq);
     if (!st || st.error) return;
-    logEl.textContent = st.log || '';
+
+    if (st.delta) {
+      logEl.textContent += st.delta;
+    } else if (!lastSeq && st.log) {
+      // First render fallback
+      logEl.textContent = st.log;
+    }
+    lastSeq = Number(st.seq || lastSeq || 0);
     logEl.scrollTop = logEl.scrollHeight;
 
     if (st.status && st.status !== 'running'){
@@ -389,7 +398,10 @@ async function pollTask(taskId){
       refreshOpenClaw();
       refreshStatus();
     }
-  }, 1500);
+  };
+
+  await tick();
+  ocPollTimer = setInterval(tick, 600);
 }
 
 $('btn-oc-refresh').addEventListener('click', refreshOpenClaw);
@@ -401,10 +413,10 @@ $('btn-oc-install').addEventListener('click', async ()=>{
     if (!r.taskId){
       const i = await api('/api/openclaw/install', { method:'POST' });
       if (!i.taskId){ toast('启动失败', i.error||''); return; }
-      toast('开始安装', '正在拉取 OpenClaw...');
+      toast('开始安装', '正在执行 OpenClaw 官方安装流程...');
       pollTask(i.taskId);
     }else{
-      toast('开始更新', '正在更新 OpenClaw...');
+      toast('开始更新', '正在按稳定渠道更新 OpenClaw...');
       pollTask(r.taskId);
     }
   }finally{

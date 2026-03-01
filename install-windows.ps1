@@ -939,6 +939,38 @@ function Find-AvailablePort {
     return $port
 }
 
+function Normalize-ReleaseVersion {
+    param([string]$Version)
+    $v = ("$Version").Trim()
+    if (-not $v) { return "" }
+    return $v.TrimStart('v','V')
+}
+
+function Get-ContainerReleaseVersion {
+    param([string]$ContainerName)
+    if (-not $ContainerName) { return "" }
+    try {
+        $raw = (& docker exec $ContainerName sh -lc "cat /etc/openclaw-version 2>/dev/null || true" 2>$null | Select-Object -First 1)
+        if ($raw) {
+            $raw = ("$raw").Trim()
+            if ($raw) { return $raw }
+        }
+    } catch { }
+
+    try {
+        $verLine = (& docker exec $ContainerName sh -lc "openclaw --version 2>/dev/null || true" 2>$null | Select-Object -First 1)
+        if ($verLine) {
+            $verLine = ("$verLine").Trim()
+            if ($verLine -match '(v?\d+\.\d+\.\d+)') {
+                return $Matches[1]
+            }
+            if ($verLine) { return $verLine }
+        }
+    } catch { }
+
+    return ""
+}
+
 # --- Robust Multi-threaded Chunked Download (多线程分块断点续传) --------------
 # 将大文件拆成 2MB 小块，N 个线程并行下载，每块独立 HTTP Range 请求。
 # 断线只影响单个块的单个线程，自动重试。支持跨次运行续传（.progress 文件）。
@@ -2112,14 +2144,14 @@ function Main {
         }
     }
 
-    # -- Phase 4: Deploy OpenClaw -----------------------------------------------
-    Write-Step 4 5 "部署 OpenClaw Pro..."
+    # -- Phase 4: Prepare container deployment ----------------------------------
+    Write-Step 4 5 "准备容器部署..."
 
     if ($dockerDesktopMode) {
         # Docker Desktop mode: default to explicit ImageOnly (no source/repo download)
         $ImageOnly = $true
         $ImageOnlyExplicit = $true
-        Write-Info "Docker Desktop 模式：在本地部署..."
+        Write-Info "Docker Desktop 模式：仅部署容器（不拉取源码/部署包）..."
 
         # 检测当前目录是否已是部署目录（避免嵌套创建 openclaw-pro/openclaw-pro）
         $currentDir = (Get-Location).Path
@@ -2201,7 +2233,6 @@ function Main {
                 $latestReleaseCommit = $latestReleaseInfo.target_commitish
             }
             if ($latestReleaseTag) {
-                Write-Info "远端最新 Release: $latestReleaseTag"
                 $latestVer = $latestReleaseTag.TrimStart('v','V')
                 if ($latestVer -and $latestVer -ne $SCRIPT_VERSION) {
                     # Version mismatch detected (silent when ImageOnly or remote execution)
@@ -2587,8 +2618,6 @@ function Main {
                     return
                 }
             }
-        } else {
-            Write-OK "已选择使用本地部署包，跳过更新"
         }
 
         # Build and run with Docker
@@ -2627,19 +2656,77 @@ function Main {
             Write-Host "" 
             Write-Host "  ⚠️  发现正在运行的 OpenClaw 容器:" -ForegroundColor Yellow
             Write-Host ""
+            $runningContainerMeta = @()
             foreach ($rc in $runningContainers) {
                 $parts = $rc -split '\|'
-                Write-Host "     容器: $($parts[0])  状态: $($parts[1])  端口: $($parts[2])" -ForegroundColor DarkGray
+                $rcName = $parts[0]
+                $rcStatus = if ($parts.Count -ge 2) { $parts[1] } else { "" }
+                $rcPorts = if ($parts.Count -ge 3) { $parts[2] } else { "" }
+                $rcVersion = Get-ContainerReleaseVersion -ContainerName $rcName
+                $rcVersionText = if ($rcVersion) { $rcVersion } else { "未知" }
+                $runningContainerMeta += @{
+                    Name = $rcName
+                    Status = $rcStatus
+                    Ports = $rcPorts
+                    VersionRaw = $rcVersion
+                    VersionNorm = (Normalize-ReleaseVersion $rcVersion)
+                }
+                Write-Host "     容器: ${rcName}  版本: ${rcVersionText}  状态: ${rcStatus}  端口: ${rcPorts}" -ForegroundColor DarkGray
             }
             Write-Host ""
-            Write-Host "  请选择操作:" -ForegroundColor White
-            Write-Host "     [1] 新建一个容器（不删除旧容器）" -ForegroundColor Gray
-            Write-Host "     [2] 重新安装容器（删除旧容器，保留配置和 home-data，默认沿用旧配置）" -ForegroundColor Gray
-            Write-Host "     [3] 重新安装容器（删除旧容器 + 配置 + home-data）" -ForegroundColor Gray
-            Write-Host ""
-            Write-Host "  输入选择 [2]: " -NoNewline -ForegroundColor White
-            $choice = (Read-Host).Trim()
-            if (-not $choice) { $choice = '2' }
+
+            $choice = $null
+            $preferredUpgradeContainer = ""
+            $targetReleaseNorm = Normalize-ReleaseVersion $latestReleaseTag
+            if ($targetReleaseNorm) {
+                $outdated = @($runningContainerMeta | Where-Object {
+                    $_.VersionNorm -and ($_.VersionNorm -ne $targetReleaseNorm)
+                })
+                if ($outdated.Count -gt 0) {
+                    Write-Warn "检测到容器版本与目标版本不匹配（目标: $latestReleaseTag）"
+                    foreach ($item in $outdated) {
+                        $oldV = if ($item.VersionRaw) { $item.VersionRaw } else { "未知" }
+                        Write-Host "     $($item.Name): $oldV -> $latestReleaseTag" -ForegroundColor Yellow
+                    }
+                    Write-Host ""
+                    Write-Host "  是否先执行升级重装（删除旧容器，保留配置和 home-data）？[Y/n]: " -NoNewline -ForegroundColor White
+                    $upgradeFirst = (Read-Host).Trim().ToLower()
+                    if (-not $upgradeFirst -or $upgradeFirst -eq 'y' -or $upgradeFirst -eq 'yes') {
+                        $choice = '2'
+                        if ($outdated.Count -eq 1) {
+                            $preferredUpgradeContainer = $outdated[0].Name
+                        } else {
+                            Write-Host ""
+                            Write-Host "  请选择要升级的容器:" -ForegroundColor Cyan
+                            for ($i = 0; $i -lt $outdated.Count; $i++) {
+                                $item = $outdated[$i]
+                                $oldV = if ($item.VersionRaw) { $item.VersionRaw } else { "未知" }
+                                Write-Host "     [$($i + 1)] $($item.Name)  (版本: $oldV  端口: $($item.Ports))" -ForegroundColor White
+                            }
+                            Write-Host ""
+                            Write-Host "  输入选择 [默认1]: " -NoNewline -ForegroundColor White
+                            $upIdx = (Read-Host).Trim()
+                            if ($upIdx -match '^\d+$' -and [int]$upIdx -ge 1 -and [int]$upIdx -le $outdated.Count) {
+                                $preferredUpgradeContainer = $outdated[[int]$upIdx - 1].Name
+                            } else {
+                                $preferredUpgradeContainer = $outdated[0].Name
+                            }
+                        }
+                        Write-Info "将优先执行升级重装（保留配置和 home-data）"
+                    }
+                }
+            }
+
+            if (-not $choice) {
+                Write-Host "  请选择操作:" -ForegroundColor White
+                Write-Host "     [1] 新建一个容器（不删除旧容器）" -ForegroundColor Gray
+                Write-Host "     [2] 重新安装容器（删除旧容器，保留配置和 home-data，默认沿用旧配置）" -ForegroundColor Gray
+                Write-Host "     [3] 重新安装容器（删除旧容器 + 配置 + home-data）" -ForegroundColor Gray
+                Write-Host ""
+                Write-Host "  输入选择 [2]: " -NoNewline -ForegroundColor White
+                $choice = (Read-Host).Trim()
+                if (-not $choice) { $choice = '2' }
+            }
 
             if ($choice -eq '1') {
                 # 保留旧容器，生成新容器名和独立数据目录
@@ -2663,22 +2750,38 @@ function Main {
             } elseif ($choice -eq '2') {
                 # -- 升级模式：读取旧容器对应的配置，删除旧容器后复用相同配置 --
                 $upgradeContainerName = ""
-                if ($runningContainers.Count -eq 1) {
+                if ($preferredUpgradeContainer) {
+                    $upgradeContainerName = $preferredUpgradeContainer
+                } elseif ($runningContainers.Count -eq 1) {
                     $upgradeContainerName = ($runningContainers[0] -split '\|')[0]
                 } else {
                     Write-Host ""
                     Write-Host "  请选择要升级的容器:" -ForegroundColor Cyan
-                    for ($i = 0; $i -lt $runningContainers.Count; $i++) {
-                        $parts = $runningContainers[$i] -split '\|'
-                        Write-Host "     [$($i + 1)] $($parts[0])  (状态: $($parts[1])  端口: $($parts[2]))" -ForegroundColor White
+                    $menuSource = if ($runningContainerMeta -and $runningContainerMeta.Count -gt 0) { $runningContainerMeta } else { $runningContainers }
+                    for ($i = 0; $i -lt $menuSource.Count; $i++) {
+                        if ($menuSource[$i] -is [hashtable]) {
+                            $mv = if ($menuSource[$i].VersionRaw) { $menuSource[$i].VersionRaw } else { "未知" }
+                            Write-Host "     [$($i + 1)] $($menuSource[$i].Name)  (版本: $mv  状态: $($menuSource[$i].Status)  端口: $($menuSource[$i].Ports))" -ForegroundColor White
+                        } else {
+                            $parts = $menuSource[$i] -split '\|'
+                            Write-Host "     [$($i + 1)] $($parts[0])  (状态: $($parts[1])  端口: $($parts[2]))" -ForegroundColor White
+                        }
                     }
                     Write-Host ""
                     Write-Host "  输入选择 [默认1]: " -NoNewline -ForegroundColor White
                     $upChoice = (Read-Host).Trim()
-                    if ($upChoice -match '^\d+$' -and [int]$upChoice -ge 1 -and [int]$upChoice -le $runningContainers.Count) {
-                        $upgradeContainerName = ($runningContainers[[int]$upChoice - 1] -split '\|')[0]
+                    if ($upChoice -match '^\d+$' -and [int]$upChoice -ge 1 -and [int]$upChoice -le $menuSource.Count) {
+                        if ($menuSource[[int]$upChoice - 1] -is [hashtable]) {
+                            $upgradeContainerName = $menuSource[[int]$upChoice - 1].Name
+                        } else {
+                            $upgradeContainerName = ($menuSource[[int]$upChoice - 1] -split '\|')[0]
+                        }
                     } else {
-                        $upgradeContainerName = ($runningContainers[0] -split '\|')[0]
+                        if ($menuSource[0] -is [hashtable]) {
+                            $upgradeContainerName = $menuSource[0].Name
+                        } else {
+                            $upgradeContainerName = ($menuSource[0] -split '\|')[0]
+                        }
                     }
                 }
                 $containerName = $upgradeContainerName
