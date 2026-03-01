@@ -603,7 +603,7 @@ $('btn-oc-install').addEventListener('click', async ()=>{
 
 $('btn-oc-start').addEventListener('click', async ()=>{
   const r = await api('/api/openclaw/start', { method:'POST' });
-  toast(r.success ? '已触发启动' : '启动失败', r.output || r.error || '');
+  toast(r.success ? '已触发重启' : '重启失败', r.message || r.error || '');
   setTimeout(refreshOpenClaw, 2500);
 });
 

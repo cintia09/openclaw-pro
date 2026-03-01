@@ -1242,10 +1242,10 @@ app.post('/api/openclaw/update', (req, res) => {
 app.post('/api/openclaw/start', (req, res) => {
   restartGatewayForeground((err, stdout, stderr) => {
     if (!err) {
-      return res.json({ success: true, message: 'Gateway 启动请求已提交' });
+      return res.json({ success: true, message: 'Gateway 重启请求已提交' });
     }
     const detail = compactOutput(stderr || stdout || err.message || '');
-    res.json({ success: false, error: detail || 'Gateway 启动失败，请查看日志' });
+    res.json({ success: false, error: detail || 'Gateway 重启失败，请查看日志' });
   });
 });
 
