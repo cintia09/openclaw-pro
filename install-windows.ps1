@@ -1095,6 +1095,30 @@ function Get-ContainerReleaseVersion {
     return ""
 }
 
+function Get-ContainerImageTagVersion {
+    param(
+        [string]$ContainerName,
+        [string]$HomeBaseDir = ""
+    )
+    if (-not $ContainerName -or -not $HomeBaseDir) { return "" }
+    try {
+        $tagHomeDataName = "home-data"
+        if ($ContainerName -match '^openclaw-pro-(\d+)$') {
+            $tagHomeDataName = "home-data-$($Matches[1])"
+        }
+        $imageTagFile = Join-Path $HomeBaseDir "$tagHomeDataName\.openclaw\image-release-tag.txt"
+        if (Test-Path $imageTagFile) {
+            $fver = (Get-Content $imageTagFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+            if ($fver) {
+                $fver = ("$fver").Trim()
+                if ($fver -match '^([^\|]+)\|') { return $Matches[1] }
+                if ($fver) { return $fver }
+            }
+        }
+    } catch { }
+    return ""
+}
+
 function Get-ContainerEdition {
     param([string]$ContainerName)
     if (-not $ContainerName) { return "" }
@@ -2942,16 +2966,24 @@ function Main {
                 $rcPorts = if ($parts.Count -ge 3) { $parts[2] } else { "" }
                 Write-Log "RunningContainer found: name=$rcName status='$rcStatus' ports='$rcPorts'"
                 $rcVersion = Get-ContainerReleaseVersion -ContainerName $rcName -HomeBaseDir $homeBaseDir
+                $rcImageTagVersion = Get-ContainerImageTagVersion -ContainerName $rcName -HomeBaseDir $homeBaseDir
                 $rcVersionText = if ($rcVersion) { $rcVersion } else { "未知" }
+                $rcImageTagText = if ($rcImageTagVersion) { $rcImageTagVersion } else { "" }
                 $runningContainerMeta += @{
                     Name = $rcName
                     Status = $rcStatus
                     Ports = $rcPorts
                     VersionRaw = $rcVersion
                     VersionNorm = (Normalize-ReleaseVersion $rcVersion)
+                    ImageTagVersionRaw = $rcImageTagVersion
+                    ImageTagVersionNorm = (Normalize-ReleaseVersion $rcImageTagVersion)
                 }
                 Write-Log "RunningContainer version resolved: name=$rcName raw='$rcVersion' norm='$(Normalize-ReleaseVersion $rcVersion)'"
-                Write-Host "     容器: ${rcName}  版本: ${rcVersionText}  状态: ${rcStatus}  端口: ${rcPorts}" -ForegroundColor DarkGray
+                if ($rcImageTagText -and (Normalize-ReleaseVersion $rcImageTagText) -ne (Normalize-ReleaseVersion $rcVersionText)) {
+                    Write-Host "     容器: ${rcName}  版本: ${rcVersionText}（镜像标签: ${rcImageTagText}） 状态: ${rcStatus}  端口: ${rcPorts}" -ForegroundColor DarkGray
+                } else {
+                    Write-Host "     容器: ${rcName}  版本: ${rcVersionText}  状态: ${rcStatus}  端口: ${rcPorts}" -ForegroundColor DarkGray
+                }
             }
             Write-Host ""
 
@@ -2960,7 +2992,9 @@ function Main {
             $targetReleaseNorm = Normalize-ReleaseVersion $latestReleaseTag
             if ($targetReleaseNorm) {
                 $outdated = @($runningContainerMeta | Where-Object {
-                    $_.VersionNorm -and ($_.VersionNorm -ne $targetReleaseNorm)
+                    $versionMismatch = ($_.VersionNorm -and ($_.VersionNorm -ne $targetReleaseNorm))
+                    $tagMismatch = ($_.ImageTagVersionNorm -and ($_.ImageTagVersionNorm -ne $targetReleaseNorm))
+                    $versionMismatch -and (-not $_.ImageTagVersionNorm -or $tagMismatch)
                 })
                 if ($outdated.Count -gt 0) {
                     $hotUpdateEligible = @()
