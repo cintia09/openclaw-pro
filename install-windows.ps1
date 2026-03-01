@@ -4450,20 +4450,27 @@ function Main {
                             Remove-Item $recoverTar -Force -ErrorAction SilentlyContinue
                             if (Test-Path $recoverTagFile) { Remove-Item $recoverTagFile -Force -ErrorAction SilentlyContinue }
                             $recoverDownloadOK = $false
-                            Write-Info "完整性校验失败，改用单流下载重试（避免分块代理拼接异常）..."
-                            foreach ($ru in $recoverUrls) {
-                                try {
-                                    $shortRu = if ($ru.Length -gt 70) { $ru.Substring(0, 67) + "..." } else { $ru }
-                                    Write-Info "  → $shortRu"
-                                    & curl.exe -L --fail --connect-timeout 15 --max-time 1800 --retry 3 --retry-delay 3 --progress-bar -o $recoverTar $ru 2>&1 | ForEach-Object {
-                                        if ($_ -match '\d+.*%') { Write-Host "`r  $($_.Trim())" -NoNewline -ForegroundColor DarkGray }
-                                    }
-                                    Write-Host ""
-                                    if ((Test-Path $recoverTar) -and (Get-Item $recoverTar).Length -gt 50MB) {
-                                        $recoverDownloadOK = $true
-                                        break
-                                    }
-                                } catch { }
+                            $recoverSize = Get-RemoteFileSize -Urls $recoverUrls
+                            if ($recoverSize -gt 0) {
+                                $recoverMB = [math]::Round($recoverSize / 1MB, 1)
+                                Write-Info "完整性校验失败，改用多线程重新下载 (${recoverMB}MB)..."
+                                $recoverDownloadOK = Download-Robust `
+                                    -Urls $recoverUrls `
+                                    -OutFile $recoverTar `
+                                    -ExpectedSize $recoverSize `
+                                    -ChunkSizeMB 2 `
+                                    -Threads 16 `
+                                    -RetryPerChunk 20
+                                if (-not $recoverDownloadOK) {
+                                    Write-Warn "16 线程重试未完成，自动降级重试（8线程、1MB块）..."
+                                    $recoverDownloadOK = Download-Robust `
+                                        -Urls $recoverUrls `
+                                        -OutFile $recoverTar `
+                                        -ExpectedSize $recoverSize `
+                                        -ChunkSizeMB 1 `
+                                        -Threads 8 `
+                                        -RetryPerChunk 30
+                                }
                             }
                             if (-not $recoverDownloadOK) {
                                 $releaseRecoverReason = "download"
@@ -4575,20 +4582,27 @@ function Main {
                                 Remove-Item $recoverTar -Force -ErrorAction SilentlyContinue
                                 if (Test-Path $recoverTagFile) { Remove-Item $recoverTagFile -Force -ErrorAction SilentlyContinue }
                                 $recoverDownloadOK = $false
-                                Write-Info "加载失败后改用单流下载重试（避免分块代理拼接异常）..."
-                                foreach ($ru in $recoverUrls) {
-                                    try {
-                                        $shortRu = if ($ru.Length -gt 70) { $ru.Substring(0, 67) + "..." } else { $ru }
-                                        Write-Info "  → $shortRu"
-                                        & curl.exe -L --fail --connect-timeout 15 --max-time 1800 --retry 3 --retry-delay 3 --progress-bar -o $recoverTar $ru 2>&1 | ForEach-Object {
-                                            if ($_ -match '\d+.*%') { Write-Host "`r  $($_.Trim())" -NoNewline -ForegroundColor DarkGray }
-                                        }
-                                        Write-Host ""
-                                        if ((Test-Path $recoverTar) -and (Get-Item $recoverTar).Length -gt 50MB) {
-                                            $recoverDownloadOK = $true
-                                            break
-                                        }
-                                    } catch { }
+                                $recoverSize = Get-RemoteFileSize -Urls $recoverUrls
+                                if ($recoverSize -gt 0) {
+                                    $recoverMB = [math]::Round($recoverSize / 1MB, 1)
+                                    Write-Info "加载失败后改用多线程重新下载 (${recoverMB}MB)..."
+                                    $recoverDownloadOK = Download-Robust `
+                                        -Urls $recoverUrls `
+                                        -OutFile $recoverTar `
+                                        -ExpectedSize $recoverSize `
+                                        -ChunkSizeMB 2 `
+                                        -Threads 16 `
+                                        -RetryPerChunk 20
+                                    if (-not $recoverDownloadOK) {
+                                        Write-Warn "16 线程重试未完成，自动降级重试（8线程、1MB块）..."
+                                        $recoverDownloadOK = Download-Robust `
+                                            -Urls $recoverUrls `
+                                            -OutFile $recoverTar `
+                                            -ExpectedSize $recoverSize `
+                                            -ChunkSizeMB 1 `
+                                            -Threads 8 `
+                                            -RetryPerChunk 30
+                                    }
                                 }
                                 if (-not $recoverDownloadOK) {
                                     $releaseRecoverReason = "download"
