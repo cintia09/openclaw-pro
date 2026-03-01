@@ -7,7 +7,7 @@ set -euo pipefail
 CONTAINER_NAME="openclaw-pro"
 IMAGE_NAME="openclaw-pro:latest"
 GITHUB_REPO="cintia09/openclaw-pro"
-IMAGE_TARBALL="openclaw-pro-image.tar.gz"
+IMAGE_TARBALL="openclaw-pro-image-lite.tar.gz"
 TMP_DIR="$(pwd)/tmp"
 HOME_DIR="$(pwd)/home-data"
 
@@ -183,15 +183,19 @@ main(){
   fi
 
   if has_tty; then
-    echo "选择镜像版本：1) 精简(lite) 2) 完整(full) （回车默认1）"
+    echo "发布已统一为 Lite 镜像：openclaw-pro-image-lite.tar.gz"
   fi
-  choice="$(prompt_line "选择 [1/2]: " "1")"
-  if [ "$choice" = "2" ]; then IMAGE_TARBALL="openclaw-pro-image.tar.gz"; else IMAGE_TARBALL="openclaw-pro-image-lite.tar.gz"; fi
 
   if ! download_tarball "$tag"; then
-    warn "镜像下载失败，尝试直接从 GHCR 拉取（需要可访问 ghcr.io）"
-    if docker pull "ghcr.io/${GITHUB_REPO}:latest"; then
-      docker tag "ghcr.io/${GITHUB_REPO}:latest" openclaw-pro:latest || true
+    warn "镜像下载失败，尝试直接从 GHCR 拉取 Lite（需要可访问 ghcr.io）"
+    if docker pull "ghcr.io/${GITHUB_REPO}:${tag}-lite" || docker pull "ghcr.io/${GITHUB_REPO}:lite" || docker pull "ghcr.io/${GITHUB_REPO}:latest"; then
+      if docker image inspect "ghcr.io/${GITHUB_REPO}:${tag}-lite" >/dev/null 2>&1; then
+        docker tag "ghcr.io/${GITHUB_REPO}:${tag}-lite" openclaw-pro:latest || true
+      elif docker image inspect "ghcr.io/${GITHUB_REPO}:lite" >/dev/null 2>&1; then
+        docker tag "ghcr.io/${GITHUB_REPO}:lite" openclaw-pro:latest || true
+      else
+        docker tag "ghcr.io/${GITHUB_REPO}:latest" openclaw-pro:latest || true
+      fi
       success "从 GHCR 拉取完成"
     else
       echo "无法获取镜像，退出" >&2

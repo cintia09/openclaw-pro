@@ -22,7 +22,7 @@ fi
 REPO="https://github.com/cintia09/openclaw-pro.git"
 GITHUB_REPO="cintia09/openclaw-pro"
 IMAGE_NAME="openclaw-pro"
-IMAGE_TARBALL="openclaw-pro-image.tar.gz"
+IMAGE_TARBALL="openclaw-pro-image-lite.tar.gz"
 
 echo "🐾 OpenClaw Pro Installer"
 echo "========================="

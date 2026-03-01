@@ -35,7 +35,7 @@ $DEFAULT_HTTP_PORT  = "80"
 $WSL_TARGET_DIR  = "/root/openclaw-pro"
 $GITHUB_REPO     = "cintia09/openclaw-pro"
 $IMAGE_NAME      = "openclaw-pro"
-$script:imageEdition = "lite"  # 默认精简版，用户可在安装时选择
+$script:imageEdition = "lite"  # 发布仅保留 lite
 $SCRIPT_URL      = "https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1"
 $SCRIPT_DIR      = if ($MyInvocation.MyCommand.Path) {
     Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -1082,7 +1082,7 @@ function Get-ContainerEdition {
         $imgRef = (& docker inspect $ContainerName --format '{{.Config.Image}}' 2>$null | Select-Object -First 1)
         $imgRef = ("$imgRef").Trim().ToLower()
         if ($imgRef -match 'lite') { return 'lite' }
-        if ($imgRef) { return 'full' }
+        if ($imgRef) { return 'lite' }
     } catch { }
     return ""
 }
@@ -1101,7 +1101,7 @@ function Get-ContainerDockerfileHash {
 function Get-RemoteDockerfileHash {
     param(
         [string]$ReleaseTag,
-        [string]$Edition = "full"
+        [string]$Edition = "lite"
     )
     $tag = ("$ReleaseTag").Trim()
     if (-not $tag) { return "" }
@@ -2007,8 +2007,7 @@ function Show-Completion {
         Write-Host ""
         Write-Host "     方式1: 浏览器下载（推荐）" -ForegroundColor Yellow
         $manualTag = if ($script:latestReleaseTag) { $script:latestReleaseTag } elseif ($latestReleaseTag) { $latestReleaseTag } else { "v1.0.0" }
-        Write-Host "     精简版 (~250MB): https://github.com/$GITHUB_REPO/releases/download/${manualTag}/openclaw-pro-image-lite.tar.gz" -ForegroundColor Cyan
-        Write-Host "     完整版 (~1.6GB): https://github.com/$GITHUB_REPO/releases/download/${manualTag}/openclaw-pro-image.tar.gz" -ForegroundColor Cyan
+        Write-Host "     Lite版 (~250MB): https://github.com/$GITHUB_REPO/releases/download/${manualTag}/openclaw-pro-image-lite.tar.gz" -ForegroundColor Cyan
         Write-Host ""
         Write-Host "     方式2: aria2c 多线程下载（推荐，需先安装 aria2）" -ForegroundColor Yellow
         Write-Host "     aria2c -x 8 -s 8 -k 2M --continue=true --retry-wait=3 --max-tries=0 <上述URL>" -ForegroundColor White
@@ -2860,7 +2859,7 @@ function Main {
                     $hotUpdateEligible = @()
                     foreach ($item in $outdated) {
                         $ed = Get-ContainerEdition -ContainerName $item.Name
-                        if (-not $ed) { $ed = 'full' }
+                        if (-not $ed) { $ed = 'lite' }
                         $localDfHash = Get-ContainerDockerfileHash -ContainerName $item.Name
                         $remoteDfHash = Get-RemoteDockerfileHash -ReleaseTag $latestReleaseTag -Edition $ed
                         if ($localDfHash -and $remoteDfHash -and ($localDfHash -eq $remoteDfHash)) {
@@ -3159,27 +3158,12 @@ function Main {
             $imageReady = $false
             $forceRefreshImage = $false
 
-            # 先选择镜像版本（lite/full），用于后续本地/远端版本比对与下载
+            # 发布仅保留 lite 版本
             $assetName = "openclaw-pro-image-lite.tar.gz"
             Write-Host ""
-            Write-Host "  请选择镜像版本:" -ForegroundColor Cyan
-            Write-Host "     [1] 精简版（默认，~250MB，约 5 分钟完成安装）" -ForegroundColor White
-            Write-Host "         包含: Ubuntu + Node.js + Caddy + Web面板 + 常用工具 + Python3" -ForegroundColor DarkGray
-            Write-Host "         Chrome/noVNC/LightGBM/openclaw 等可后期通过 Web 面板安装" -ForegroundColor DarkGray
-            Write-Host "     [2] 完整版（~1.6GB，约 30 分钟完成安装）" -ForegroundColor White
-            Write-Host "         包含全部组件: Chrome 浏览器、noVNC、LightGBM、openclaw 等" -ForegroundColor DarkGray
-            Write-Host ""
-            Write-Host "  输入选择 [1/2，默认1]: " -NoNewline -ForegroundColor White
-            $editionChoice = (Read-Host).Trim()
-            if ($editionChoice -eq '2') {
-                $script:imageEdition = "full"
-                $assetName = "openclaw-pro-image.tar.gz"
-                Write-Info "已选择完整版镜像"
-            } else {
-                $script:imageEdition = "lite"
-                $assetName = "openclaw-pro-image-lite.tar.gz"
-                Write-Info "已选择精简版镜像"
-            }
+            $script:imageEdition = "lite"
+            $assetName = "openclaw-pro-image-lite.tar.gz"
+            Write-Info "发布仅保留 Lite 镜像，已自动选择 lite"
             if ($latestReleaseTag) {
                 Write-Info "远端目标版本: $latestReleaseTag ($script:imageEdition)"
             }
@@ -4265,17 +4249,9 @@ function Main {
                 # 如果是交互式运行：若前面尚未选择 edition 才提示选择；否则沿用已选版本
                 if ($MyInvocation.MyCommand.Path -or $ImageOnlyDefaulted) {
                     if (-not $script:imageEdition -or $script:imageEdition -eq '') {
-                        Write-Host ""
-                        Write-Host "  本地镜像不存在，请选择镜像版本 (仅本次操作):" -ForegroundColor Cyan
-                        Write-Host "     [1] 精简版（默认）" -ForegroundColor White
-                        Write-Host "     [2] 完整版" -ForegroundColor White
-                        Write-Host "  输入选择 [1/2，默认1]: " -NoNewline -ForegroundColor White
-                        $editionChoice = (Read-Host).Trim()
-                        if ($editionChoice -eq '2') { $script:imageEdition = 'full' } else { $script:imageEdition = 'lite' }
-                        Write-Info "已选择镜像版本: $script:imageEdition"
-                    } else {
-                        Write-Info "沿用已选择镜像版本: $script:imageEdition"
+                        $script:imageEdition = 'lite'
                     }
+                    Write-Info "发布仅保留 Lite 镜像，已选择镜像版本: $script:imageEdition"
 
                     Write-Host ""
                     Write-Host "  本地镜像不存在，是否尝试从 Release 下载镜像并加载？[Y/n]: " -NoNewline -ForegroundColor White
@@ -4290,7 +4266,7 @@ function Main {
 
                 # 恢复方式 1: Download-Robust 多线程分块下载 Release tar.gz
                 $recoverTag = if ($latestReleaseTag) { $latestReleaseTag } else { "latest" }
-                $recoverAssetName = if ($script:imageEdition -eq "full") { "openclaw-pro-image.tar.gz" } else { "openclaw-pro-image-lite.tar.gz" }
+                $recoverAssetName = "openclaw-pro-image-lite.tar.gz"
                 Write-Info "远端目标版本: $recoverTag ($script:imageEdition)"
                 $recoverTar = Join-Path $TMP_DIR $recoverAssetName
                 $releaseBaseUrl = if ($latestReleaseTag) {

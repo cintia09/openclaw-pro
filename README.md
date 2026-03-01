@@ -25,7 +25,7 @@ irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows
 #### 安装器会自动做什么
 
 - 检测并准备环境（Windows 下自动处理 WSL2 / Ubuntu / Docker）
-- 拉取并部署 Release 镜像（ImageOnly 优先）
+- 拉取并部署 Release 镜像（ImageOnly 优先，当前仅发布 Lite 镜像）
 - 自动检查 SSH 状态并关闭 SSH 密码登录（仅密钥登录）
 - 尝试注入公钥（无公钥时自动生成 `id_ed25519` 再注入）
 - 生成 root 初始密码文件（仅用于容器内本地管理）
