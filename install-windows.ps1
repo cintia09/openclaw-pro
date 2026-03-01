@@ -4324,6 +4324,7 @@ function Main {
 
                 # 恢复方式 1: Download-Robust 多线程分块下载 Release tar.gz
                 $recoverTag = if ($latestReleaseTag) { $latestReleaseTag } else { "latest" }
+                $recoverTagIsAliasLatest = ($recoverTag -eq "latest")
                 $recoverAssetName = "openclaw-pro-image-lite.tar.gz"
                 Write-Info "远端目标版本: $recoverTag ($script:imageEdition)"
                 $recoverTar = Join-Path $TMP_DIR $recoverAssetName
@@ -4352,12 +4353,12 @@ function Main {
                     if (Test-Path $recoverTagFile) { try { $recoverDiskTag = (Get-Content $recoverTagFile -ErrorAction SilentlyContinue | Select-Object -First 1) } catch { $recoverDiskTag = $null } }
                     if ((Test-Path $recoverTar) -and (Get-Item $recoverTar).Length -gt 50MB) {
                         $existRecoverSize = (Get-Item $recoverTar).Length
-                        if ($recoverTag -and $recoverDiskTag -and $recoverDiskTag -eq "$recoverTag|$script:imageEdition") {
+                        if ($recoverTag -and $recoverDiskTag -and ($recoverDiskTag -eq "$recoverTag|$script:imageEdition" -or ($recoverTagIsAliasLatest -and $recoverDiskTag -match "^.+\|$([regex]::Escape($script:imageEdition))$"))) {
                             Write-OK "检测到已下载的镜像文件 ($([math]::Round($existRecoverSize / 1MB, 1))MB)，版本匹配，跳过下载"
                             $recoverDownloadOK = $true
                         } else {
                             Write-Info "检测到已下载的镜像文件 ($([math]::Round($existRecoverSize / 1MB, 1))MB)，将校验版本..."
-                            if ($recoverDiskTag -and $recoverTag -and $recoverDiskTag -ne "$recoverTag|$script:imageEdition") {
+                            if ($recoverDiskTag -and $recoverTag -and (-not $recoverTagIsAliasLatest) -and $recoverDiskTag -ne "$recoverTag|$script:imageEdition") {
                                 Write-Warn "本地镜像文件版本 ($recoverDiskTag) 与远端 ($recoverTag|$script:imageEdition) 不一致，重新下载"
                                 Remove-Item $recoverTar -Force -ErrorAction SilentlyContinue
                                 if (Test-Path $recoverTagFile) { Remove-Item $recoverTagFile -Force -ErrorAction SilentlyContinue }
@@ -4381,7 +4382,7 @@ function Main {
                     $recoverSize = Get-RemoteFileSize -Urls $recoverUrls
                     if ($recoverSize -gt 0) {
                         $recoverMB = [math]::Round($recoverSize / 1MB, 1)
-                        Write-Info "文件大小: ${recoverMB}MB，开始 8 线程下载..."
+                        Write-Info "文件大小: ${recoverMB}MB，开始 16 线程下载..."
                         $recoverDownloadOK = Download-Robust `
                             -Urls $recoverUrls `
                             -OutFile $recoverTar `
@@ -4449,17 +4450,20 @@ function Main {
                             Remove-Item $recoverTar -Force -ErrorAction SilentlyContinue
                             if (Test-Path $recoverTagFile) { Remove-Item $recoverTagFile -Force -ErrorAction SilentlyContinue }
                             $recoverDownloadOK = $false
-                            $recoverSize = Get-RemoteFileSize -Urls $recoverUrls
-                            if ($recoverSize -gt 0) {
-                                $recoverMB = [math]::Round($recoverSize / 1MB, 1)
-                                Write-Info "文件大小: ${recoverMB}MB，重新下载..."
-                                $recoverDownloadOK = Download-Robust `
-                                    -Urls $recoverUrls `
-                                    -OutFile $recoverTar `
-                                    -ExpectedSize $recoverSize `
-                                    -ChunkSizeMB 2 `
-                                    -Threads 16 `
-                                    -RetryPerChunk 20
+                            Write-Info "完整性校验失败，改用单流下载重试（避免分块代理拼接异常）..."
+                            foreach ($ru in $recoverUrls) {
+                                try {
+                                    $shortRu = if ($ru.Length -gt 70) { $ru.Substring(0, 67) + "..." } else { $ru }
+                                    Write-Info "  → $shortRu"
+                                    & curl.exe -L --fail --connect-timeout 15 --max-time 1800 --retry 3 --retry-delay 3 --progress-bar -o $recoverTar $ru 2>&1 | ForEach-Object {
+                                        if ($_ -match '\d+.*%') { Write-Host "`r  $($_.Trim())" -NoNewline -ForegroundColor DarkGray }
+                                    }
+                                    Write-Host ""
+                                    if ((Test-Path $recoverTar) -and (Get-Item $recoverTar).Length -gt 50MB) {
+                                        $recoverDownloadOK = $true
+                                        break
+                                    }
+                                } catch { }
                             }
                             if (-not $recoverDownloadOK) {
                                 $releaseRecoverReason = "download"
@@ -4571,17 +4575,20 @@ function Main {
                                 Remove-Item $recoverTar -Force -ErrorAction SilentlyContinue
                                 if (Test-Path $recoverTagFile) { Remove-Item $recoverTagFile -Force -ErrorAction SilentlyContinue }
                                 $recoverDownloadOK = $false
-                                $recoverSize = Get-RemoteFileSize -Urls $recoverUrls
-                                if ($recoverSize -gt 0) {
-                                    $recoverMB = [math]::Round($recoverSize / 1MB, 1)
-                                    Write-Info "文件大小: ${recoverMB}MB，重新下载..."
-                                    $recoverDownloadOK = Download-Robust `
-                                        -Urls $recoverUrls `
-                                        -OutFile $recoverTar `
-                                        -ExpectedSize $recoverSize `
-                                        -ChunkSizeMB 2 `
-                                        -Threads 16 `
-                                        -RetryPerChunk 20
+                                Write-Info "加载失败后改用单流下载重试（避免分块代理拼接异常）..."
+                                foreach ($ru in $recoverUrls) {
+                                    try {
+                                        $shortRu = if ($ru.Length -gt 70) { $ru.Substring(0, 67) + "..." } else { $ru }
+                                        Write-Info "  → $shortRu"
+                                        & curl.exe -L --fail --connect-timeout 15 --max-time 1800 --retry 3 --retry-delay 3 --progress-bar -o $recoverTar $ru 2>&1 | ForEach-Object {
+                                            if ($_ -match '\d+.*%') { Write-Host "`r  $($_.Trim())" -NoNewline -ForegroundColor DarkGray }
+                                        }
+                                        Write-Host ""
+                                        if ((Test-Path $recoverTar) -and (Get-Item $recoverTar).Length -gt 50MB) {
+                                            $recoverDownloadOK = $true
+                                            break
+                                        }
+                                    } catch { }
                                 }
                                 if (-not $recoverDownloadOK) {
                                     $releaseRecoverReason = "download"
