@@ -437,9 +437,11 @@ function parseOpenClawVersion(text) {
 
 function getInstalledOpenClawVersion() {
   const candidates = [
-    runCommandText('openclaw --version 2>&1 || true', 2500),
-    runCommandText('openclaw -v 2>&1 || true', 2500),
-    runCommandText('npm list -g openclaw --depth=0 2>/dev/null | sed -n "s/.*openclaw@\\([^[:space:]]*\\).*/\\1/p" | head -1', 2500)
+    runCommandText('openclaw --version 2>&1 || true', 5000),
+    runCommandText('openclaw -v 2>&1 || true', 5000),
+    runCommandText('bash --noprofile --norc -lc "openclaw --version 2>&1 || true"', 6000),
+    runCommandText('npm list -g openclaw --depth=0 2>/dev/null | sed -n "s/.*openclaw@\\([^[:space:]]*\\).*/\\1/p" | head -1', 6000),
+    runCommandText('npm root -g 2>/dev/null | xargs -I{} sh -c "test -f \"{}/openclaw/package.json\" && sed -n \"s/.*\\\"version\\\": *\\\"\\([^\\\"]*\\\)\\\".*/\\1/p\" \"{}/openclaw/package.json\" | head -1"', 6000)
   ];
 
   for (const output of candidates) {
@@ -448,6 +450,34 @@ function getInstalledOpenClawVersion() {
   }
 
   return '';
+}
+
+function isOpenClawInstalledByPath() {
+  return runCommandOk('command -v openclaw >/dev/null 2>&1', 1500)
+    || runCommandOk('bash --noprofile --norc -lc "command -v openclaw >/dev/null 2>&1"', 1800)
+    || runCommandOk('test -x /usr/local/bin/openclaw || test -x /usr/bin/openclaw || test -x /opt/homebrew/bin/openclaw', 1200);
+}
+
+function isOpenClawInstalledByNpmPackage() {
+  return runCommandOk('npm list -g openclaw --depth=0 >/dev/null 2>&1', 6000)
+    || runCommandOk('npm root -g 2>/dev/null | xargs -I{} test -f "{}/openclaw/package.json"', 2500);
+}
+
+function detectOpenClawInstallation() {
+  const version = getInstalledOpenClawVersion();
+  if (version) {
+    return { installed: true, version, source: 'version' };
+  }
+
+  if (isOpenClawInstalledByPath()) {
+    return { installed: true, version: '', source: 'binary' };
+  }
+
+  if (isOpenClawInstalledByNpmPackage()) {
+    return { installed: true, version: '', source: 'npm' };
+  }
+
+  return { installed: false, version: '', source: 'none' };
 }
 
 function normalizeSemver(version) {
@@ -1593,8 +1623,9 @@ function runOpenClawTask(command, title) {
 }
 
 app.get('/api/openclaw', async (req, res) => {
-  const version = getInstalledOpenClawVersion();
-  const installed = !!version || runCommandOk('command -v openclaw >/dev/null 2>&1', 800);
+  const detected = detectOpenClawInstallation();
+  const installed = detected.installed;
+  const version = detected.version;
 
   let latestVersion = '';
   let updateCheckError = '';
@@ -1613,7 +1644,7 @@ app.get('/api/openclaw', async (req, res) => {
   const gatewayRunning = runCommandOk('curl -sS --connect-timeout 1 --max-time 2 http://127.0.0.1:18789/health >/dev/null 2>&1', 2500)
     || runCommandOk('pgrep -f "[o]penclaw.*gateway" >/dev/null 2>&1', 1200);
 
-  res.json({ installed, version, latestVersion, hasUpdate, updateCheckError, gatewayRunning, invalidConfigKeys });
+  res.json({ installed, version, latestVersion, hasUpdate, updateCheckError, gatewayRunning, invalidConfigKeys, installSource: detected.source });
 });
 
 app.post('/api/openclaw/config/repair', async (req, res) => {
