@@ -3538,13 +3538,13 @@ function Main {
                         -RetryPerChunk 20
 
                     if (-not $downloadOK) {
-                        Write-Warn "首轮 8 线程下载未完成，自动降级重试（4线程、1MB块）..."
+                        Write-Warn "首轮 8 线程下载未完成，立即按原策略重试（仅补失败块，8线程）..."
                         $downloadOK = Download-Robust `
                             -Urls $downloadUrls `
                             -OutFile $imageTar `
                             -ExpectedSize $expectedSize `
-                            -ChunkSizeMB 1 `
-                            -Threads 4 `
+                            -ChunkSizeMB 2 `
+                            -Threads 8 `
                             -RetryPerChunk 30
                     }
                 }
@@ -4498,13 +4498,13 @@ function Main {
                             -Threads 8 `
                             -RetryPerChunk 20
                         if (-not $recoverDownloadOK) {
-                            Write-Warn "首轮 8 线程下载未完成，自动降级重试（4线程、1MB块）..."
+                            Write-Warn "首轮 8 线程下载未完成，立即按原策略重试（仅补失败块，8线程）..."
                             $recoverDownloadOK = Download-Robust `
                                 -Urls $recoverUrls `
                                 -OutFile $recoverTar `
                                 -ExpectedSize $recoverSize `
-                                -ChunkSizeMB 1 `
-                                -Threads 4 `
+                                -ChunkSizeMB 2 `
+                                -Threads 8 `
                                 -RetryPerChunk 30
                         }
                     } else {
@@ -4605,13 +4605,13 @@ function Main {
                                     -RetryPerChunk 20 `
                                     -ForceFresh
                                 if (-not $recoverDownloadOK) {
-                                    Write-Warn "8 线程重试未完成，自动降级重试（4线程、1MB块）..."
+                                    Write-Warn "8 线程重试未完成，继续按原策略重试（仅补失败块，8线程）..."
                                     $recoverDownloadOK = Download-Robust `
                                         -Urls $recoverRetryUrls `
                                         -OutFile $recoverTar `
                                         -ExpectedSize $recoverSize `
-                                        -ChunkSizeMB 1 `
-                                        -Threads 4 `
+                                        -ChunkSizeMB 2 `
+                                        -Threads 8 `
                                         -RetryPerChunk 30 `
                                         -ForceFresh
                                 }
@@ -4767,13 +4767,13 @@ function Main {
                                         -RetryPerChunk 20 `
                                         -ForceFresh
                                     if (-not $recoverDownloadOK) {
-                                        Write-Warn "8 线程重试未完成，自动降级重试（4线程、1MB块）..."
+                                        Write-Warn "8 线程重试未完成，继续按原策略重试（仅补失败块，8线程）..."
                                         $recoverDownloadOK = Download-Robust `
                                             -Urls $recoverRetryUrls `
                                             -OutFile $recoverTar `
                                             -ExpectedSize $recoverSize `
-                                            -ChunkSizeMB 1 `
-                                            -Threads 4 `
+                                            -ChunkSizeMB 2 `
+                                            -Threads 8 `
                                             -RetryPerChunk 30 `
                                             -ForceFresh
                                     }
