@@ -68,8 +68,9 @@
             </div>
           </div>
           <div class="muted small" style="margin-top:6px">
-            Linux 更新命令：<code style="background:#223;padding:2px 6px;border-radius:4px;user-select:all">./openclaw-docker.sh update</code>
-            <span class="muted" style="margin-left:12px">Windows：<code style="background:#223;padding:2px 6px;border-radius:4px;user-select:all">irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/update-windows.ps1 | iex</code></span>
+            完整更新请重新执行一键安装脚本（会自动检测并升级到最新 release）：
+            <span class="muted" style="margin-left:12px">Linux：<code style="background:#223;padding:2px 6px;border-radius:4px;user-select:all">curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.sh | bash</code></span>
+            <span class="muted" style="margin-left:12px">Windows：<code style="background:#223;padding:2px 6px;border-radius:4px;user-select:all">irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1 | iex</code></span>
           </div>
         </div>
 
@@ -528,7 +529,7 @@
               <button class="btn btn-warning" id="btn-hotpatch" style="display:none">⚡ 热更新（不重启容器）</button>
               <div id="settings-full-update-note" class="card" style="display:none;background:#3a2a1a;border:1px solid #6b5a2d;padding:10px 14px;margin:0">
                 <b style="color:#f59e0b">📦 此版本涉及系统底层更改，热更新不适用</b><br>
-                <span class="muted small">请使用完整更新方式（下载新镜像并重建容器）。</span>
+                <span class="muted small">请重新执行一键安装脚本，安装器会自动检测并升级到新版本。</span>
               </div>
               <a class="btn" id="settings-release-link" href="#" target="_blank" rel="noopener" style="display:none">查看 Release 页面</a>
             </div>
@@ -537,10 +538,10 @@
             </div>
             <div class="muted small" style="margin-top:10px">
               <b>热更新</b>：直接从 GitHub 拉取最新的 Web 前端、配置模板等文件，无需下载镜像/重建容器。<br/>
-              <b>完整更新</b>：如需更新系统包、Node.js 等底层依赖，请在宿主机执行：<br/>
+              <b>完整更新</b>：如需更新系统包、Node.js 等底层依赖，请在宿主机重新执行一键安装脚本：<br/>
               <div style="margin-top:4px">
-                <span style="color:#6ee7b7">Linux：</span><code style="background:#223;padding:4px 8px;border-radius:4px;user-select:all">./openclaw-docker.sh update</code><br/>
-                <span style="color:#93c5fd">Windows：</span><code style="background:#223;padding:4px 8px;border-radius:4px;display:inline-block;margin-top:4px;user-select:all">irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/update-windows.ps1 | iex</code>
+                <span style="color:#6ee7b7">Linux：</span><code style="background:#223;padding:4px 8px;border-radius:4px;user-select:all">curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.sh | bash</code><br/>
+                <span style="color:#93c5fd">Windows：</span><code style="background:#223;padding:4px 8px;border-radius:4px;display:inline-block;margin-top:4px;user-select:all">irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1 | iex</code>
               </div>
             </div>
           </div>

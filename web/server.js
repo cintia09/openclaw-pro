@@ -632,15 +632,14 @@ app.get('/api/update/check', async (req, res) => {
       const localHash = getLocalDockerfileHash();
       if (remoteHash && localHash) {
         result.dockerfileChanged = remoteHash !== localHash;
-        // If Dockerfile differs, a full update (rebuild/redeploy) is required
-        result.requiresFullUpdate = remoteHash !== localHash;
+        // 仅当 release 版本有变化时，才需要展示“完整更新”或“热更新”提示
+        result.requiresFullUpdate = !!hasUpdate && (remoteHash !== localHash);
       } else if (remoteHash && !localHash) {
-        // Missing local hash in image: avoid flagging brand-new same-version installs as full update required.
-        // Keep conservative behavior only when there is a real release version difference.
+        // 缺少本地 hash：仅在 release 版本确实变化时再提示完整更新
         result.dockerfileChanged = !!hasUpdate;
         result.requiresFullUpdate = !!hasUpdate;
       } else {
-        // Could not compare Dockerfile hash remotely; do not force full update on unknown state.
+        // 无法比较 Dockerfile：不强制完整更新
         result.dockerfileChanged = false;
         result.requiresFullUpdate = false;
       }
@@ -650,11 +649,7 @@ app.get('/api/update/check', async (req, res) => {
       }
     } catch {}
 
-    // If Dockerfile changed, mark that a full update is required. Do not mark hasUpdate
-    // solely based on Dockerfile changes; hasUpdate only reflects release version difference.
-    if (result.dockerfileChanged) {
-      // keep hasUpdate as-is (only release difference triggers it)
-    }
+    // hasUpdate 仅由 release 版本变化触发；不会因为 Dockerfile 变化单独触发更新提示。
 
     updateCache = { data: { latestVersion, hasUpdate: result.hasUpdate, publishedAt, releaseUrl, releaseName, requiresFullUpdate: result.requiresFullUpdate, dockerfileChanged: result.dockerfileChanged }, checkedAt: Date.now() };
     res.json(result);

@@ -224,9 +224,8 @@ async function checkForUpdate(force = false) {
     if (hotBtn) hotBtn.style.display = u.requiresFullUpdate ? 'none' : '';
     if (fullHint) {
       fullHint.style.display = u.requiresFullUpdate ? '' : 'none';
-      // When versions match but Dockerfile changed, show special hint
-      if (u.requiresFullUpdate && u.currentVersion === u.latestVersion) {
-        fullHint.innerHTML = '📦 <b>镜像需要重建</b>：Dockerfile 已更新（如 dnsmasq），请运行完整更新脚本';
+      if (u.requiresFullUpdate) {
+        fullHint.innerHTML = '📦 <b>需要完整更新</b>：请重新执行一键安装脚本（会自动检测并升级到新版本）';
       }
     }
   }
@@ -243,11 +242,7 @@ async function checkForUpdate(force = false) {
     const linkEl = $('settings-release-link');
     if (u.hasUpdate) {
       if (u.requiresFullUpdate) {
-        if (u.currentVersion === u.latestVersion) {
-          statusEl.innerHTML = '<span style="color:#f59e0b">📦 镜像需要重建</span>';
-        } else {
-          statusEl.innerHTML = '<span style="color:#f59e0b">📦 需要完整更新</span>';
-        }
+        statusEl.innerHTML = '<span style="color:#f59e0b">📦 需要完整更新</span>';
       } else {
         statusEl.innerHTML = '<span style="color:#4ade80">⚡ 可热更新</span>';
       }
