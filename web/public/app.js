@@ -691,14 +691,19 @@ $('btn-oc-check-update')?.addEventListener('click', async ()=>{
 
 $('btn-oc-repair-config')?.addEventListener('click', async ()=>{
   appendOcLogLine('[repair] 正在检测并修复 OpenClaw 配置中的无效 key...');
-  const r = await api('/api/openclaw/config/repair', { method:'POST' });
+  appendOcLogLine('[repair] 该操作可能持续 30~120 秒，请稍候...');
+  const r = await api('/api/openclaw/config/repair', { method:'POST', timeoutMs: 180000 });
   if (r.success) {
     if (r.log) appendOcLogLine(r.log);
     toast('配置恢复完成', r.changed ? '已修复并建议重启 Gateway' : '未发现需要修复的配置项');
     setTimeout(refreshOpenClaw, 800);
   } else {
-    appendOcLogLine(`[repair] 失败: ${r.error || '未知错误'}`);
-    toast('配置恢复失败', r.error || '未知错误');
+    const err = r.error || '未知错误';
+    appendOcLogLine(`[repair] 失败: ${err}`);
+    if (/请求超时/.test(err)) {
+      appendOcLogLine('[repair] 提示: 后端可能仍在执行，请稍后刷新状态并查看日志。');
+    }
+    toast('配置恢复失败', err);
   }
 });
 
