@@ -425,7 +425,94 @@ function requireAuthPage(req, res, next) {
   next();
 }
 
+function gatewayProxyPathFromOriginalUrl(originalUrl) {
+  const withoutPrefix = String(originalUrl || '').replace(/^\/gateway-proxy/, '');
+  return withoutPrefix || '/';
+}
+
+function rewriteGatewayLocationHeader(location, gatewayPort) {
+  const value = String(location || '');
+  if (!value) return value;
+  const localhostPrefix = `http://127.0.0.1:${gatewayPort}`;
+  const localhostAltPrefix = `http://localhost:${gatewayPort}`;
+  if (value.startsWith(localhostPrefix)) {
+    return `/gateway-proxy${value.slice(localhostPrefix.length) || '/'}`;
+  }
+  if (value.startsWith(localhostAltPrefix)) {
+    return `/gateway-proxy${value.slice(localhostAltPrefix.length) || '/'}`;
+  }
+  if (value.startsWith('/')) {
+    return `/gateway-proxy${value}`;
+  }
+  return value;
+}
+
+function proxyGatewayRequest(req, res) {
+  const cfg = readDockerConfig();
+  const gatewayPort = Number(cfg.port || 18789) || 18789;
+  const upstreamPath = gatewayProxyPathFromOriginalUrl(req.originalUrl || req.url);
+
+  const headers = { ...req.headers };
+  delete headers.connection;
+  delete headers['content-length'];
+  headers.host = `127.0.0.1:${gatewayPort}`;
+
+  const proxyReq = http.request({
+    hostname: '127.0.0.1',
+    port: gatewayPort,
+    method: req.method,
+    path: upstreamPath,
+    headers,
+    timeout: 15000
+  }, (proxyRes) => {
+    const responseHeaders = { ...proxyRes.headers };
+    if (responseHeaders.location) {
+      responseHeaders.location = rewriteGatewayLocationHeader(responseHeaders.location, gatewayPort);
+    }
+    res.writeHead(proxyRes.statusCode || 502, responseHeaders);
+    proxyRes.pipe(res);
+  });
+
+  proxyReq.on('timeout', () => {
+    proxyReq.destroy(new Error('gateway upstream timeout'));
+  });
+
+  proxyReq.on('error', (err) => {
+    if (!res.headersSent) {
+      res.status(502).send(`Gateway 不可用：${err.message}`);
+      return;
+    }
+    try { res.end(); } catch {}
+  });
+
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    req.pipe(proxyReq);
+    return;
+  }
+
+  if (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
+    const bodyText = JSON.stringify(req.body);
+    proxyReq.setHeader('Content-Type', 'application/json');
+    proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyText));
+    proxyReq.end(bodyText);
+    return;
+  }
+
+  req.pipe(proxyReq);
+}
+
 app.use(requireAuthPage);
+
+app.get('/gateway', (req, res) => {
+  if (!isAuthenticated(req)) return res.redirect('/login.html');
+  res.redirect('/gateway-proxy/');
+});
+
+app.use('/gateway-proxy', (req, res) => {
+  if (!isAuthenticated(req)) return res.redirect('/login.html');
+  proxyGatewayRequest(req, res);
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/api', requireAuthApi);
 
