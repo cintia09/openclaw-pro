@@ -388,7 +388,11 @@ $('btn-refresh-status').addEventListener('click', async ()=>{
 });
 $('btn-restart-gateway').addEventListener('click', async ()=>{
   const r = await api('/api/restart', { method:'POST' });
-  toast(r.success ? '已触发重启' : '重启失败', r.output || r.error || '');
+  if (r.success) {
+    toast('已触发重启', r.message || 'Gateway 正在重启，请稍候');
+  } else {
+    toast('重启失败', r.error || '请查看日志');
+  }
   setTimeout(refreshStatus, 2500);
 });
 

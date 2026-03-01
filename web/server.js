@@ -201,7 +201,21 @@ function restartGatewayForeground(callback) {
     'pgrep -f "[o]penclaw.*gateway" >/dev/null 2>&1',
   ].join(' && ');
 
-  exec(`bash -lc '${cmd}'`, callback);
+  exec(`bash --noprofile --norc -lc '${cmd}'`, { env: { ...process.env, TERM: 'dumb' } }, callback);
+}
+
+function stripAnsi(input) {
+  return String(input || '').replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '');
+}
+
+function compactOutput(input) {
+  const text = stripAnsi(input)
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .join('\n');
+  return text.length > 400 ? `${text.slice(0, 400)}...` : text;
 }
 
 function runCommandOk(cmd, timeoutMs = 1500) {
@@ -1100,7 +1114,11 @@ app.post('/api/config', (req, res) => {
 app.post('/api/restart', (req, res) => {
   try {
     restartGatewayForeground((err, stdout, stderr) => {
-      res.json({ success: !err, output: stdout || stderr });
+      if (!err) {
+        return res.json({ success: true, message: 'Gateway 重启请求已提交' });
+      }
+      const detail = compactOutput(stderr || stdout || err.message || '');
+      res.json({ success: false, error: detail || 'Gateway 重启失败，请查看日志' });
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -1223,7 +1241,11 @@ app.post('/api/openclaw/update', (req, res) => {
 
 app.post('/api/openclaw/start', (req, res) => {
   restartGatewayForeground((err, stdout, stderr) => {
-    res.json({ success: !err, output: stdout || stderr });
+    if (!err) {
+      return res.json({ success: true, message: 'Gateway 启动请求已提交' });
+    }
+    const detail = compactOutput(stderr || stdout || err.message || '');
+    res.json({ success: false, error: detail || 'Gateway 启动失败，请查看日志' });
   });
 });
 
