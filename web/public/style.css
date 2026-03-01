@@ -184,6 +184,16 @@ button, input, select, textarea{font-family:inherit}
 .brand-sub{font-size:12px; color:var(--muted); margin-top:2px}
 
 .nav{padding:10px 10px 16px; overflow:auto}
+.nav-group-label{
+  margin:12px 8px 6px;
+  padding:0 6px;
+  font-size:11px;
+  font-weight:700;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+  color:rgba(148,163,184,.72);
+}
+.nav-group-label:first-child{margin-top:4px}
 .nav a{
   text-decoration:none;
   display:flex;
@@ -195,6 +205,7 @@ button, input, select, textarea{font-family:inherit}
   position:relative;
   transition: background .12s, color .12s;
 }
+.nav-group-label + a{margin-top:2px}
 .nav a:hover{background:rgba(148,163,184,.08); color:rgba(226,232,240,.95)}
 .nav a.active{
   background:linear-gradient(180deg, rgba(99,102,241,.20), rgba(139,92,246,.16));
@@ -211,6 +222,11 @@ button, input, select, textarea{font-family:inherit}
   background:var(--accentGrad);
 }
 .nav .ico{width:22px; display:inline-flex; justify-content:center}
+.nav a + .nav-group-label{
+  margin-top:14px;
+  padding-top:10px;
+  border-top:1px solid rgba(148,163,184,.12);
+}
 
 .sidebar-footer{
   padding:12px 14px;
