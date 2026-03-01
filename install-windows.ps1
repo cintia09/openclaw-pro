@@ -3452,13 +3452,21 @@ function Main {
                             }
                         }
 
-                        # 有些 tar 里只有 ghcr.io/... 或带具体 tag 的 RepoTag；尝试补一个 openclaw-pro:latest
-                        $preTagCheck = & docker image inspect openclaw-pro 2>$null
+                        # 有些 tar 里只有 ghcr.io/... 或 openclaw-pro:lite；尝试补一个 openclaw-pro:latest
+                        $preTagCheck = & docker image inspect openclaw-pro:latest 2>$null
                         if ($LASTEXITCODE -ne 0) {
                             # 优先用 docker load 输出中收集到的 refs 进行 tag
                             if ($loadedRefs.Count -gt 0) {
                                 foreach ($ref in $loadedRefs) {
                                     try { & docker tag $ref "openclaw-pro:latest" 2>$null } catch { }
+                                }
+                            }
+
+                            # 选择精简版时，若仅加载出 openclaw-pro:lite，显式补 latest tag
+                            if ($script:imageEdition -eq 'lite') {
+                                $liteCheck = & docker image inspect openclaw-pro:lite 2>$null
+                                if ($LASTEXITCODE -eq 0) {
+                                    try { & docker tag "openclaw-pro:lite" "openclaw-pro:latest" 2>$null } catch { }
                                 }
                             }
 
@@ -3472,14 +3480,14 @@ function Main {
                         }
 
                         # 检查镜像是否加载成功（尝试过多种 tag 修正后再检查）
-                        $loadCheck = & docker image inspect openclaw-pro 2>$null
+                        $loadCheck = & docker image inspect openclaw-pro:latest 2>$null
                         if ($LASTEXITCODE -eq 0) {
                             $totalSec = [math]::Floor($loadTimer.Elapsed.TotalSeconds)
                             $imageReady = $true
                             Write-OK "预构建镜像加载完成 (耗时 ${totalSec} 秒)"
                             # 保存镜像 digest 用于完整性校验
                             try {
-                                $newImageId = (& docker image inspect openclaw-pro --format '{{.Id}}' 2>$null)
+                                $newImageId = (& docker image inspect openclaw-pro:latest --format '{{.Id}}' 2>$null)
                                 if ($newImageId) {
                                     $script:loadedImageDigest = $newImageId
                                 }
@@ -3959,7 +3967,7 @@ function Main {
                         Write-Warn "SSH 服务状态未确认，请稍后执行 docker logs $containerName 查看"
                     }
 
-                    $pwdAuth = (& docker exec $containerName bash -lc "grep -Ei '^[[:space:]]*PasswordAuthentication[[:space:]]+' /etc/ssh/sshd_config | tail -n1 | awk '{print tolower(\$2)}'" 2>$null | Out-String).Trim().ToLower()
+                    $pwdAuth = (& docker exec $containerName bash -lc "grep -Ei '^[[:space:]]*PasswordAuthentication[[:space:]]+' /etc/ssh/sshd_config | tail -n1 | tr -s '[:space:]' ' ' | cut -d' ' -f2 | tr '[:upper:]' '[:lower:]'" 2>$null | Out-String).Trim().ToLower()
                     $script:sshPasswordAuthDisabled = ($pwdAuth -eq 'no')
                     if ($script:sshPasswordAuthDisabled) {
                         Write-OK "SSH 密码登录已禁用（仅密钥登录）"
@@ -4348,8 +4356,14 @@ function Main {
                         }
 
                         # 若上面没有成功创建 openclaw-pro:latest，继续扫描镜像列表并尝试 tag
-                        $chk = & docker image inspect openclaw-pro 2>$null
+                        $chk = & docker image inspect openclaw-pro:latest 2>$null
                         if ($LASTEXITCODE -ne 0) {
+                            if ($script:imageEdition -eq 'lite') {
+                                $liteChk = & docker image inspect openclaw-pro:lite 2>$null
+                                if ($LASTEXITCODE -eq 0) {
+                                    try { & docker tag "openclaw-pro:lite" "openclaw-pro:latest" 2>$null } catch { }
+                                }
+                            }
                             $allImages = & docker images --format '{{.Repository}}:{{.Tag}}' 2>$null
                             foreach ($im in $allImages) {
                                 if ($im -and $im -match 'openclaw-pro') {
@@ -4358,7 +4372,7 @@ function Main {
                             }
                         }
 
-                        $chk = & docker image inspect openclaw-pro 2>$null
+                        $chk = & docker image inspect openclaw-pro:latest 2>$null
                         if ($LASTEXITCODE -eq 0) {
                             Write-OK "Release 镜像加载完成 (耗时 ${totalLoadSec} 秒)"
                             $recoverOK = $true
