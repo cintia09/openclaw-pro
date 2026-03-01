@@ -3124,6 +3124,7 @@ function Main {
                         $spinner = @('|','/','-','\','|','/','-','\','|','/','-','\','|','/','-','\')
                         $si = 0
                         $loadTimer = [System.Diagnostics.Stopwatch]::StartNew()
+                        $slowLoadHintShown = $false
                         try {
                         while ($loadJob.State -eq 'Running') {
                             $elapsed = [math]::Floor($loadTimer.Elapsed.TotalSeconds)
@@ -3131,6 +3132,14 @@ function Main {
                             $sec = $elapsed % 60
                             $spinChar = $spinner[$si % $spinner.Count]
                             Write-Host "`r  $spinChar 加载中... 已耗时 ${min}分${sec}秒    " -NoNewline -ForegroundColor Cyan
+                            if (-not $slowLoadHintShown -and $elapsed -ge 300) {
+                                $slowLoadHintShown = $true
+                                Write-Host ""
+                                Write-Warn "镜像加载已超过 5 分钟，可能存在磁盘/杀软扫描/后台任务竞争" 
+                                Write-Host "     诊断建议: docker system df" -ForegroundColor DarkGray
+                                Write-Host "     诊断建议: Get-Process docker" -ForegroundColor DarkGray
+                                Write-Host "     若长时间无进展，可重启 Docker Desktop 后重试" -ForegroundColor DarkGray
+                            }
                             $si++
                             Start-Sleep -Milliseconds 200
                         }
@@ -3873,6 +3882,7 @@ function Main {
                         $spinner = @('|','/','-','\')
                         $si = 0
                         $loadTimer = [System.Diagnostics.Stopwatch]::StartNew()
+                        $slowLoadHintShown = $false
                         try {
                         while ($loadJob.State -eq 'Running') {
                             $elapsed = [math]::Floor($loadTimer.Elapsed.TotalSeconds)
@@ -3880,6 +3890,14 @@ function Main {
                             $sec = $elapsed % 60
                             $spinChar = $spinner[$si % $spinner.Count]
                             Write-Host "`r  $spinChar 加载中... 已耗时 ${min}分${sec}秒    " -NoNewline -ForegroundColor Cyan
+                            if (-not $slowLoadHintShown -and $elapsed -ge 300) {
+                                $slowLoadHintShown = $true
+                                Write-Host ""
+                                Write-Warn "镜像加载已超过 5 分钟，可能存在磁盘/杀软扫描/后台任务竞争"
+                                Write-Host "     诊断建议: docker system df" -ForegroundColor DarkGray
+                                Write-Host "     诊断建议: Get-Process docker" -ForegroundColor DarkGray
+                                Write-Host "     若长时间无进展，可重启 Docker Desktop 后重试" -ForegroundColor DarkGray
+                            }
                             $si++
                             Start-Sleep -Milliseconds 200
                         }
