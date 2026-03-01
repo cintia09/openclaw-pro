@@ -4384,6 +4384,11 @@ function Main {
                     "https://ghproxy.net/$releaseBaseUrl",
                     $releaseBaseUrl
                 )
+                $recoverRetryUrls = if ($recoverUrls.Count -gt 1) {
+                    @($recoverUrls[1..($recoverUrls.Count - 1)] + $recoverUrls[0])
+                } else {
+                    $recoverUrls
+                }
 
                 Write-Info "尝试从 Release 下载镜像 (多线程分块断点续传)..."
                 try {
@@ -4495,9 +4500,9 @@ function Main {
                             $recoverSize = Get-RemoteFileSize -Urls $recoverUrls
                             if ($recoverSize -gt 0) {
                                 $recoverMB = [math]::Round($recoverSize / 1MB, 1)
-                                Write-Info "完整性校验失败，改用多线程重新下载 (${recoverMB}MB)..."
+                                Write-Info "完整性校验失败，切换到下一个下载源优先重试 (${recoverMB}MB)..."
                                 $recoverDownloadOK = Download-Robust `
-                                    -Urls $recoverUrls `
+                                    -Urls $recoverRetryUrls `
                                     -OutFile $recoverTar `
                                     -ExpectedSize $recoverSize `
                                     -ChunkSizeMB 2 `
@@ -4507,7 +4512,7 @@ function Main {
                                 if (-not $recoverDownloadOK) {
                                     Write-Warn "8 线程重试未完成，自动降级重试（4线程、1MB块）..."
                                     $recoverDownloadOK = Download-Robust `
-                                        -Urls $recoverUrls `
+                                        -Urls $recoverRetryUrls `
                                         -OutFile $recoverTar `
                                         -ExpectedSize $recoverSize `
                                         -ChunkSizeMB 1 `
@@ -4629,9 +4634,9 @@ function Main {
                                 $recoverSize = Get-RemoteFileSize -Urls $recoverUrls
                                 if ($recoverSize -gt 0) {
                                     $recoverMB = [math]::Round($recoverSize / 1MB, 1)
-                                    Write-Info "加载失败后改用多线程重新下载 (${recoverMB}MB)..."
+                                    Write-Info "加载失败后切换到下一个下载源优先重试 (${recoverMB}MB)..."
                                     $recoverDownloadOK = Download-Robust `
-                                        -Urls $recoverUrls `
+                                        -Urls $recoverRetryUrls `
                                         -OutFile $recoverTar `
                                         -ExpectedSize $recoverSize `
                                         -ChunkSizeMB 2 `
@@ -4641,7 +4646,7 @@ function Main {
                                     if (-not $recoverDownloadOK) {
                                         Write-Warn "8 线程重试未完成，自动降级重试（4线程、1MB块）..."
                                         $recoverDownloadOK = Download-Robust `
-                                            -Urls $recoverUrls `
+                                            -Urls $recoverRetryUrls `
                                             -OutFile $recoverTar `
                                             -ExpectedSize $recoverSize `
                                             -ChunkSizeMB 1 `
