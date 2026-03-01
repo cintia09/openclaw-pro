@@ -2907,6 +2907,7 @@ function Main {
 
         # 查找所有 openclaw-pro* 容器
         $existingContainers = & docker ps -a --filter "name=openclaw-pro" --format "{{.Names}}|{{.Status}}|{{.Ports}}" 2>&1
+        Write-Log "ContainerScan raw docker ps output:`n$($existingContainers | Out-String)"
         $runningContainers = @()
         $stoppedContainers = @()
         if ($existingContainers) {
@@ -2920,6 +2921,7 @@ function Main {
                 }
             }
         }
+        Write-Log "ContainerScan classified: running=$($runningContainers.Count), stopped=$($stoppedContainers.Count)"
 
         # 清理已停止的容器
         foreach ($sc in $stoppedContainers) {
