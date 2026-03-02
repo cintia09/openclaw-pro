@@ -208,6 +208,11 @@ if [ ! -d "/root/.npm-global" ]; then
     npm config set prefix /root/.npm-global 2>/dev/null || true
 fi
 
+# Ensure npm global bin is in PATH for non-login shell (PID 1)
+if [[ ":$PATH:" != *":/root/.npm-global/bin:"* ]]; then
+    export PATH="$PATH:/root/.npm-global/bin"
+fi
+
 # 恢复用户安装的组件（从 post-install.json 清单）
 if [ -f /opt/post-install-restore.sh ]; then
     echo "[start-services] Running post-install restore..."
@@ -223,12 +228,23 @@ CHROME_PID=""
 CADDY_PID=""
 GATEWAY_WATCHDOG_SCRIPT="/usr/local/bin/openclaw-gateway-watchdog.sh"
 
+has_openclaw_cli() {
+    command -v openclaw >/dev/null 2>&1 || [ -x "/root/.npm-global/bin/openclaw" ] || [ -x "/usr/local/bin/openclaw" ]
+}
+
+refresh_openclaw_availability() {
+    if has_openclaw_cli; then
+        HAS_OPENCLAW="true"
+    else
+        HAS_OPENCLAW="false"
+    fi
+}
+
 HAS_OPENCLAW="false"
-if command -v openclaw >/dev/null 2>&1; then
-    HAS_OPENCLAW="true"
-fi
+refresh_openclaw_availability
 
 start_gateway() {
+    refresh_openclaw_availability
     if [ "$HAS_OPENCLAW" != "true" ]; then
         echo "[start-services] openclaw CLI not installed, skipping Gateway"
         return 0
@@ -239,6 +255,7 @@ start_gateway() {
 }
 
 start_gateway_watchdog() {
+    refresh_openclaw_availability
     if [ "$HAS_OPENCLAW" != "true" ]; then
         echo "[start-services] openclaw CLI not installed, skipping Gateway watchdog"
         return 0
@@ -262,6 +279,7 @@ start_gateway_watchdog() {
 }
 
 ensure_gateway_watchdog_running() {
+    refresh_openclaw_availability
     if [ "$HAS_OPENCLAW" != "true" ]; then
         return 0
     fi
@@ -465,6 +483,8 @@ echo "[start-services] All services started."
 # --- 4. 健康检查循环 ---
 while true; do
     sleep 10
+
+    refresh_openclaw_availability
 
     # 检查 Gateway watchdog（仅在 openclaw 已安装时）
     if [ "$HAS_OPENCLAW" = "true" ] && ! pgrep -f "[o]penclaw-gateway-watchdog.sh" >/dev/null 2>&1; then
