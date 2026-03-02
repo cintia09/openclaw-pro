@@ -3,7 +3,7 @@
 # Usage: curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.sh | bash
 set -euo pipefail
 
-INSTALLER_COMMIT="${INSTALLER_COMMIT:-b9abdc7}"
+INSTALLER_COMMIT="${INSTALLER_COMMIT:-b04fe6e}"
 
 fetch_imageonly_script(){
   local out_file="$1"
