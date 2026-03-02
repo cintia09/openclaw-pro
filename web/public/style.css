@@ -6,22 +6,22 @@
 
 :root{
   /* Core palette */
-  --bg0:#f3f6fb;
-  --bg1:#eef3f9;
-  --bg2:#dde7f3;
+  --bg0:#141d2e;
+  --bg1:#1a2538;
+  --bg2:#28374d;
 
-  --accent1:#2563eb;
-  --accent2:#14b8a6;
+  --accent1:#3b82f6;
+  --accent2:#22d3ee;
   --accentGrad:linear-gradient(135deg,var(--accent1),var(--accent2));
 
-  --cardTop:#ffffff;
-  --cardBot:#f7faff;
+  --cardTop:rgba(51,65,85,.82);
+  --cardBot:rgba(30,41,59,.82);
 
-  --stroke:rgba(148,163,184,.22);
-  --stroke2:rgba(148,163,184,.14);
+  --stroke:rgba(148,163,184,.24);
+  --stroke2:rgba(148,163,184,.16);
 
-  --text:#0f172a;
-  --muted:#475569;
+  --text:#e5e7eb;
+  --muted:#94a3b8;
   --dim:#64748b;
 
   --good:#22c55e;
@@ -29,8 +29,8 @@
   --bad:#ef4444;
 
   --radius:16px;
-  --shadowLg:0 16px 40px rgba(15,23,42,.12);
-  --shadowMd:0 8px 24px rgba(15,23,42,.10);
+  --shadowLg:0 20px 48px rgba(0,0,0,.45);
+  --shadowMd:0 10px 28px rgba(0,0,0,.32);
 
   --sidebarW:276px;
   --topbarH:60px;
@@ -46,8 +46,8 @@ body{
   font-family:var(--ui);
   color:var(--text);
   background:
-    radial-gradient(1200px 820px at 18% 8%, rgba(37,99,235,.10), transparent 60%),
-    radial-gradient(980px 700px at 90% 18%, rgba(20,184,166,.10), transparent 55%),
+    radial-gradient(1200px 820px at 18% 8%, rgba(59,130,246,.20), transparent 60%),
+    radial-gradient(980px 700px at 90% 18%, rgba(34,211,238,.16), transparent 55%),
     linear-gradient(180deg, var(--bg1), var(--bg0));
 }
 
@@ -157,7 +157,7 @@ button, input, select, textarea{font-family:inherit}
   width:var(--sidebarW);
   position:fixed;
   inset:0 auto 0 0;
-  background:linear-gradient(180deg, rgba(255,255,255,.95), rgba(245,249,255,.95));
+  background:linear-gradient(180deg, rgba(30,41,59,.92), rgba(17,24,39,.92));
   border-right:1px solid var(--stroke);
   backdrop-filter: blur(12px);
   z-index:30;
@@ -201,15 +201,15 @@ button, input, select, textarea{font-family:inherit}
   gap:12px;
   padding:10px 12px;
   border-radius:14px;
-  color:rgba(15,23,42,.82);
+  color:rgba(226,232,240,.78);
   position:relative;
   transition: background .12s, color .12s;
 }
 .nav-group-label + a{margin-top:2px}
-.nav a:hover{background:rgba(148,163,184,.12); color:#0f172a}
+.nav a:hover{background:rgba(148,163,184,.10); color:rgba(226,232,240,.95)}
 .nav a.active{
-  background:linear-gradient(180deg, rgba(37,99,235,.16), rgba(20,184,166,.14));
-  color:#0f172a;
+  background:linear-gradient(180deg, rgba(59,130,246,.24), rgba(34,211,238,.16));
+  color:#fff;
 }
 .nav a.active::before{
   content:"";
@@ -249,7 +249,7 @@ button, input, select, textarea{font-family:inherit}
   align-items:center;
   justify-content:space-between;
   padding:0 18px;
-  background:linear-gradient(180deg, rgba(255,255,255,.92), rgba(247,250,255,.86));
+  background:linear-gradient(180deg, rgba(30,41,59,.76), rgba(17,24,39,.52));
   border-bottom:1px solid var(--stroke2);
   backdrop-filter: blur(12px);
   z-index:20;
@@ -304,7 +304,7 @@ button, input, select, textarea{font-family:inherit}
   border-radius:var(--radius);
   border:1px solid var(--stroke);
   background:linear-gradient(180deg, var(--cardTop), var(--cardBot));
-  box-shadow: 0 8px 24px rgba(15,23,42,.08);
+  box-shadow: 0 10px 30px rgba(0,0,0,.25);
   padding:18px;
   backdrop-filter: blur(10px);
   transition: box-shadow .12s ease;
@@ -355,6 +355,17 @@ button, input, select, textarea{font-family:inherit}
 .tab:hover{filter:brightness(1.08); transform:translateY(-1px)}
 .tab.active{background:linear-gradient(180deg, rgba(99,102,241,.22), rgba(139,92,246,.16)); border-color:rgba(99,102,241,.30); color:#fff}
 
+.oc-inner-tab{
+  min-width:138px;
+  text-align:center;
+  font-weight:700;
+}
+
+.oc-inner-tab.active{
+  background:linear-gradient(180deg, rgba(59,130,246,.34), rgba(34,211,238,.24));
+  border-color:rgba(56,189,248,.55);
+}
+
 /* Terminal */
 .terminal-toolbar{display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:10px}
 .terminal{
@@ -370,6 +381,12 @@ button, input, select, textarea{font-family:inherit}
   white-space:pre-wrap;
   color:rgba(255,255,255,.92);
 }
+#terminal{
+  padding:0;
+  white-space:normal;
+}
+#terminal .xterm{padding:14px}
+#terminal .xterm-viewport{overflow-y:auto !important}
 .term-line{display:block}
 .term-date{color:rgba(148,163,184,.70)}
 .term-warn{color:#fbbf24}

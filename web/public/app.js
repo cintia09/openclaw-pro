@@ -72,8 +72,28 @@ async function api(url, opts={}){
 }
 
 function compactOutputForUi(text) {
-  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  const s = stripAnsi(String(text || '')).replace(/\s+/g, ' ').trim();
   return s.length > 220 ? `${s.slice(0, 220)}...` : s;
+}
+
+function stripAnsi(text){
+  const raw = String(text ?? '');
+  return raw
+    .replace(/\u001B\][^\u0007\u001B]*(?:\u0007|\u001B\\)/g, '')
+    .replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '');
+}
+
+function stripOsc(text){
+  return String(text ?? '').replace(/\u001B\][^\u0007\u001B]*(?:\u0007|\u001B\\)/g, '');
+}
+
+function normalizeTerminalChunk(text){
+  let out = stripAnsi(String(text ?? ''));
+  out = out.replace(/\r\n/g, '\n').replace(/\r/g, '');
+  while (/\x08/.test(out)) {
+    out = out.replace(/[^\n]\x08/g, '').replace(/\x08/g, '');
+  }
+  return out;
 }
 
 // ------------------------
@@ -85,7 +105,7 @@ function escapeHtml(s){
 }
 
 function colorizeLine(rawLine){
-  const line = String(rawLine ?? '');
+  const line = stripAnsi(String(rawLine ?? ''));
   const dateLike = /^\s*(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)/;
   let safe = escapeHtml(line);
 
@@ -111,7 +131,7 @@ function colorizeLine(rawLine){
 
 function appendColored(el, text, maxLines = 5000, autoscroll = true){
   if (!el) return;
-  const html = String(text ?? '').split('\n').map(colorizeLine).join('');
+  const html = stripAnsi(String(text ?? '')).split('\n').map(colorizeLine).join('');
   el.insertAdjacentHTML('beforeend', html);
   const nodes = el.querySelectorAll('.term-line');
   if (nodes.length > maxLines) {
@@ -175,6 +195,10 @@ function setActiveRoute(route){
   const page = $('page-' + route);
   $('page-title').textContent = page?.dataset?.title || (ROUTES.find(r => r.id===route)?.title ?? '');
 
+  qa('.oc-inner-tab').forEach(tab => {
+    tab.classList.toggle('active', tab.dataset.ocTab === route);
+  });
+
   // close sidebar on mobile
   $('sidebar').classList.remove('open');
 
@@ -227,6 +251,15 @@ async function loadBrowserSettings(){
 }
 
 window.addEventListener('hashchange', ()=> setActiveRoute(getRouteFromHash()));
+
+qa('.oc-inner-tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const route = btn.dataset.ocTab;
+    if (!route) return;
+    if (getRouteFromHash() === route) return;
+    location.hash = route;
+  });
+});
 
 // mobile sidebar
 $('btn-hamburger').addEventListener('click', ()=> $('sidebar').classList.toggle('open'));
@@ -1215,10 +1248,75 @@ let termReconnectTimer = null;
 let termWsToken = null;
 let termFallbackTimer = null;
 let termFailureCount = 0;
+let termConnectTimeoutTimer = null;
+let termEmulator = null;
+let termFitAddon = null;
+
+function initTerminalEmulator(){
+  if (termEmulator) return true;
+  const terminalContainer = $('terminal');
+  if (!terminalContainer) return false;
+  if (!window.Terminal) return false;
+
+  try {
+    termEmulator = new window.Terminal({
+      cursorBlink: true,
+      convertEol: true,
+      scrollback: 5000,
+      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+      fontSize: 13,
+      theme: {
+        background: '#05070f',
+        foreground: '#e5e7eb',
+        cursor: '#93c5fd'
+      }
+    });
+
+    if (window.FitAddon && window.FitAddon.FitAddon) {
+      termFitAddon = new window.FitAddon.FitAddon();
+      termEmulator.loadAddon(termFitAddon);
+    }
+
+    terminalContainer.innerHTML = '';
+    termEmulator.open(terminalContainer);
+    if (termFitAddon) termFitAddon.fit();
+
+    termEmulator.onData((data) => {
+      if (termWs && termWs.readyState === WebSocket.OPEN) {
+        sendTerminalData(data);
+      }
+    });
+
+    return true;
+  } catch (e) {
+    dlog('xterm init failed', e?.message || e);
+    termEmulator = null;
+    termFitAddon = null;
+    return false;
+  }
+}
 
 function termAppendText(text){
+  const chunkRaw = String(text ?? '');
+  if (termEmulator) {
+    const chunk = stripOsc(chunkRaw);
+    if (!chunk) return;
+    termEmulator.write(chunk);
+    return;
+  }
+
   const el = $('terminal');
-  appendColored(el, text, 5000, !!$('term-autoscroll')?.checked);
+  if (!el) return;
+  const chunk = normalizeTerminalChunk(chunkRaw);
+  if (!chunk) return;
+  el.textContent += chunk;
+  const maxChars = 180000;
+  if (el.textContent.length > maxChars) {
+    el.textContent = el.textContent.slice(-maxChars);
+  }
+  if ($('term-autoscroll')?.checked) {
+    el.scrollTop = el.scrollHeight;
+  }
 }
 
 function terminalDisconnect(){
@@ -1265,6 +1363,13 @@ function sendTerminalData(data){
 
 function sendTerminalResize(){
   if (!termWs || termWs.readyState !== WebSocket.OPEN) return;
+  if (termEmulator) {
+    if (termFitAddon) termFitAddon.fit();
+    const cols = Math.max(40, Number(termEmulator.cols) || 80);
+    const rows = Math.max(12, Number(termEmulator.rows) || 24);
+    termWs.send(JSON.stringify({ type: 'resize', cols, rows }));
+    return;
+  }
   const el = $('terminal');
   if (!el) return;
   const cols = Math.max(40, Math.floor(el.clientWidth / 8));
@@ -1277,12 +1382,22 @@ function bindTerminalInteraction(){
   const terminalEl = $('terminal');
   if (!terminalEl) return;
 
+  const useXterm = initTerminalEmulator();
+
   terminalEl.addEventListener('click', () => terminalEl.focus());
 
   window.addEventListener('resize', () => {
     if (termResizeTimer) clearTimeout(termResizeTimer);
-    termResizeTimer = setTimeout(sendTerminalResize, 120);
+    termResizeTimer = setTimeout(() => {
+      if (termEmulator && termFitAddon) termFitAddon.fit();
+      sendTerminalResize();
+    }, 120);
   });
+
+  if (useXterm) {
+    terminalBound = true;
+    return;
+  }
 
   terminalEl.addEventListener('keydown', (e) => {
     if (!termWs || termWs.readyState !== WebSocket.OPEN) {
@@ -1328,8 +1443,8 @@ function bindTerminalInteraction(){
   terminalBound = true;
 }
 
-async function ensureTerminalWsToken(){
-  if (termWsToken) return termWsToken;
+async function ensureTerminalWsToken(force = false){
+  if (!force && termWsToken) return termWsToken;
   const r = await api('/api/terminal/ws-token');
   if (r && !r.error && r.token) {
     termWsToken = r.token;
@@ -1343,85 +1458,138 @@ async function terminalConnect(){
   if (termWs && (termWs.readyState === WebSocket.OPEN || termWs.readyState === WebSocket.CONNECTING)) return;
 
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const token = await ensureTerminalWsToken();
-  const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : '';
-  const url = `${proto}//${location.host}/api/ws/terminal${tokenQuery}`;
+  const freshToken = await ensureTerminalWsToken(true);
+  const wsPrimaryUrl = `${proto}//${location.host}/api/ws/terminal${freshToken ? `?token=${encodeURIComponent(freshToken)}` : ''}`;
+  const wsCookieUrl = `${proto}//${location.host}/api/ws/terminal`;
 
   $('term-state').textContent = '连接中...';
+  const connectStartedAt = Date.now();
+  let retriedWithCookie = false;
 
-  try{ termWs = new WebSocket(url); }
-  catch{
-    $('term-state').textContent = 'WebSocket 不可用';
-    termAppendText('[terminal] WebSocket 不可用，无法建立交互会话\n');
-    return;
+  function armConnectTimeout(){
+    if (termConnectTimeoutTimer) clearTimeout(termConnectTimeoutTimer);
+    termConnectTimeoutTimer = setTimeout(() => {
+      if (!$('page-terminal').classList.contains('active')) return;
+      if (termWs && termWs.readyState === WebSocket.CONNECTING) {
+        try { termWs.close(); } catch {}
+      }
+      if (!termWs || termWs.readyState !== WebSocket.OPEN) {
+        $('term-state').textContent = '连接超时，切换日志模式';
+        startTerminalFallback(`timeout>${Date.now() - connectStartedAt}ms`);
+      }
+    }, 10000);
   }
 
-  termWs.onopen = ()=> {
-    termFailureCount = 0;
-    if (termFallbackTimer) {
-      clearInterval(termFallbackTimer);
-      termFallbackTimer = null;
-    }
-    $('term-state').textContent = '已连接';
-    termAppendText('[terminal] 已连接（PTY）。直接在此区域输入命令并按回车执行。\n');
-    $('terminal')?.focus();
-    sendTerminalResize();
-  };
-  termWs.onclose = (ev)=> {
-    const code = Number(ev?.code || 0);
-    const reason = ev?.reason ? ` reason=${ev.reason}` : '';
-    termFailureCount += 1;
-    $('term-state').textContent = code === 1008 ? '认证失效' : '已断开';
-    termAppendText(`\n[terminal] 连接已断开 (code=${code}${reason}).\n`);
-    if (code === 1008) {
-      termWsToken = null;
-    }
-    if (code === 1006 || termFailureCount >= 2) {
-      startTerminalFallback(`code=${code}`);
-    }
-    termWs = null;
-    if ($('page-terminal').classList.contains('active')) {
-      if (termReconnectTimer) clearTimeout(termReconnectTimer);
-      termReconnectTimer = setTimeout(() => {
-        termReconnectTimer = null;
-        terminalConnect();
-      }, 1500);
-      $('term-state').textContent = '重连中...';
-    }
-  };
-  termWs.onerror = ()=> {
-    termFailureCount += 1;
-    $('term-state').textContent = '连接错误';
-    termAppendText('\n[terminal] 连接错误。\n');
-    termWsToken = null;
-    if (termFailureCount >= 2) {
-      startTerminalFallback('网络或代理异常');
-    }
-    api('/api/status').then((s) => {
-      const reason = s?.terminal?.reason;
-      if (reason) {
-        termAppendText(`[terminal] 后端状态: ${reason}\n`);
-      }
-    }).catch(() => {});
-  };
+  function clearConnectTimeout(){
+    if (!termConnectTimeoutTimer) return;
+    clearTimeout(termConnectTimeoutTimer);
+    termConnectTimeoutTimer = null;
+  }
 
-  termWs.onmessage = (ev)=>{
+  function connectWs(url, attemptLabel){
     try {
-      const msg = JSON.parse(ev.data);
-      if (msg.type === 'output') {
-        termAppendText(msg.data || '');
-      } else if (msg.type === 'info') {
-        termAppendText(msg.data || '');
-      } else {
+      termWs = new WebSocket(url);
+    } catch {
+      $('term-state').textContent = 'WebSocket 不可用';
+      termAppendText(`[terminal] WebSocket 不可用，无法建立交互会话 (${attemptLabel})\n`);
+      return false;
+    }
+
+    armConnectTimeout();
+
+    termWs.onopen = ()=> {
+      clearConnectTimeout();
+      termFailureCount = 0;
+      if (termFallbackTimer) {
+        clearInterval(termFallbackTimer);
+        termFallbackTimer = null;
+      }
+      $('term-state').textContent = '已连接';
+      termAppendText('[terminal] 已连接（PTY）。直接在此区域输入命令并按回车执行。\n');
+      $('terminal')?.focus();
+      sendTerminalResize();
+    };
+
+    termWs.onclose = (ev)=> {
+      clearConnectTimeout();
+      const code = Number(ev?.code || 0);
+      const reason = ev?.reason ? ` reason=${ev.reason}` : '';
+      termFailureCount += 1;
+      $('term-state').textContent = code === 1008 ? '认证失效' : '已断开';
+      termAppendText(`\n[terminal] 连接已断开 (code=${code}${reason}) [${attemptLabel}].\n`);
+
+      if (code === 1008) {
+        termWsToken = null;
+        if (!retriedWithCookie) {
+          retriedWithCookie = true;
+          termAppendText('[terminal] token 鉴权失败，正在尝试 cookie 认证链路...\n');
+          setTimeout(() => connectWs(wsCookieUrl, 'cookie-auth'), 120);
+          return;
+        }
+      }
+
+      if (code === 1006 || termFailureCount >= 2) {
+        startTerminalFallback(`code=${code}`);
+      }
+
+      termWs = null;
+      if ($('page-terminal').classList.contains('active')) {
+        if (termReconnectTimer) clearTimeout(termReconnectTimer);
+        termReconnectTimer = setTimeout(() => {
+          termReconnectTimer = null;
+          terminalConnect();
+        }, 1800);
+        $('term-state').textContent = '重连中...';
+      }
+    };
+
+    termWs.onerror = ()=> {
+      clearConnectTimeout();
+      termFailureCount += 1;
+      $('term-state').textContent = '连接错误';
+      termAppendText(`\n[terminal] 连接错误 [${attemptLabel}]。\n`);
+      if (attemptLabel === 'token-auth') {
+        termWsToken = null;
+      }
+      if (termFailureCount >= 2) {
+        startTerminalFallback('网络或代理异常');
+      }
+      api('/api/status').then((s) => {
+        const reason = s?.terminal?.reason;
+        if (reason) {
+          termAppendText(`[terminal] 后端状态: ${reason}\n`);
+        }
+      }).catch(() => {});
+    };
+
+    termWs.onmessage = (ev)=>{
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'output') {
+          termAppendText(msg.data || '');
+        } else if (msg.type === 'info') {
+          termAppendText(msg.data || '');
+        } else {
+          termAppendText(String(ev.data || ''));
+        }
+      } catch {
         termAppendText(String(ev.data || ''));
       }
-    } catch {
-      termAppendText(String(ev.data || ''));
-    }
-  };
+    };
+
+    return true;
+  }
+
+  connectWs(wsPrimaryUrl, 'token-auth');
 }
 
-$('btn-term-clear').addEventListener('click', ()=>{ $('terminal').innerHTML=''; });
+$('btn-term-clear').addEventListener('click', ()=>{
+  if (termEmulator) {
+    termEmulator.clear();
+    return;
+  }
+  $('terminal').textContent='';
+});
 bindTerminalInteraction();
 
 // ------------------------

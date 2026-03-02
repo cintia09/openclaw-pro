@@ -163,7 +163,7 @@ app.use((req, res, next) => {
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader(
     'Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src 'self'; frame-ancestors 'self'"
+    "default-src 'self'; connect-src 'self' ws: wss:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src 'self'; frame-ancestors 'self'"
   );
   next();
 });
@@ -2224,10 +2224,12 @@ app.post('/api/stt/install-local', (req, res) => {
 // Start HTTP + WebSocket
 // ============================================================
 const server = http.createServer(app);
+let wss = null;
+let termWss = null;
 
 if (WebSocketServer) {
-  const wss = new WebSocketServer({ server, path: '/api/ws/logs' });
-  const termWss = new WebSocketServer({ server, path: '/api/ws/terminal' });
+  wss = new WebSocketServer({ noServer: true });
+  termWss = new WebSocketServer({ noServer: true });
 
   wss.on('connection', (ws, req) => {
     if (!isAuthenticated(req)) {
@@ -2289,6 +2291,7 @@ if (WebSocketServer) {
   });
 
   termWss.on('connection', (ws, req) => {
+    const reqPath = String(req?.url || '');
     let authenticated = isAuthenticated(req);
     if (!authenticated) {
       try {
@@ -2299,6 +2302,7 @@ if (WebSocketServer) {
     }
 
     if (!authenticated) {
+      console.warn(`[terminal-ws] unauthorized connect: ${reqPath}`);
       setTerminalBackendState({ ready: false, reason: 'unauthorized websocket terminal request' });
       try { ws.close(1008, 'unauthorized'); } catch {}
       return;
@@ -2307,6 +2311,7 @@ if (WebSocketServer) {
     const { shell, mode, reason } = createTerminalShell();
 
     if (!shell) {
+      console.warn(`[terminal-ws] shell unavailable mode=${mode || 'unknown'} reason=${reason || 'unknown'}`);
       setTerminalBackendState({ wsEnabled: true, ready: false, mode: mode || 'unavailable', reason: reason || 'terminal shell unavailable' });
       try {
         ws.send(JSON.stringify({ type: 'output', data: `\n[terminal] ${reason || 'terminal shell unavailable'}\n` }));
@@ -2315,6 +2320,7 @@ if (WebSocketServer) {
       return;
     }
 
+    console.log(`[terminal-ws] connected mode=${mode} path=${reqPath}`);
     setTerminalBackendState({ wsEnabled: true, ready: true, mode, reason: mode === 'fallback' ? (reason || '') : '' });
 
     const sendOutput = (data) => {
@@ -2335,6 +2341,7 @@ if (WebSocketServer) {
     shell.stderr.on('data', (chunk) => sendOutput(chunk.toString('utf8')));
 
     shell.on('close', (code) => {
+      console.log(`[terminal-ws] shell closed code=${code ?? 0} mode=${mode}`);
       sendOutput(`\n[terminal] shell exited (code=${code ?? 0})\n`);
       if (Number(code || 0) !== 0) {
         setTerminalBackendState({ ready: false, mode, reason: `shell exited with code ${code}` });
@@ -2343,6 +2350,7 @@ if (WebSocketServer) {
     });
 
     shell.on('error', (err) => {
+      console.warn(`[terminal-ws] shell error mode=${mode} err=${err.message}`);
       sendOutput(`\n[terminal] shell error: ${err.message}\n`);
       setTerminalBackendState({ ready: false, mode, reason: `shell error: ${err.message}` });
       try { ws.close(); } catch {}
@@ -2371,8 +2379,14 @@ if (WebSocketServer) {
       }, 1000);
     };
 
-    ws.on('close', cleanup);
-    ws.on('error', cleanup);
+    ws.on('close', () => {
+      console.log('[terminal-ws] client closed');
+      cleanup();
+    });
+    ws.on('error', (err) => {
+      console.warn(`[terminal-ws] websocket error: ${err?.message || 'unknown'}`);
+      cleanup();
+    });
   });
 } else {
   setTerminalBackendState({ wsEnabled: false, ready: false, mode: 'unavailable', reason: 'ws package not available' });
@@ -2380,6 +2394,23 @@ if (WebSocketServer) {
 }
 
 server.on('upgrade', (req, socket, head) => {
+  let pathname = '';
+  try {
+    pathname = new URL(String(req.url || ''), 'http://localhost').pathname;
+  } catch {
+    pathname = String(req.url || '').split('?')[0] || '';
+  }
+
+  if (WebSocketServer && pathname === '/api/ws/logs') {
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+    return;
+  }
+
+  if (WebSocketServer && pathname === '/api/ws/terminal') {
+    termWss.handleUpgrade(req, socket, head, (ws) => termWss.emit('connection', ws, req));
+    return;
+  }
+
   if (!isGatewayProxyUpgradePath(req.url)) return;
 
   if (!isAuthenticated(req)) {

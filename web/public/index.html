@@ -4,7 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>OpenClaw 管理面板</title>
-  <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/style.css?v=1.1.56" />
+  <link rel="stylesheet" href="/vendor/xterm/xterm.css" />
 </head>
 <body>
   <div class="shell">
@@ -142,6 +143,12 @@
       <!-- OpenClaw Engine -->
       <section class="page" id="page-openclaw-engine" data-title="OpenClaw 引擎">
         <div class="grid">
+          <div class="card" style="grid-column: span 12; padding:12px 14px;">
+            <div class="tabs" style="margin:0">
+              <button class="tab oc-inner-tab active" data-oc-tab="openclaw-engine">OpenClaw 引擎</button>
+              <button class="tab oc-inner-tab" data-oc-tab="openclaw-ai">AI 模型配置</button>
+            </div>
+          </div>
           <div class="card" style="grid-column: span 12;">
             <div class="row" style="justify-content:space-between">
               <div>
@@ -192,6 +199,12 @@
       <!-- OpenClaw AI -->
       <section class="page" id="page-openclaw-ai" data-title="AI 模型配置">
         <div class="grid">
+          <div class="card" style="grid-column: span 12; padding:12px 14px;">
+            <div class="tabs" style="margin:0">
+              <button class="tab oc-inner-tab" data-oc-tab="openclaw-engine">OpenClaw 引擎</button>
+              <button class="tab oc-inner-tab active" data-oc-tab="openclaw-ai">AI 模型配置</button>
+            </div>
+          </div>
           <div class="card" style="grid-column: span 12;">
               <div class="row" style="justify-content:space-between">
                 <div>
@@ -450,7 +463,7 @@
               <button class="btn" id="btn-term-clear">清空</button>
             </div>
           </div>
-          <pre class="terminal" id="terminal" tabindex="0"></pre>
+          <div class="terminal" id="terminal" tabindex="0"></div>
           <div class="row" style="margin-top:10px">
             <span class="muted small" id="term-state">未连接</span>
             <label class="chip" style="cursor:pointer">
@@ -548,6 +561,8 @@
     </main>
   </div>
 
-  <script src="/app.js?v=1.1.36"></script>
+  <script src="/vendor/xterm/xterm.js"></script>
+  <script src="/vendor/xterm/addon-fit.js"></script>
+  <script src="/app.js?v=1.1.57"></script>
 </body>
 </html>
