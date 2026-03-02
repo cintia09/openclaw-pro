@@ -266,6 +266,11 @@ check_local_tarball(){
 download_tarball(){
   local target="$TMP_DIR/$IMAGE_TARBALL"
   local part="$target.part"
+  local total_bytes=""
+  local cached_bytes="0"
+  local cached_mib="0"
+  local total_mib="0"
+  local total_pct="0"
   if [ -z "$TAG" ]; then
     warn "缺少有效 release tag，跳过 release 资产下载"
     return 1
