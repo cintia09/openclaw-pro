@@ -367,16 +367,8 @@ ensure_root_password(){
   if [ -n "$ROOT_PASS" ]; then
     info "检测到 ROOT_PASS 环境变量"; return 0
   fi
-  if [ -f "$ROOT_PASSWORD_FILE" ]; then
-    ROOT_PASS="$(cat "$ROOT_PASSWORD_FILE" 2>/dev/null || true)"
-    if [ -n "$ROOT_PASS" ]; then
-      info "沿用已有密码文件：$ROOT_PASSWORD_FILE"; return 0
-    fi
-  fi
-  ROOT_PASS="$(generate_strong_password)"
-  printf '%s\n' "$ROOT_PASS" > "$ROOT_PASSWORD_FILE"
-  chmod 600 "$ROOT_PASSWORD_FILE" 2>/dev/null || true
-  info "已自动生成 root 密码：$ROOT_PASSWORD_FILE"
+  ROOT_PASS=""
+  info "默认不生成 root 密码文件（SSH key-only）；如需设置请传入 ROOT_PASS"
 }
 
 # ─── detect local IP ─────────────────────────────────────────
@@ -729,15 +721,18 @@ create_and_start(){
     --restart unless-stopped \
     "$IMAGE_NAME"
 
-  info "启动容器并设置 root 密码..."
+  info "启动容器..."
   docker start "$CONTAINER_NAME"
   sleep 2
-  echo "root:${ROOT_PASS}" | docker exec -i "$CONTAINER_NAME" chpasswd || true
+  if [ -n "$ROOT_PASS" ]; then
+    info "检测到 ROOT_PASS，设置容器内 root 密码"
+    echo "root:${ROOT_PASS}" | docker exec -i "$CONTAINER_NAME" chpasswd || true
+  fi
 
   # SSH hardening
   docker exec "$CONTAINER_NAME" bash -lc "mkdir -p /run/sshd && (/usr/sbin/sshd >/dev/null 2>&1 || service ssh start >/dev/null 2>&1 || true)" || true
   docker exec "$CONTAINER_NAME" bash -lc "mkdir -p /etc/ssh/sshd_config.d && printf '%s\n' \
-    'PermitRootLogin prohibit-password' \
+    'PermitRootLogin no' \
     'PasswordAuthentication no' \
     'KbdInteractiveAuthentication no' \
     'ChallengeResponseAuthentication no' \
@@ -745,7 +740,7 @@ create_and_start(){
     > /etc/ssh/sshd_config.d/99-openclaw-security.conf" || true
   docker exec "$CONTAINER_NAME" bash -lc "
     if [ -f /etc/ssh/sshd_config ]; then
-      sed -i -E 's|^[#[:space:]]*PermitRootLogin[[:space:]]+.*|PermitRootLogin prohibit-password|' /etc/ssh/sshd_config
+      sed -i -E 's|^[#[:space:]]*PermitRootLogin[[:space:]]+.*|PermitRootLogin no|' /etc/ssh/sshd_config
       sed -i -E 's|^[#[:space:]]*PasswordAuthentication[[:space:]]+.*|PasswordAuthentication no|' /etc/ssh/sshd_config
       sed -i -E 's|^[#[:space:]]*KbdInteractiveAuthentication[[:space:]]+.*|KbdInteractiveAuthentication no|' /etc/ssh/sshd_config
       sed -i -E 's|^[#[:space:]]*ChallengeResponseAuthentication[[:space:]]+.*|ChallengeResponseAuthentication no|' /etc/ssh/sshd_config
@@ -757,6 +752,7 @@ create_and_start(){
     if [[ "$host_user" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
       if docker exec "$CONTAINER_NAME" bash -lc "id -u '$host_user' >/dev/null 2>&1 || (useradd -m -s /bin/bash '$host_user' >/dev/null 2>&1 || adduser --disabled-password --gecos '' '$host_user' >/dev/null 2>&1)"; then
         docker exec "$CONTAINER_NAME" bash -lc "usermod -aG sudo '$host_user' >/dev/null 2>&1 || true"
+        docker exec "$CONTAINER_NAME" bash -lc "printf '%s\n' '$host_user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/90-openclaw-host-user && chmod 440 /etc/sudoers.d/90-openclaw-host-user" || true
         host_user_created="true"
         info "已在容器中创建同名用户：$host_user"
       fi
@@ -787,15 +783,18 @@ create_and_start(){
   if [ "$HTTPS_ENABLED" = "true" ]; then
     local url_suffix=""
     [ "$HTTPS_PORT" != "443" ] && url_suffix=":${HTTPS_PORT}"
-    info "访问：主站 https://${DOMAIN}${url_suffix}  管理面板 https://${DOMAIN}${url_suffix}/admin  SSH root@<host> -p ${SSH_PORT}"
+    info "访问：主站 https://${DOMAIN}${url_suffix}  管理面板 https://${DOMAIN}${url_suffix}/admin"
   else
-    info "访问：Gateway http://<host>:${GW_PORT}  管理面板 http://<host>:${WEB_PORT}  SSH root@<host> -p ${SSH_PORT}"
+    info "访问：Gateway http://<host>:${GW_PORT}  管理面板 http://<host>:${WEB_PORT}"
   fi
   info "SSH 密码登录：已禁用（仅密钥登录）"
   if [ "$host_user_created" = "true" ] && [ "$key_injected" = "true" ]; then
     info "同名用户登录：SSH ${host_user}@<host> -p ${SSH_PORT}"
+    info "容器内提权：ssh 登录后执行 sudo -i"
   fi
-  info "Root 初始密码文件：$ROOT_PASSWORD_FILE"
+  if [ -n "$ROOT_PASS" ]; then
+    info "root 密码由 ROOT_PASS 提供（未写入本地文件）"
+  fi
   info "日志文件：$LOG_FILE"
 }
 
