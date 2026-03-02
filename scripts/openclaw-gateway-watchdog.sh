@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -u
 
 LOG_DIR="/root/.openclaw/logs"
@@ -6,16 +6,169 @@ mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/gateway-watchdog.log"
 GATEWAY_LOG="$LOG_DIR/gateway.log"
 
-CHECK_INTERVAL=10
-STARTUP_TIMEOUT=120
-POLL_INTERVAL=2
+CHECK_INTERVAL=30
+POLL_INTERVAL=5
+STARTUP_TIMEOUT=900
+MAX_RETRIES=3
+BACKOFF_WAIT=300
+PORT=18789
 MAX_LOG_LINES=5000
-RESTART_COOLDOWN=25
+
 LOCK_DIR="/tmp/openclaw-gateway-watchdog.lock"
-LAST_RESTART_AT=0
+
+CONSECUTIVE_FAILURES=0
+LAST_PID=""
+
+HOME="${HOME:-/root}"
+export HOME
+export DISPLAY=:99
+
+GATEWAY_CMD="openclaw gateway run --allow-unconfigured"
 
 log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+}
+
+get_gateway_pids() {
+  pgrep -f "[o]penclaw.*gateway" 2>/dev/null || true
+}
+
+get_gateway_pid() {
+  local pid
+  pid=$(get_gateway_pids | head -1)
+  if [[ -n "$pid" ]]; then
+    echo "$pid"
+    return
+  fi
+
+  for pid in $(pgrep -x "openclaw" 2>/dev/null || true); do
+    [[ "$(cat /proc/$pid/comm 2>/dev/null)" == "bash" ]] && continue
+    echo "$pid"
+    return
+  done
+}
+
+is_gateway_process_alive() {
+  if [[ -n "$LAST_PID" ]] && kill -0 "$LAST_PID" 2>/dev/null; then
+    return 0
+  fi
+  [[ -n "$(get_gateway_pid)" ]]
+}
+
+is_port_listening() {
+  ss -tlnp 2>/dev/null | grep -q ":${PORT} "
+}
+
+dedupe_gateway_processes() {
+  local pids keep
+  pids=$(get_gateway_pids)
+  [[ -z "$pids" ]] && return 0
+
+  keep=$(echo "$pids" | tail -1)
+  while IFS= read -r pid; do
+    [[ -z "$pid" ]] && continue
+    if [[ "$pid" != "$keep" ]]; then
+      kill -9 "$pid" 2>/dev/null || true
+      log "Killed duplicate gateway process PID=$pid, keep PID=$keep"
+    fi
+  done <<< "$pids"
+}
+
+kill_gateway() {
+  local pid waited
+  pid=$(get_gateway_pid)
+  if [[ -z "$pid" && -n "$LAST_PID" ]] && kill -0 "$LAST_PID" 2>/dev/null; then
+    pid="$LAST_PID"
+  fi
+
+  if [[ -n "$pid" ]]; then
+    log "Killing gateway (PID $pid)"
+    kill -TERM "$pid" 2>/dev/null || true
+    pkill -TERM -P "$pid" 2>/dev/null || true
+    waited=0
+    while [[ $waited -lt 5 ]] && kill -0 "$pid" 2>/dev/null; do
+      sleep 1
+      waited=$((waited + 1))
+    done
+  fi
+
+  pkill -9 -x "openclaw-gatewa" 2>/dev/null || true
+  pkill -9 -x "openclaw" 2>/dev/null || true
+  pkill -9 -f "[o]penclaw.*gateway" 2>/dev/null || true
+  if [[ -n "$LAST_PID" ]]; then
+    kill -9 "$LAST_PID" 2>/dev/null || true
+  fi
+  LAST_PID=""
+  sleep 2
+}
+
+wait_for_ready() {
+  local timeout=$1
+  local elapsed=0
+  local last_log=0
+
+  while [[ $elapsed -lt $timeout ]]; do
+    if is_port_listening; then
+      return 0
+    fi
+
+    if ! is_gateway_process_alive; then
+      log "Gateway process exited during startup (after ${elapsed}s)"
+      return 1
+    fi
+
+    sleep "$POLL_INTERVAL"
+    elapsed=$((elapsed + POLL_INTERVAL))
+
+    if [[ $((elapsed - last_log)) -ge 60 ]]; then
+      log "Startup in progress... ${elapsed}s/${timeout}s"
+      last_log=$elapsed
+    fi
+  done
+
+  return 1
+}
+
+start_gateway() {
+  if is_gateway_process_alive; then
+    kill_gateway
+  fi
+
+  log "Starting gateway..."
+  : > "$GATEWAY_LOG"
+
+  nohup bash -lc "$GATEWAY_CMD" > "$GATEWAY_LOG" 2>&1 &
+  LAST_PID=$!
+
+  log "Gateway process launched (PID $LAST_PID), polling every ${POLL_INTERVAL}s (timeout ${STARTUP_TIMEOUT}s)..."
+
+  if wait_for_ready "$STARTUP_TIMEOUT"; then
+    local actual_pid
+    actual_pid=$(get_gateway_pid)
+    log "Gateway started successfully (port $PORT listening, PID ${actual_pid:-$LAST_PID})"
+    CONSECUTIVE_FAILURES=0
+    return 0
+  fi
+
+  log "ERROR: Gateway failed to start within ${STARTUP_TIMEOUT}s"
+  if [[ -f "$GATEWAY_LOG" ]]; then
+    local tail_log
+    tail_log=$(tail -5 "$GATEWAY_LOG" 2>/dev/null | tr '\n' ' ')
+    [[ -n "$tail_log" ]] && log "  Last output: $tail_log"
+  fi
+  CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
+  kill_gateway
+  return 1
+}
+
+handle_restart() {
+  if [[ $CONSECUTIVE_FAILURES -ge $MAX_RETRIES ]]; then
+    log "ALERT: ${CONSECUTIVE_FAILURES} consecutive failures — backing off ${BACKOFF_WAIT}s before retry"
+    sleep "$BACKOFF_WAIT"
+    CONSECUTIVE_FAILURES=0
+  fi
+
+  start_gateway
 }
 
 trim_log() {
@@ -28,103 +181,13 @@ trim_log() {
   fi
 }
 
-get_gateway_pid() {
-  pgrep -f "[o]penclaw.*gateway" 2>/dev/null | head -1
-}
-
-get_gateway_pids() {
-  pgrep -f "[o]penclaw.*gateway" 2>/dev/null || true
-}
-
-count_gateway_pids() {
-  local pids
-  pids=$(get_gateway_pids)
-  if [[ -z "$pids" ]]; then
-    echo 0
-  else
-    echo "$pids" | wc -l | tr -d ' '
-  fi
-}
-
-is_gateway_alive() {
-  [[ -n "$(get_gateway_pid)" ]]
-}
-
-is_gateway_port_ready() {
-  curl -sS --connect-timeout 1 --max-time 2 http://127.0.0.1:18789/health >/dev/null 2>&1
-}
-
-kill_gateway() {
-  pkill -f "[o]penclaw.*gateway" >/dev/null 2>&1 || true
-  sleep 1
-}
-
-start_gateway() {
-  log "Starting OpenClaw Gateway..."
-  nohup openclaw gateway run --allow-unconfigured >> "$GATEWAY_LOG" 2>&1 &
-  LAST_RESTART_AT=$(date +%s)
-}
-
-dedupe_gateway_processes() {
-  local pids keep first=true
-  pids=$(get_gateway_pids)
-  [[ -z "$pids" ]] && return 0
-
-  keep=$(echo "$pids" | tail -1)
-  while IFS= read -r pid; do
-    [[ -z "$pid" ]] && continue
-    if [[ "$pid" != "$keep" ]]; then
-      kill -9 "$pid" >/dev/null 2>&1 || true
-      log "Killed duplicate gateway process PID=$pid, keep PID=$keep"
-    fi
-  done <<< "$pids"
-}
-
-should_restart_now() {
-  local now elapsed
-  now=$(date +%s)
-  elapsed=$((now - LAST_RESTART_AT))
-  if [[ "$LAST_RESTART_AT" -gt 0 && "$elapsed" -lt "$RESTART_COOLDOWN" ]]; then
-    return 1
-  fi
-  return 0
-}
-
-wait_for_ready() {
-  local elapsed=0
-  while [[ "$elapsed" -lt "$STARTUP_TIMEOUT" ]]; do
-    if is_gateway_port_ready; then
-      return 0
-    fi
-    if ! is_gateway_alive; then
-      return 1
-    fi
-    sleep "$POLL_INTERVAL"
-    elapsed=$((elapsed + POLL_INTERVAL))
-  done
-  return 1
-}
-
-restart_gateway() {
-  kill_gateway
-  start_gateway
-  if wait_for_ready; then
-    log "Gateway is ready (PID=$(get_gateway_pid))"
-  else
-    log "Gateway failed to become ready within ${STARTUP_TIMEOUT}s"
-    if [[ -f "$GATEWAY_LOG" ]] && tail -60 "$GATEWAY_LOG" 2>/dev/null | grep -qE 'Unrecognized key|Invalid config'; then
-      log "Detected invalid OpenClaw config key(s). Please click '配置恢复' in OpenClaw page, then retry Gateway restart."
-    fi
-  fi
-}
-
-log "openclaw-gateway-watchdog started"
-
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
   log "Another watchdog instance detected, exiting"
   exit 0
 fi
 trap 'rmdir "$LOCK_DIR" >/dev/null 2>&1 || true' EXIT
+
+log "Watchdog v2 started (check=${CHECK_INTERVAL}s, poll=${POLL_INTERVAL}s, timeout=${STARTUP_TIMEOUT}s, port=$PORT)"
 
 while true; do
   if ! command -v openclaw >/dev/null 2>&1; then
@@ -133,18 +196,25 @@ while true; do
     continue
   fi
 
-  local_count=$(count_gateway_pids)
-  if [[ "$local_count" -gt 1 ]]; then
-    log "Detected duplicate gateway processes: $local_count"
-    dedupe_gateway_processes
-  fi
+  dedupe_gateway_processes
 
-  if ! is_gateway_alive || ! is_gateway_port_ready; then
-    if should_restart_now; then
-      log "Gateway down or unhealthy, restarting..."
-      restart_gateway
+  if ! is_gateway_process_alive; then
+    log "Gateway is DOWN — restarting"
+    handle_restart
+  elif ! is_port_listening; then
+    pid=$(get_gateway_pid)
+    [[ -z "$pid" ]] && pid="$LAST_PID"
+    uptime=0
+    if [[ -n "$pid" ]]; then
+      uptime=$(ps -o etimes= -p "$pid" 2>/dev/null | tr -d ' ')
+      uptime=${uptime:-0}
+    fi
+
+    if [[ "$uptime" -ge "$STARTUP_TIMEOUT" ]]; then
+      log "Gateway stuck — alive for ${uptime}s but port $PORT not listening. Force restarting..."
+      handle_restart
     else
-      log "Gateway unhealthy but in cooldown window (${RESTART_COOLDOWN}s), skip immediate restart"
+      log "Gateway starting up (${uptime}s/${STARTUP_TIMEOUT}s)..."
     fi
   fi
 
