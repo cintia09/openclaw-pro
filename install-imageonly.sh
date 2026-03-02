@@ -280,8 +280,14 @@ download_tarball(){
     if [ -f "$part" ]; then
       cached_bytes="$(wc -c < "$part" 2>/dev/null | tr -d '[:space:]' || echo 0)"
       cached_mib="$(awk -v n="$cached_bytes" 'BEGIN{printf "%.2f", n/1024/1024}')"
-      info "检测到断点缓存：$part（已缓存 ${cached_mib} MiB）"
-      info "说明：下面 curl 百分比显示的是本次新增下载进度，不是总进度。"
+      if [[ "$total_bytes" =~ ^[0-9]+$ ]] && [ "$total_bytes" -gt 0 ]; then
+        total_mib="$(awk -v n="$total_bytes" 'BEGIN{printf "%.2f", n/1024/1024}')"
+        total_pct=$(( cached_bytes * 100 / total_bytes ))
+        info "检测到断点缓存：已缓存 ${cached_mib} MiB / 估算总大小 ${total_mib} MiB（总体约 ${total_pct}%）"
+      else
+        info "检测到断点缓存：已缓存 ${cached_mib} MiB（总大小暂不可得）"
+      fi
+      info "说明：下面 curl 百分比显示的是本次新增下载进度，不是总体百分比。"
     fi
     if curl -C - --progress-bar -fL --connect-timeout 15 --max-time 1800 --retry 3 --retry-delay 3 -o "$part" "$u"; then
       echo ""
