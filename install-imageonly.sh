@@ -268,6 +268,12 @@ main(){
   info "Image-only 安装（流程与 Windows 对齐，默认 Lite）"
   info "工作目录：$BASE_DIR"
 
+  if has_tty || [ "${FORCE_TTY_INTERACTIVE:-0}" = "1" ]; then
+    info "进入交互向导：先配置密码与端口，然后执行镜像检查/下载/导入"
+  fi
+  prompt_password
+  prompt_ports
+
   if ! load_image; then
     warn "本地镜像不可用，开始自动下载修复"
     if download_tarball "$TAG" && load_image; then
@@ -281,8 +287,6 @@ main(){
     fi
   fi
 
-  prompt_password
-  prompt_ports
   create_and_start
 }
 

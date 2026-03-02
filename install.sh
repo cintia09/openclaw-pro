@@ -3,14 +3,19 @@
 # Usage: curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.sh | bash
 set -euo pipefail
 
-# 非交互（pipe）模式优先：若通过 curl|bash 执行，直接触发 ImageOnly 安装（不克隆仓库）
+# pipe（curl|bash）模式：若存在 /dev/tty，仍走交互向导；否则退化为非交互模式。
 if [ ! -t 0 ]; then
-  echo "⚡ 非交互模式检测到 (curl|bash)，直接运行 ImageOnly 安装（无需克隆源码）..."
   TMP_SCRIPT=$(mktemp /tmp/openclaw-imageonly.XXXXXX.sh)
   TARGET_DIR="$(pwd)"
   if curl -fsSL "https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-imageonly.sh" -o "$TMP_SCRIPT"; then
     chmod +x "$TMP_SCRIPT"
-    exec env TARGET_DIR="$TARGET_DIR" bash "$TMP_SCRIPT"
+    if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+      echo "⚡ 检测到 curl|bash，切换为交互向导（通过 /dev/tty）..."
+      exec env TARGET_DIR="$TARGET_DIR" FORCE_TTY_INTERACTIVE=1 bash "$TMP_SCRIPT"
+    else
+      echo "⚡ 检测到无 TTY 环境，使用非交互 ImageOnly 模式..."
+      exec env TARGET_DIR="$TARGET_DIR" bash "$TMP_SCRIPT"
+    fi
   else
     echo "⚠️ 无法下载 ImageOnly 安装脚本（网络或脚本不存在），请稍后重试或手动运行本地安装。" >&2
     exit 1
