@@ -24,7 +24,7 @@
         <a href="#dashboard" data-route="dashboard" class="active"><span class="ico">📊</span><span>仪表盘</span></a>
 
         <div class="nav-group-label">OpenClaw</div>
-        <a href="#openclaw-engine" data-route="openclaw-engine"><span class="ico">🐾</span><span>OpenClaw 引擎</span></a>
+        <a href="#openclaw-engine" data-route="openclaw-engine"><span class="ico">🐾</span><span>OpenClaw 控制台</span></a>
         <a href="#messaging" data-route="messaging"><span class="ico">💬</span><span>消息平台</span></a>
         <a href="#plugins" data-route="plugins"><span class="ico">🧩</span><span>插件市场</span></a>
 
@@ -142,6 +142,17 @@
       <!-- OpenClaw Engine -->
       <section class="page" id="page-openclaw-engine" data-title="OpenClaw 引擎">
         <div class="grid">
+          <div class="oc-switch" style="grid-column: span 12;">
+            <button class="oc-switch-card active" data-oc-switch="openclaw-engine">
+              <div class="oc-switch-title">OpenClaw 引擎</div>
+              <div class="oc-switch-sub">安装、版本、Gateway 运行</div>
+            </button>
+            <button class="oc-switch-card" data-oc-switch="openclaw-ai">
+              <div class="oc-switch-title">AI 模型配置</div>
+              <div class="oc-switch-sub">Provider、模型与密钥</div>
+            </button>
+          </div>
+
           <div class="card" style="grid-column: span 12;">
             <div class="row" style="justify-content:space-between">
               <div>
@@ -185,6 +196,22 @@
               <h2>安装/更新/Gateway启动日志</h2>
               <pre class="terminal" id="oc-log" style="height:260px"></pre>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- OpenClaw AI -->
+      <section class="page" id="page-openclaw-ai" data-title="AI 模型配置">
+        <div class="grid">
+          <div class="oc-switch" style="grid-column: span 12;">
+            <button class="oc-switch-card" data-oc-switch="openclaw-engine">
+              <div class="oc-switch-title">OpenClaw 引擎</div>
+              <div class="oc-switch-sub">安装、版本、Gateway 运行</div>
+            </button>
+            <button class="oc-switch-card active" data-oc-switch="openclaw-ai">
+              <div class="oc-switch-title">AI 模型配置</div>
+              <div class="oc-switch-sub">Provider、模型与密钥</div>
+            </button>
           </div>
 
           <div class="card" style="grid-column: span 12;">
@@ -545,6 +572,6 @@
 
   <script src="/vendor/xterm/xterm.js"></script>
   <script src="/vendor/xterm/addon-fit.js"></script>
-  <script src="/app.js?v=1.1.58"></script>
+  <script src="/app.js?v=1.1.59"></script>
 </body>
 </html>

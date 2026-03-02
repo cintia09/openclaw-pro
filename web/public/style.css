@@ -366,6 +366,27 @@ button, input, select, textarea{font-family:inherit}
   border-color:rgba(56,189,248,.55);
 }
 
+.oc-switch{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px}
+.oc-switch-card{
+  width:100%;
+  text-align:left;
+  border:1px solid var(--stroke);
+  border-radius:14px;
+  padding:12px 14px;
+  cursor:pointer;
+  background:linear-gradient(180deg, rgba(51,65,85,.46), rgba(30,41,59,.40));
+  color:var(--text);
+  transition:transform .12s, border-color .12s, box-shadow .12s;
+}
+.oc-switch-card:hover{transform:translateY(-1px); border-color:rgba(148,163,184,.38)}
+.oc-switch-card.active{
+  border-color:rgba(56,189,248,.55);
+  background:linear-gradient(180deg, rgba(59,130,246,.30), rgba(34,211,238,.18));
+  box-shadow:0 6px 18px rgba(34,211,238,.12);
+}
+.oc-switch-title{font-weight:800}
+.oc-switch-sub{margin-top:4px; font-size:12px; color:var(--muted)}
+
 /* Terminal */
 .terminal-toolbar{display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:10px}
 .terminal{

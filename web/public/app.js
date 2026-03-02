@@ -167,7 +167,8 @@ function toast(title, detail=''){
 // ------------------------
 const ROUTES = [
   { id: 'dashboard', title: '仪表盘' },
-  { id: 'openclaw-engine', title: 'OpenClaw 引擎' },
+  { id: 'openclaw-engine', title: 'OpenClaw 控制台' },
+  { id: 'openclaw-ai', title: 'AI 模型配置' },
   { id: 'messaging', title: '消息平台' },
   { id: 'trading', title: '交易系统' },
   { id: 'plugins', title: '插件市场' },
@@ -179,15 +180,21 @@ const ROUTES = [
 
 function getRouteFromHash(){
   const h = (location.hash || '').replace('#','').trim();
-  if (h === 'ai') return 'openclaw-engine';
+  if (h === 'ai') return 'openclaw-ai';
   if (h === 'openclaw') return 'openclaw-engine';
   const found = ROUTES.find(r => r.id === h);
   return found ? found.id : 'dashboard';
 }
 
 function setActiveRoute(route){
+  const isOpenClawRoute = route === 'openclaw-engine' || route === 'openclaw-ai';
+
   // nav active
-  qa('#nav a').forEach(a => a.classList.toggle('active', a.dataset.route === route));
+  qa('#nav a').forEach(a => {
+    const itemRoute = a.dataset.route;
+    const active = itemRoute === route || (isOpenClawRoute && itemRoute === 'openclaw-engine');
+    a.classList.toggle('active', !!active);
+  });
   // pages
   qa('.page').forEach(p => p.classList.toggle('active', p.id === 'page-' + route));
   // title
@@ -199,15 +206,15 @@ function setActiveRoute(route){
 
   // hooks
   if (route === 'dashboard') refreshStatus();
-  if (route === 'openclaw-engine') { refreshOpenClaw(); loadAIConfig(); }
+  if (route === 'openclaw-engine') { refreshOpenClaw(); }
+  if (route === 'openclaw-ai') { loadAIConfig(); }
   if (route === 'messaging') loadMessagingConfig();
   if (route === 'trading') refreshTrading();
   if (route === 'plugins') refreshPlugins();
   if (route === 'terminal') {
-    terminalDisconnect();
-    setTimeout(() => terminalConnect(), 60);
+    terminalConnect();
+    focusTerminalInput();
   }
-  if (route !== 'terminal') terminalDisconnect();
   if (route === 'browser') loadBrowserFrame();
   if (route === 'settings') { loadBrowserSettings(); renderDetectedTimezone(); checkForUpdate(); }
   if (route === 'logs') refreshLogs();
@@ -248,6 +255,15 @@ async function loadBrowserSettings(){
 }
 
 window.addEventListener('hashchange', ()=> setActiveRoute(getRouteFromHash()));
+
+qa('[data-oc-switch]').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const route = String(btn.getAttribute('data-oc-switch') || '').trim();
+    if (!route) return;
+    if (getRouteFromHash() === route) return;
+    location.hash = route;
+  });
+});
 
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
@@ -1265,6 +1281,14 @@ let termConnectTimeoutTimer = null;
 let termEmulator = null;
 let termFitAddon = null;
 
+function focusTerminalInput(){
+  if (termEmulator) {
+    try { termEmulator.focus(); } catch {}
+    return;
+  }
+  $('terminal')?.focus();
+}
+
 function initTerminalEmulator(){
   if (termEmulator) return true;
   const terminalContainer = $('terminal');
@@ -1274,6 +1298,7 @@ function initTerminalEmulator(){
   try {
     termEmulator = new window.Terminal({
       cursorBlink: true,
+      cursorInactiveStyle: 'none',
       convertEol: true,
       scrollback: 5000,
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
@@ -1397,7 +1422,7 @@ function bindTerminalInteraction(){
 
   const useXterm = initTerminalEmulator();
 
-  terminalEl.addEventListener('click', () => terminalEl.focus());
+  terminalEl.addEventListener('click', () => focusTerminalInput());
 
   window.addEventListener('resize', () => {
     if (termResizeTimer) clearTimeout(termResizeTimer);
@@ -1519,7 +1544,7 @@ async function terminalConnect(){
       }
       $('term-state').textContent = '已连接';
       termAppendText('[terminal] 已连接（PTY）。直接在此区域输入命令并按回车执行。\n');
-      $('terminal')?.focus();
+      focusTerminalInput();
       sendTerminalResize();
     };
 
