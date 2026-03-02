@@ -355,11 +355,8 @@ detect_local_ip(){
 prompt_deploy_config(){
   if has_tty; then
     local t
-    t="$(prompt "Gateway 端口 (默认 ${GW_PORT}): ")";     GW_PORT="${t:-$GW_PORT}"
-    t="$(prompt "Web 面板端口 (默认 ${WEB_PORT}): ")";     WEB_PORT="${t:-$WEB_PORT}"
-    t="$(prompt "SSH 端口 (默认 ${SSH_PORT}): ")";         SSH_PORT="${t:-$SSH_PORT}"
 
-    # HTTPS domain
+    # ── 1. HTTPS / 域名 / 证书模式 ──
     HTTPS_ENABLED="true"
     printf "HTTPS 域名（留空使用本机 IP 自签名 HTTPS）: " > "$TTY_IN"
     IFS= read -r DOMAIN < "$TTY_IN" || true
@@ -388,10 +385,19 @@ prompt_deploy_config(){
 
     HTTPS_PORT="${HTTPS_PORT:-443}"
     [ "$HTTPS_PORT" -eq 0 ] && HTTPS_PORT=443
+
+    # ── 2. 端口配置（根据 HTTPS 模式显示对应端口） ──
     if [ "$CERT_MODE" = "letsencrypt" ]; then
-      t="$(prompt "HTTP 端口 (默认 ${HTTP_PORT}): ")";  HTTP_PORT="${t:-$HTTP_PORT}"
+      t="$(prompt "HTTP 端口 (默认 ${HTTP_PORT}): ")";    HTTP_PORT="${t:-$HTTP_PORT}"
+      t="$(prompt "HTTPS 端口 (默认 ${HTTPS_PORT}): ")";  HTTPS_PORT="${t:-$HTTPS_PORT}"
+      info "HTTPS(Let's Encrypt) 模式：Gateway/Web 面板仅绑定 127.0.0.1，不对外暴露"
+    else
+      t="$(prompt "HTTPS 端口 (默认 ${HTTPS_PORT}): ")";  HTTPS_PORT="${t:-$HTTPS_PORT}"
+      info "HTTPS(自签名) 模式：Gateway/Web 面板仅绑定 127.0.0.1，不对外暴露"
     fi
-    t="$(prompt "HTTPS 端口 (默认 ${HTTPS_PORT}): ")"; HTTPS_PORT="${t:-$HTTPS_PORT}"
+    t="$(prompt "SSH 端口 (默认 ${SSH_PORT}): ")";         SSH_PORT="${t:-$SSH_PORT}"
+    t="$(prompt "Gateway 内部端口 (默认 ${GW_PORT}，仅 127.0.0.1): ")";  GW_PORT="${t:-$GW_PORT}"
+    t="$(prompt "Web 面板内部端口 (默认 ${WEB_PORT}，仅 127.0.0.1): ")";  WEB_PORT="${t:-$WEB_PORT}"
   else
     # non-interactive: auto IP self-signed
     if [ -z "$DOMAIN" ]; then
