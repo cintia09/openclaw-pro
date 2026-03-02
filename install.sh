@@ -3,11 +3,26 @@
 # Usage: curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.sh | bash
 set -euo pipefail
 
+fetch_imageonly_script(){
+  local out_file="$1"
+  local api_url="https://api.github.com/repos/cintia09/openclaw-pro/commits/main"
+  local sha=""
+  sha="$(curl -fsSL --connect-timeout 8 --max-time 15 "$api_url" 2>/dev/null | grep -m1 '"sha"' | sed -E 's/.*"sha"[[:space:]]*:[[:space:]]*"([0-9a-f]+)".*//' || true)"
+
+  if [ -n "$sha" ]; then
+    if curl -fsSL "https://raw.githubusercontent.com/cintia09/openclaw-pro/${sha}/install-imageonly.sh" -o "$out_file"; then
+      return 0
+    fi
+  fi
+
+  curl -fsSL "https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-imageonly.sh?ts=$(date +%s)" -o "$out_file"
+}
+
 # pipe（curl|bash）模式：若存在 /dev/tty，仍走交互向导；否则退化为非交互模式。
 if [ ! -t 0 ]; then
   TMP_SCRIPT=$(mktemp /tmp/openclaw-imageonly.XXXXXX.sh)
   TARGET_DIR="$(pwd)"
-  if curl -fsSL "https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-imageonly.sh?ts=$(date +%s)" -o "$TMP_SCRIPT"; then
+  if fetch_imageonly_script "$TMP_SCRIPT"; then
     chmod +x "$TMP_SCRIPT"
     if [ -r /dev/tty ] && [ -w /dev/tty ]; then
       echo "⚡ 检测到 curl|bash，切换为交互向导（通过 /dev/tty）..."
@@ -47,7 +62,7 @@ if [ -t 0 ]; then
       exec env TARGET_DIR="$(pwd)" bash "$(pwd)/install-imageonly.sh"
     else
       TMP_SCRIPT=$(mktemp /tmp/openclaw-imageonly.XXXXXX.sh)
-      if curl -fsSL "https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-imageonly.sh?ts=$(date +%s)" -o "$TMP_SCRIPT"; then
+      if fetch_imageonly_script "$TMP_SCRIPT"; then
         chmod +x "$TMP_SCRIPT"
         exec env TARGET_DIR="$(pwd)" bash "$TMP_SCRIPT"
       else
@@ -162,7 +177,7 @@ if [ ! -t 0 ]; then
   # Pipe mode (curl|bash): 自动使用 ImageOnly 流程（与 Windows 一致），无需克隆源码
   echo "⚡ Detected non-interactive install (curl|bash). Running ImageOnly installer..."
   TMP_SCRIPT=$(mktemp /tmp/openclaw-imageonly.XXXXXX.sh)
-  if curl -fsSL "https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-imageonly.sh?ts=$(date +%s)" -o "$TMP_SCRIPT"; then
+  if fetch_imageonly_script "$TMP_SCRIPT"; then
     chmod +x "$TMP_SCRIPT"
     echo "→ 执行 ImageOnly 安装脚本"
     bash "$TMP_SCRIPT" || { echo "ImageOnly 安装失败" >&2; exit 1; }
