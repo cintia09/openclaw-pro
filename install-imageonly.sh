@@ -695,6 +695,11 @@ F2B
 # ─── container create & start ─────────────────────────────────
 
 create_and_start(){
+  local host_user host_user_created key_injected
+  host_user="$(id -un 2>/dev/null || true)"
+  host_user_created="false"
+  key_injected="false"
+
   mkdir -p "$HOME_DIR/.openclaw"
   chmod 700 "$HOME_DIR" || true
   write_config
@@ -747,13 +752,31 @@ create_and_start(){
     fi" || true
   docker exec "$CONTAINER_NAME" bash -lc "mkdir -p /run/sshd; pkill -x sshd >/dev/null 2>&1 || true; (/usr/sbin/sshd >/dev/null 2>&1 || service ssh restart >/dev/null 2>&1 || true)" || true
 
+  # Create host-mapped normal user (optional best-effort)
+  if [ -n "$host_user" ] && [ "$host_user" != "root" ]; then
+    if [[ "$host_user" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+      if docker exec "$CONTAINER_NAME" bash -lc "id -u '$host_user' >/dev/null 2>&1 || (useradd -m -s /bin/bash '$host_user' >/dev/null 2>&1 || adduser --disabled-password --gecos '' '$host_user' >/dev/null 2>&1)"; then
+        docker exec "$CONTAINER_NAME" bash -lc "usermod -aG sudo '$host_user' >/dev/null 2>&1 || true"
+        host_user_created="true"
+        info "已在容器中创建同名用户：$host_user"
+      fi
+    fi
+  fi
+
   # Public key injection
   for keyfile in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_rsa.pub" "$HOME/.ssh/id_ecdsa.pub"; do
     if [ -f "$keyfile" ]; then
+      key_injected="true"
       info "注入公钥 $(basename "$keyfile") 到容器"
       docker exec "$CONTAINER_NAME" bash -lc "mkdir -p /root/.ssh && chmod 700 /root/.ssh"
       docker cp "$keyfile" "$CONTAINER_NAME":/root/.ssh/authorized_keys.tmp
       docker exec "$CONTAINER_NAME" bash -lc "cat /root/.ssh/authorized_keys.tmp >> /root/.ssh/authorized_keys && sort -u -o /root/.ssh/authorized_keys /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && rm -f /root/.ssh/authorized_keys.tmp"
+
+      if [ "$host_user_created" = "true" ]; then
+        docker exec "$CONTAINER_NAME" bash -lc "mkdir -p '/home/$host_user/.ssh' && chmod 700 '/home/$host_user/.ssh' && chown -R '$host_user:$host_user' '/home/$host_user/.ssh'"
+        docker cp "$keyfile" "$CONTAINER_NAME":/tmp/host_user_authorized_keys.tmp
+        docker exec "$CONTAINER_NAME" bash -lc "cat /tmp/host_user_authorized_keys.tmp >> '/home/$host_user/.ssh/authorized_keys' && sort -u -o '/home/$host_user/.ssh/authorized_keys' '/home/$host_user/.ssh/authorized_keys' && chmod 600 '/home/$host_user/.ssh/authorized_keys' && chown '$host_user:$host_user' '/home/$host_user/.ssh/authorized_keys' && rm -f /tmp/host_user_authorized_keys.tmp"
+      fi
       break
     fi
   done
@@ -769,6 +792,9 @@ create_and_start(){
     info "访问：Gateway http://<host>:${GW_PORT}  管理面板 http://<host>:${WEB_PORT}  SSH root@<host> -p ${SSH_PORT}"
   fi
   info "SSH 密码登录：已禁用（仅密钥登录）"
+  if [ "$host_user_created" = "true" ] && [ "$key_injected" = "true" ]; then
+    info "同名用户登录：SSH ${host_user}@<host> -p ${SSH_PORT}"
+  fi
   info "Root 初始密码文件：$ROOT_PASSWORD_FILE"
   info "日志文件：$LOG_FILE"
 }
