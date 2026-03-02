@@ -518,10 +518,38 @@ prompt_hotpatch_first_if_applicable(){
   fi
 }
 
+
+reset_home_data_dir(){
+  if rm -rf "$HOME_DIR" 2>/dev/null; then
+    mkdir -p "$HOME_DIR/.openclaw"
+    return 0
+  fi
+
+  warn "普通权限删除 home-data 失败，尝试通过 Docker 提权清理..."
+  if docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
+    if docker run --rm -v "$BASE_DIR:/work" --entrypoint sh "$IMAGE_NAME" -lc 'rm -rf /work/home-data' >/dev/null 2>&1; then
+      mkdir -p "$HOME_DIR/.openclaw"
+      return 0
+    fi
+  fi
+
+  if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+    if sudo rm -rf "$HOME_DIR" >/dev/null 2>&1; then
+      sudo mkdir -p "$HOME_DIR/.openclaw" >/dev/null 2>&1 || true
+      sudo chown -R "$(id -u):$(id -g)" "$HOME_DIR" >/dev/null 2>&1 || true
+      return 0
+    fi
+  fi
+
+  warn "未能完全清理 home-data（权限受限），将保留目录继续。"
+  mkdir -p "$HOME_DIR/.openclaw"
+}
+
+
 # ─── existing container handling ──────────────────────────────
 
 handle_existing_installation(){
-  local exists running choice
+  local exists running choice installed_tag latest_matched
   exists="$(docker ps -a --filter "name=^/${CONTAINER_NAME}$" --format '{{.Names}}' | head -1 || true)"
   running="$(docker ps   --filter "name=^/${CONTAINER_NAME}$" --format '{{.Names}}' | head -1 || true)"
   [ -z "$exists" ] && [ ! -f "$CONFIG_FILE" ] && return 0
@@ -529,38 +557,71 @@ handle_existing_installation(){
   warn "检测到已有安装（容器或配置已存在）。"
   show_upgrade_detection
 
+  installed_tag="$(get_installed_release_tag)"
+  latest_matched="false"
+  if [ -n "$installed_tag" ] && [ -n "$TAG" ] && [ "$installed_tag" = "$TAG" ]; then
+    latest_matched="true"
+  fi
+
   if has_tty; then
     prompt_hotpatch_first_if_applicable
   fi
 
   if has_tty; then
-    printf "处理方式：\n" > "$TTY_IN"
-    printf "  [1] 升级（默认，保留数据与配置）\n" > "$TTY_IN"
-    printf "  [2] 重装（保留数据，重新配置端口/HTTPS）\n" > "$TTY_IN"
-    printf "  [3] 全新重装（删除旧数据）\n" > "$TTY_IN"
-    printf "  [4] 退出\n" > "$TTY_IN"
-    choice="$(prompt "请选择 1/2/3/4（默认1）: ")"
+    printf "处理方式：
+" > "$TTY_IN"
+    if [ "$latest_matched" = "true" ]; then
+      printf "  [1] 重装（保留数据，重新配置端口/HTTPS）
+" > "$TTY_IN"
+      printf "  [2] 全新重装（删除旧数据）
+" > "$TTY_IN"
+      printf "  [3] 退出
+" > "$TTY_IN"
+      choice="$(prompt "当前已是最新版本，请选择 1/2/3（默认1）: ")"
+    else
+      printf "  [1] 升级（默认，保留数据与配置）
+" > "$TTY_IN"
+      printf "  [2] 重装（保留数据，重新配置端口/HTTPS）
+" > "$TTY_IN"
+      printf "  [3] 全新重装（删除旧数据）
+" > "$TTY_IN"
+      printf "  [4] 退出
+" > "$TTY_IN"
+      choice="$(prompt "请选择 1/2/3/4（默认1）: ")"
+    fi
   else
     choice="1"
   fi
 
-  case "${choice:-1}" in
-    4) warn "用户取消安装。"; exit 0 ;;
-    3) info "全新重装：删除旧容器与数据"
-       docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-       rm -rf "$HOME_DIR" || true; mkdir -p "$HOME_DIR/.openclaw"
-       UPGRADE_MODE="false" ;;
-    2) info "重装（保留数据目录）"
-       docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-       UPGRADE_MODE="false" ;;
-    *) info "升级模式（保留数据与配置）"
-       load_existing_config || true
-       docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-       UPGRADE_MODE="true" ;;
-  esac
-  if [ -n "$running" ]; then
-    info "已停止并替换运行中的容器：$CONTAINER_NAME"
+  if [ "$latest_matched" = "true" ]; then
+    case "${choice:-1}" in
+      3) warn "用户取消安装。"; exit 0 ;;
+      2) info "全新重装：删除旧容器与数据"
+         docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+         reset_home_data_dir
+         UPGRADE_MODE="false" ;;
+      *) info "重装（保留数据目录）"
+         docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+         UPGRADE_MODE="false" ;;
+    esac
+  else
+    case "${choice:-1}" in
+      4) warn "用户取消安装。"; exit 0 ;;
+      3) info "全新重装：删除旧容器与数据"
+         docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+         reset_home_data_dir
+         UPGRADE_MODE="false" ;;
+      2) info "重装（保留数据目录）"
+         docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+         UPGRADE_MODE="false" ;;
+      *) info "升级模式（保留数据与配置）"
+         load_existing_config || true
+         docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+         UPGRADE_MODE="true" ;;
+    esac
   fi
+
+  [ -n "$running" ] && info "已停止并替换运行中的容器：$CONTAINER_NAME"
 }
 
 # ─── firewall & fail2ban ─────────────────────────────────────
