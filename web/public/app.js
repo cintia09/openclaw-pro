@@ -197,6 +197,9 @@ function setActiveRoute(route){
   });
   // pages
   qa('.page').forEach(p => p.classList.toggle('active', p.id === 'page-' + route));
+  qa('[data-oc-switch]').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-oc-switch') === route);
+  });
   // title
   const page = $('page-' + route);
   $('page-title').textContent = page?.dataset?.title || (ROUTES.find(r => r.id===route)?.title ?? '');
@@ -274,20 +277,17 @@ document.addEventListener('visibilitychange', () => {
 
 $('btn-gateway-console')?.addEventListener('click', (e) => {
   e.preventDefault();
-  const direct = `${location.protocol === 'https:' ? 'http:' : location.protocol}//${location.hostname}:18789/`;
-  const w = window.open(direct, '_blank', 'noopener');
-  if (!w) {
-    window.open('/gateway-proxy/', '_blank', 'noopener');
-    return;
-  }
-  setTimeout(() => {
-    try {
-      if (w.closed) return;
-    } catch {}
-    if (!w || w.location.href === 'about:blank') {
+  (async () => {
+    const r = await api('/api/openclaw/gateway-link', { timeoutMs: 6000 });
+    const target = r?.preferredUrl || r?.directUrl || r?.proxyUrl || '/gateway-proxy/';
+    const opened = window.open(target, '_blank', 'noopener');
+    if (!opened) {
       window.open('/gateway-proxy/', '_blank', 'noopener');
     }
-  }, 1200);
+    if (r?.hint) {
+      toast('Gateway 提示', r.hint);
+    }
+  })();
 });
 
 // mobile sidebar
@@ -669,6 +669,17 @@ async function doHotPatch() {
 let ocPollTimer = null;
 let ocRepairPollTimer = null;
 let ocRepairRunning = false;
+let ocInstallRunning = false;
+let ocStartRunning = false;
+
+function syncOpenClawButtons(){
+  const installBtn = $('btn-oc-install');
+  const repairBtn = $('btn-oc-repair-config');
+  const startBtn = $('btn-oc-start');
+  if (installBtn) installBtn.disabled = !!ocInstallRunning;
+  if (repairBtn) repairBtn.disabled = !!ocRepairRunning;
+  if (startBtn) startBtn.disabled = !!ocStartRunning;
+}
 
 function shouldAutoScroll(el, threshold = 24){
   if (!el) return true;
@@ -756,10 +767,35 @@ async function pollTask(taskId){
   logEl.innerHTML = '';
 
   let lastSeq = 0;
+  let errorStreak = 0;
+  const startedAt = Date.now();
 
   const tick = async () => {
     const st = await api('/api/openclaw/install/' + taskId + '?since=' + lastSeq);
-    if (!st || st.error) return;
+    if (!st || st.error) {
+      errorStreak += 1;
+      if (errorStreak >= 8) {
+        if (ocPollTimer) clearInterval(ocPollTimer);
+        ocPollTimer = null;
+        ocInstallRunning = false;
+        syncOpenClawButtons();
+        const detail = st?.error || '任务状态轮询失败';
+        appendOcLogLine(`[openclaw] 轮询中断: ${detail}`);
+        toast('任务状态异常', detail);
+      }
+      return;
+    }
+    errorStreak = 0;
+
+    if ((Date.now() - startedAt) > 18 * 60 * 1000) {
+      if (ocPollTimer) clearInterval(ocPollTimer);
+      ocPollTimer = null;
+      ocInstallRunning = false;
+      syncOpenClawButtons();
+      appendOcLogLine('[openclaw] 任务执行超时，请检查日志并按需重试。');
+      toast('任务超时', '执行超过 18 分钟，已停止前端轮询');
+      return;
+    }
 
     const autoScroll = shouldAutoScroll(logEl);
 
@@ -774,6 +810,8 @@ async function pollTask(taskId){
     if (st.status && st.status !== 'running'){
       clearInterval(ocPollTimer);
       ocPollTimer = null;
+      ocInstallRunning = false;
+      syncOpenClawButtons();
       toast(st.status === 'success' ? '完成' : '失败', st.status === 'success' ? 'OpenClaw 已就绪' : (st.log || '请查看日志'));
       if (st.status === 'success') {
         appendOcLogLine('[gateway] 安装/更新成功，正在自动重启 Gateway...');
@@ -806,10 +844,40 @@ async function pollRepairTask(taskId){
     repairBtn.textContent = '修复中...';
   }
   let lastSeq = 0;
+  let errorStreak = 0;
+  const startedAt = Date.now();
 
   const tick = async () => {
     const st = await api('/api/openclaw/config/repair/' + taskId + '?since=' + lastSeq);
-    if (!st || st.error) return;
+    if (!st || st.error) {
+      errorStreak += 1;
+      if (errorStreak >= 8) {
+        if (ocRepairPollTimer) clearInterval(ocRepairPollTimer);
+        ocRepairPollTimer = null;
+        ocRepairRunning = false;
+        if (repairBtn) {
+          repairBtn.disabled = false;
+          repairBtn.textContent = '配置恢复';
+        }
+        syncOpenClawButtons();
+        toast('任务状态异常', st?.error || '配置恢复状态轮询失败');
+      }
+      return;
+    }
+    errorStreak = 0;
+
+    if ((Date.now() - startedAt) > 8 * 60 * 1000) {
+      if (ocRepairPollTimer) clearInterval(ocRepairPollTimer);
+      ocRepairPollTimer = null;
+      ocRepairRunning = false;
+      if (repairBtn) {
+        repairBtn.disabled = false;
+        repairBtn.textContent = '配置恢复';
+      }
+      syncOpenClawButtons();
+      toast('任务超时', '配置恢复执行超过 8 分钟，已停止前端轮询');
+      return;
+    }
 
     if (st.delta) {
       appendColored($('oc-log'), st.delta, 6000, shouldAutoScroll($('oc-log')));
@@ -824,6 +892,7 @@ async function pollRepairTask(taskId){
         repairBtn.disabled = false;
         repairBtn.textContent = '配置恢复';
       }
+      syncOpenClawButtons();
       if (st.status === 'success') {
         toast('配置恢复完成', st.changed ? '已修复并建议重启 Gateway' : '未发现需要修复的配置项');
       } else {
@@ -873,8 +942,13 @@ $('btn-oc-repair-config')?.addEventListener('click', async ()=>{
 });
 
 $('btn-oc-install').addEventListener('click', async ()=>{
-  const btn = $('btn-oc-install');
-  btn.disabled = true;
+  if (ocInstallRunning) {
+    toast('任务进行中', '安装/更新任务正在执行，请稍候');
+    return;
+  }
+  ocInstallRunning = true;
+  syncOpenClawButtons();
+  let taskStarted = false;
   try{
     const current = await refreshOpenClaw({ retries: 2 });
     if (!current || current.error) {
@@ -901,6 +975,7 @@ $('btn-oc-install').addEventListener('click', async ()=>{
       }
       toast('开始安装', '正在执行 OpenClaw 安装...');
       appendOcLogLine(`[openclaw] 安装任务已启动: ${i.taskId}`);
+      taskStarted = true;
       pollTask(i.taskId);
       return;
     }
@@ -939,28 +1014,43 @@ $('btn-oc-install').addEventListener('click', async ()=>{
     }
     toast('开始更新', `正在更新到 ${current.latestVersion}...`);
     appendOcLogLine(`[openclaw] 更新任务已启动: ${r.taskId}`);
+    taskStarted = true;
     pollTask(r.taskId);
   } catch (e) {
     appendOcLogLine(`[openclaw] 请求失败: ${e.message || e}`);
     toast('请求失败', e.message || String(e));
   }finally{
-    btn.disabled = false;
+    if (!taskStarted) {
+      ocInstallRunning = false;
+      syncOpenClawButtons();
+    }
   }
 });
 
 $('btn-oc-start').addEventListener('click', async ()=>{
+  if (ocStartRunning) {
+    toast('任务进行中', '网关重启正在执行，请稍候');
+    return;
+  }
+  ocStartRunning = true;
+  syncOpenClawButtons();
   appendOcLogLine('[gateway] 正在提交重启请求...');
-  const r = await api('/api/openclaw/start', { method:'POST' });
-  if (r.success) {
-    appendOcLogLine(`[gateway] ${r.message || '重启请求已提交'}`);
-    appendOcLogLine('[gateway] 请稍候 2-5 秒，状态将自动刷新。');
-    toast('已触发重启', r.message || 'Gateway 正在重启，请稍候');
-  } else {
-    appendOcLogLine(`[gateway] 重启失败: ${r.error || '请查看日志'}`);
-    if (/Unrecognized key|Invalid config|配置无效/i.test(String(r.error || ''))) {
-      appendOcLogLine('[gateway] 检测到配置无效，请点击“配置恢复”按钮后重试。');
+  try {
+    const r = await api('/api/openclaw/start', { method:'POST' });
+    if (r.success) {
+      appendOcLogLine(`[gateway] ${r.message || '重启请求已提交'}`);
+      appendOcLogLine('[gateway] 请稍候 2-5 秒，状态将自动刷新。');
+      toast('已触发重启', r.message || 'Gateway 正在重启，请稍候');
+    } else {
+      appendOcLogLine(`[gateway] 重启失败: ${r.error || '请查看日志'}`);
+      if (/Unrecognized key|Invalid config|配置无效/i.test(String(r.error || ''))) {
+        appendOcLogLine('[gateway] 检测到配置无效，请点击“配置恢复”按钮后重试。');
+      }
+      toast('重启失败', r.error || '请查看日志');
     }
-    toast('重启失败', r.error || '请查看日志');
+  } finally {
+    ocStartRunning = false;
+    syncOpenClawButtons();
   }
   setTimeout(refreshOpenClaw, 2500);
 });

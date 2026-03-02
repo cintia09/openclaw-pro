@@ -1900,6 +1900,44 @@ app.get('/api/openclaw', async (req, res) => {
   }
 });
 
+app.get('/api/openclaw/gateway-link', (req, res) => {
+  try {
+    const cfg = readJson(CONFIG_PATH, {});
+    const authMode = String(cfg?.gateway?.auth?.mode || 'none').trim() || 'none';
+    const rawToken = String(cfg?.gateway?.auth?.token || '').trim();
+    const hostHeader = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+    const hostname = (hostHeader.split(':')[0] || '127.0.0.1').trim();
+
+    const directBase = `http://${hostname}:18789/`;
+    const tokenHash = rawToken ? `#token=${encodeURIComponent(rawToken)}` : '';
+    const directUrl = `${directBase}${tokenHash}`;
+    const proxyUrl = '/gateway-proxy/';
+
+    const preferredUrl = (authMode === 'token' && rawToken)
+      ? directUrl
+      : (authMode === 'none' ? directBase : proxyUrl);
+
+    let hint = '';
+    if (authMode === 'token' && !rawToken) {
+      hint = 'Gateway 为 token 模式但未读取到 token，已回退到代理地址。';
+    } else if (authMode !== 'token' && authMode !== 'none') {
+      hint = `Gateway 当前认证模式为 ${authMode}，可能需要在控制台中手动输入凭据。`;
+    }
+
+    res.json({
+      success: true,
+      authMode,
+      hasToken: !!rawToken,
+      preferredUrl,
+      directUrl,
+      proxyUrl,
+      hint
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e?.message || 'gateway link 生成失败' });
+  }
+});
+
 app.post('/api/openclaw/config/repair', (req, res) => {
   try {
     if (isRepairLockActive()) {
