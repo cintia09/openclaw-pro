@@ -603,6 +603,7 @@ async function doHotPatch() {
 // ------------------------
 let ocPollTimer = null;
 let ocRepairPollTimer = null;
+let ocRepairRunning = false;
 
 function shouldAutoScroll(el, threshold = 24){
   if (!el) return true;
@@ -733,6 +734,12 @@ async function pollTask(taskId){
 
 async function pollRepairTask(taskId){
   if (ocRepairPollTimer) clearInterval(ocRepairPollTimer);
+  const repairBtn = $('btn-oc-repair-config');
+  ocRepairRunning = true;
+  if (repairBtn) {
+    repairBtn.disabled = true;
+    repairBtn.textContent = '修复中...';
+  }
   let lastSeq = 0;
 
   const tick = async () => {
@@ -747,6 +754,11 @@ async function pollRepairTask(taskId){
     if (st.status && st.status !== 'running') {
       if (ocRepairPollTimer) clearInterval(ocRepairPollTimer);
       ocRepairPollTimer = null;
+      ocRepairRunning = false;
+      if (repairBtn) {
+        repairBtn.disabled = false;
+        repairBtn.textContent = '配置恢复';
+      }
       if (st.status === 'success') {
         toast('配置恢复完成', st.changed ? '已修复并建议重启 Gateway' : '未发现需要修复的配置项');
       } else {
@@ -766,11 +778,19 @@ $('btn-oc-refresh').addEventListener('click', async ()=>{
 });
 
 $('btn-oc-repair-config')?.addEventListener('click', async ()=>{
+  if (ocRepairRunning) {
+    appendOcLogLine('[repair] 任务进行中，请勿重复触发。');
+    return;
+  }
   appendOcLogLine('[repair] 正在检测并修复 OpenClaw 配置中的无效 key...');
   appendOcLogLine('[repair] 已提交修复任务，后台执行中（约 30~120 秒）...');
   const r = await api('/api/openclaw/config/repair', { method:'POST', timeoutMs: 15000 });
   if (r.success && r.taskId) {
-    appendOcLogLine(`[repair] 任务已启动: ${r.taskId}`);
+    if (r.reused) {
+      appendOcLogLine(`[repair] 已复用进行中的任务: ${r.taskId || '后台任务'}`);
+    } else {
+      appendOcLogLine(`[repair] 任务已启动: ${r.taskId}`);
+    }
     pollRepairTask(r.taskId);
   } else {
     const isEmptyResponse = r && typeof r === 'object' && Object.keys(r).length === 0;

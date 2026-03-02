@@ -1664,6 +1664,7 @@ const installLogs = {};
 const repairLogs = {};
 let activeInstallTaskId = '';
 let activeRepairTaskId = '';
+const REPAIR_LOCK_FILE = '/tmp/openclaw-config-repair.lock';
 
 function isTaskRunning(taskMap, taskId) {
   if (!taskId) return false;
@@ -1695,7 +1696,40 @@ function appendRepairLog(task, chunk) {
   }
 }
 
+function isRepairLockActive() {
+  try {
+    if (!fs.existsSync(REPAIR_LOCK_FILE)) return false;
+    const pidText = fs.readFileSync(REPAIR_LOCK_FILE, 'utf8').trim();
+    const pid = Number(pidText || 0);
+    if (pid > 1) {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {}
+    }
+    fs.unlinkSync(REPAIR_LOCK_FILE);
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function acquireRepairLock() {
+  if (isRepairLockActive()) return false;
+  try {
+    fs.writeFileSync(REPAIR_LOCK_FILE, String(process.pid), { mode: 0o600 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function releaseRepairLock() {
+  try { fs.unlinkSync(REPAIR_LOCK_FILE); } catch {}
+}
+
 function runOpenClawRepairTask() {
+  if (!acquireRepairLock()) return null;
   const taskId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   repairLogs[taskId] = {
     status: 'running',
@@ -1712,6 +1746,10 @@ function runOpenClawRepairTask() {
   activeRepairTaskId = taskId;
 
   (async () => {
+    const cleanedProviders = repairOpenClawConfigProviders();
+    if (cleanedProviders) {
+      appendRepairLog(task, '[repair] 已预清理无效 key: providers\n');
+    }
     appendRepairLog(task, '[repair] 正在执行 openclaw doctor --fix ...\n');
 
     let doctorOutput = '';
@@ -1759,6 +1797,7 @@ function runOpenClawRepairTask() {
     task.error = detail;
   }).finally(() => {
     if (activeRepairTaskId === taskId) activeRepairTaskId = '';
+    releaseRepairLock();
     const keys = Object.keys(repairLogs).sort();
     while (keys.length > 8) delete repairLogs[keys.shift()];
   });
@@ -1840,11 +1879,15 @@ app.get('/api/openclaw', async (req, res) => {
 
 app.post('/api/openclaw/config/repair', (req, res) => {
   try {
+    if (isRepairLockActive()) {
+      const runningTaskId = isTaskRunning(repairLogs, activeRepairTaskId) ? activeRepairTaskId : '';
+      return res.json({ success: true, taskId: runningTaskId, reused: true, message: '修复任务进行中，请勿重复触发' });
+    }
     if (isTaskRunning(repairLogs, activeRepairTaskId)) {
       return res.json({ success: true, taskId: activeRepairTaskId, reused: true });
     }
     const taskId = runOpenClawRepairTask();
-    if (!taskId) return res.status(500).json({ success: false, error: '修复任务创建失败：未生成 taskId' });
+    if (!taskId) return res.status(500).json({ success: false, error: '修复任务创建失败：已有任务占用或未生成 taskId' });
     res.json({ success: true, taskId });
   } catch (e) {
     res.status(500).json({ success: false, error: e?.message || '修复任务创建失败' });
