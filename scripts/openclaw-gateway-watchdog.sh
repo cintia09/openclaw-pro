@@ -15,6 +15,7 @@ PORT=18789
 MAX_LOG_LINES=5000
 
 LOCK_DIR="/tmp/openclaw-gateway-watchdog.lock"
+LOCK_PID_FILE="$LOCK_DIR/pid"
 
 CONSECUTIVE_FAILURES=0
 LAST_PID=""
@@ -181,11 +182,42 @@ trim_log() {
   fi
 }
 
-if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-  log "Another watchdog instance detected, exiting"
+acquire_lock() {
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo $$ > "$LOCK_PID_FILE"
+    return 0
+  fi
+
+  local old_pid
+  old_pid=""
+  if [[ -f "$LOCK_PID_FILE" ]]; then
+    old_pid=$(cat "$LOCK_PID_FILE" 2>/dev/null || true)
+  fi
+
+  if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+    local cmdline
+    cmdline=$(ps -o args= -p "$old_pid" 2>/dev/null || true)
+    if echo "$cmdline" | grep -q "openclaw-gateway-watchdog.sh"; then
+      log "Another watchdog instance detected (pid=$old_pid), exiting"
+      return 1
+    fi
+  fi
+
+  log "Detected stale watchdog lock, cleaning up"
+  rm -rf "$LOCK_DIR" >/dev/null 2>&1 || true
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo $$ > "$LOCK_PID_FILE"
+    return 0
+  fi
+
+  log "Failed to acquire watchdog lock, exiting"
+  return 1
+}
+
+if ! acquire_lock; then
   exit 0
 fi
-trap 'rmdir "$LOCK_DIR" >/dev/null 2>&1 || true' EXIT
+trap 'rm -rf "$LOCK_DIR" >/dev/null 2>&1 || true' EXIT
 
 log "Watchdog v2 started (check=${CHECK_INTERVAL}s, poll=${POLL_INTERVAL}s, timeout=${STARTUP_TIMEOUT}s, port=$PORT)"
 
