@@ -378,7 +378,9 @@ function extractJsonObject(text) {
 function runOpenClawCli(command, timeoutMs = 30000) {
   return new Promise((resolve) => {
     const escaped = String(command).replace(/'/g, `"'"'`);
-    exec(`bash --noprofile --norc -lc '${escaped}'`, { timeout: timeoutMs, env: { ...process.env, TERM: 'dumb' } }, (err, stdout, stderr) => {
+    const defaultPath = '/root/.npm-global/bin:/usr/local/bin:/usr/bin:/bin';
+    const mergedPath = process.env.PATH ? `${process.env.PATH}:${defaultPath}` : defaultPath;
+    exec(`bash --noprofile --norc -lc '${escaped}'`, { timeout: timeoutMs, env: { ...process.env, TERM: 'dumb', PATH: mergedPath } }, (err, stdout, stderr) => {
       const out = String(stdout || '');
       const errText = String(stderr || '');
       const output = `${out}${errText}`;
@@ -447,6 +449,12 @@ function readVersionFromPackageJson(filePath) {
 }
 
 function getInstalledOpenClawVersion() {
+  const versions = [];
+  const collectVersion = (value) => {
+    const parsed = parseOpenClawVersion(value || '');
+    if (parsed) versions.push(parsed);
+  };
+
   const packagePaths = [
     '/opt/openclaw-runtime/node_modules/openclaw/package.json',
     '/root/.npm-global/lib/node_modules/openclaw/package.json',
@@ -455,30 +463,39 @@ function getInstalledOpenClawVersion() {
   ];
 
   for (const packagePath of packagePaths) {
-    const version = readVersionFromPackageJson(packagePath);
-    if (version) return version;
+    collectVersion(readVersionFromPackageJson(packagePath));
   }
 
   const candidates = [
+    runCommandText('/root/.npm-global/bin/openclaw --version 2>&1 || true', 2200),
     runCommandText('openclaw --version 2>&1 || true', 1800),
     runCommandText('bash --noprofile --norc -lc "openclaw --version 2>&1 || true"', 2000),
     runCommandText('node -e "try{const p=require(\"/opt/openclaw-runtime/node_modules/openclaw/package.json\"); console.log(p.version||\"\")}catch(e){}"', 1800),
+    runCommandText('node -e "try{const p=require(\"/root/.npm-global/lib/node_modules/openclaw/package.json\"); console.log(p.version||\"\")}catch(e){}"', 1800),
     runCommandText('npm list -g openclaw --depth=0 2>/dev/null | sed -n "s/.*openclaw@\\([^[:space:]]*\\).*/\\1/p" | head -1', 2200),
     runCommandText('npm root -g 2>/dev/null | xargs -I{} sh -c "test -f \"{}/openclaw/package.json\" && sed -n \"s/.*\\\"version\\\": *\\\"\\([^\\\"]*\\\)\\\".*/\\1/p\" \"{}/openclaw/package.json\" | head -1"', 2200)
   ];
 
   for (const output of candidates) {
-    const version = parseOpenClawVersion(output);
-    if (version) return version;
+    collectVersion(output);
   }
 
-  return '';
+  if (!versions.length) return '';
+
+  let newest = versions[0];
+  for (const version of versions.slice(1)) {
+    if (compareSemver(version, newest) > 0) {
+      newest = version;
+    }
+  }
+
+  return newest;
 }
 
 function isOpenClawInstalledByPath() {
   return runCommandOk('command -v openclaw >/dev/null 2>&1', 1500)
     || runCommandOk('bash --noprofile --norc -lc "command -v openclaw >/dev/null 2>&1"', 1800)
-    || runCommandOk('test -x /usr/local/bin/openclaw || test -x /usr/bin/openclaw || test -x /opt/homebrew/bin/openclaw || test -f /opt/openclaw-runtime/node_modules/openclaw/openclaw.mjs', 1200);
+    || runCommandOk('test -x /root/.npm-global/bin/openclaw || test -x /usr/local/bin/openclaw || test -x /usr/bin/openclaw || test -x /opt/homebrew/bin/openclaw || test -f /opt/openclaw-runtime/node_modules/openclaw/openclaw.mjs || test -f /opt/openclaw-cli/openclaw/openclaw.mjs', 1200);
 }
 
 function isOpenClawInstalledByNpmPackage() {
@@ -1776,8 +1793,8 @@ function runOpenClawRepairTask() {
     appendRepairLog(task, '[repair] 正在执行 openclaw doctor --fix ...\n');
 
     let doctorOutput = '';
-    if (runCommandOk('command -v openclaw >/dev/null 2>&1', 800)) {
-      const doctor = await runOpenClawCli('openclaw doctor --fix 2>&1', 120000);
+    if (runCommandOk('command -v openclaw >/dev/null 2>&1 || test -x /root/.npm-global/bin/openclaw || test -x /usr/local/bin/openclaw || test -f /opt/openclaw-runtime/node_modules/openclaw/openclaw.mjs || test -f /opt/openclaw-cli/openclaw/openclaw.mjs', 1000)) {
+      const doctor = await runOpenClawCli('OPENCLAW_BIN="$(command -v openclaw 2>/dev/null || true)"; if [ -z "$OPENCLAW_BIN" ]; then for p in /root/.npm-global/bin/openclaw /usr/local/bin/openclaw /opt/openclaw-runtime/node_modules/openclaw/openclaw.mjs /opt/openclaw-cli/openclaw/openclaw.mjs; do if [ -x "$p" ] || [ -f "$p" ]; then OPENCLAW_BIN="$p"; break; fi; done; fi; if [ -z "$OPENCLAW_BIN" ]; then echo "openclaw not found"; exit 127; fi; "$OPENCLAW_BIN" doctor --fix 2>&1', 120000);
       doctorOutput = compactOutput(doctor.output || '');
       if (doctorOutput) appendRepairLog(task, `[repair] doctor 输出: ${doctorOutput}\n`);
       if (doctor.ok) appendRepairLog(task, '[repair] doctor --fix 执行完成。\n');
@@ -1845,7 +1862,7 @@ function runOpenClawTask(command, title) {
 
   const escaped = String(command).replace(/'/g, `'"'"'`);
   const child = exec(`bash --noprofile --norc -lc '${escaped}'`, {
-    timeout: 900000,
+    timeout: 2700000,
     env: { ...process.env, TERM: 'dumb' }
   });
   child.on('error', (err) => {
@@ -1855,7 +1872,10 @@ function runOpenClawTask(command, title) {
   });
   child.stdout.on('data', d => appendInstallLog(task, d));
   child.stderr.on('data', d => appendInstallLog(task, d));
-  child.on('close', code => {
+  child.on('close', (code, signal) => {
+    if (signal) {
+      appendInstallLog(task, `[openclaw] 任务被中断（signal=${signal}），可能超时或被外部终止。\n`);
+    }
     task.status = code === 0 ? 'success' : 'failed';
     task.exitCode = code;
     if (activeInstallTaskId === taskId) activeInstallTaskId = '';
@@ -2010,13 +2030,56 @@ function buildOpenClawNpmInstallCommand() {
     '  apt-get install -y nodejs',
     'fi',
     'npm config set registry https://registry.npmmirror.com',
-    'npm install -g openclaw@latest',
     'NPM_PREFIX="$(npm config get prefix 2>/dev/null || echo /usr/local)"',
+    'OPENCLAW_LIB_DIR="${NPM_PREFIX}/lib/node_modules"',
+    'OPENCLAW_BIN="${NPM_PREFIX}/bin/openclaw"',
+    'MIRROR_LATEST="$(npm view openclaw version --registry=https://registry.npmmirror.com 2>/dev/null || true)"',
+    'NPMJS_LATEST="$(npm view openclaw version --registry=https://registry.npmjs.org 2>/dev/null || true)"',
+    'if [ -n "$NPMJS_LATEST" ] && [ "$MIRROR_LATEST" != "$NPMJS_LATEST" ]; then',
+    '  echo "[openclaw] 镜像最新(${MIRROR_LATEST:-unknown})落后于 npmjs(${NPMJS_LATEST})，直接使用 npmjs 源安装..."',
+    '  npm config set registry https://registry.npmjs.org',
+    'fi',
+    'npm uninstall -g openclaw >/dev/null 2>&1 || true',
+    'rm -rf "${OPENCLAW_LIB_DIR}/openclaw" "${OPENCLAW_LIB_DIR}"/.openclaw-* >/dev/null 2>&1 || true',
+    'npm cache verify >/dev/null 2>&1 || true',
+    'if ! npm install -g openclaw@latest; then',
+    '  echo "[openclaw] npm install 首次失败，尝试清理并重试..."',
+    '  npm uninstall -g openclaw >/dev/null 2>&1 || true',
+    '  rm -rf "${OPENCLAW_LIB_DIR}/openclaw" "${OPENCLAW_LIB_DIR}"/.openclaw-* >/dev/null 2>&1 || true',
+    '  npm cache verify >/dev/null 2>&1 || true',
+    '  npm config set registry https://registry.npmjs.org',
+    '  npm install -g openclaw@latest',
+    'fi',
+    'if [ ! -x "$OPENCLAW_BIN" ] && [ -f "${OPENCLAW_LIB_DIR}/openclaw/openclaw.mjs" ]; then',
+    '  ln -sf "${OPENCLAW_LIB_DIR}/openclaw/openclaw.mjs" "$OPENCLAW_BIN" || true',
+    'fi',
     'case ":$PATH:" in',
     '  *":${NPM_PREFIX}/bin:"*) ;;',
     '  *) export PATH="$PATH:${NPM_PREFIX}/bin" ;;',
     'esac',
-    'openclaw -v || openclaw --version'
+    'CURRENT_VER=""',
+    'if command -v openclaw >/dev/null 2>&1; then',
+    '  CURRENT_VER="$(openclaw -v 2>/dev/null || openclaw --version 2>/dev/null || true)"',
+    'elif [ -x "$OPENCLAW_BIN" ]; then',
+    '  CURRENT_VER="$("$OPENCLAW_BIN" -v 2>/dev/null || "$OPENCLAW_BIN" --version 2>/dev/null || true)"',
+    'fi',
+    'CURRENT_VER="${CURRENT_VER#v}"',
+    'if [ -n "$NPMJS_LATEST" ] && [ "$CURRENT_VER" != "$NPMJS_LATEST" ]; then',
+    '  echo "[openclaw] 镜像版本(${CURRENT_VER:-unknown})落后于 npmjs 最新(${NPMJS_LATEST})，切换 npmjs 对齐..."',
+    '  npm config set registry https://registry.npmjs.org',
+    '  npm uninstall -g openclaw >/dev/null 2>&1 || true',
+    '  rm -rf "${OPENCLAW_LIB_DIR}/openclaw" "${OPENCLAW_LIB_DIR}"/.openclaw-* >/dev/null 2>&1 || true',
+    '  npm cache verify >/dev/null 2>&1 || true',
+    '  npm install -g "openclaw@${NPMJS_LATEST}"',
+    'fi',
+    'if command -v openclaw >/dev/null 2>&1; then',
+    '  openclaw -v || openclaw --version',
+    'elif [ -x "$OPENCLAW_BIN" ]; then',
+    '  "$OPENCLAW_BIN" -v || "$OPENCLAW_BIN" --version',
+    'else',
+    '  echo "[openclaw] update failed: openclaw binary not found under ${NPM_PREFIX}/bin"',
+    '  exit 127',
+    'fi'
   ].join('\n');
 }
 

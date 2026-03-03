@@ -277,12 +277,20 @@ document.addEventListener('visibilitychange', () => {
 
 $('btn-gateway-console')?.addEventListener('click', (e) => {
   e.preventDefault();
+  const popup = window.open('', '_blank');
+  if (popup) {
+    try { popup.opener = null; } catch {}
+    popup.document.title = 'OpenClaw Gateway';
+    popup.document.body.innerHTML = '<p style="font-family:system-ui;padding:16px;">正在打开 OpenClaw Gateway 控制台...</p>';
+  }
   (async () => {
     const r = await api('/api/openclaw/gateway-link', { timeoutMs: 6000 });
     const target = r?.preferredUrl || r?.directUrl || r?.proxyUrl || '/gateway-proxy/';
-    const opened = window.open(target, '_blank', 'noopener');
-    if (!opened) {
-      window.open('/gateway-proxy/', '_blank', 'noopener');
+    if (popup) {
+      popup.location.href = target;
+    } else {
+      window.location.href = target;
+      toast('弹窗被拦截', '已在当前页面打开 Gateway 控制台');
     }
     if (r?.hint) {
       toast('Gateway 提示', r.hint);
@@ -677,8 +685,8 @@ function syncOpenClawButtons(){
   const repairBtn = $('btn-oc-repair-config');
   const startBtn = $('btn-oc-start');
   if (installBtn) installBtn.disabled = !!ocInstallRunning;
-  if (repairBtn) repairBtn.disabled = !!ocRepairRunning;
-  if (startBtn) startBtn.disabled = !!ocStartRunning;
+  if (repairBtn) repairBtn.disabled = !!ocInstallRunning || !!ocRepairRunning;
+  if (startBtn) startBtn.disabled = !!ocInstallRunning || !!ocStartRunning;
 }
 
 function shouldAutoScroll(el, threshold = 24){
@@ -912,6 +920,10 @@ $('btn-oc-refresh').addEventListener('click', async ()=>{
 });
 
 $('btn-oc-repair-config')?.addEventListener('click', async ()=>{
+  if (ocInstallRunning) {
+    toast('任务进行中', '安装/更新执行中，暂不可配置恢复');
+    return;
+  }
   if (ocRepairRunning) {
     appendOcLogLine('[repair] 任务进行中，请勿重复触发。');
     return;
@@ -1028,6 +1040,10 @@ $('btn-oc-install').addEventListener('click', async ()=>{
 });
 
 $('btn-oc-start').addEventListener('click', async ()=>{
+  if (ocInstallRunning) {
+    toast('任务进行中', '安装/更新执行中，暂不可重启 Gateway');
+    return;
+  }
   if (ocStartRunning) {
     toast('任务进行中', '网关重启正在执行，请稍候');
     return;
