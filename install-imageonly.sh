@@ -276,7 +276,10 @@ download_tarball(){
     return 1
   fi
   local primary_url="https://github.com/${GITHUB_REPO}/releases/download/${TAG}/${IMAGE_TARBALL}"
-
+  total_bytes="$(curl -fsSLI --connect-timeout 8 --max-time 20 "$primary_url" 2>/dev/null | awk -F': ' 'tolower($1)=="content-length"{print $2}' | tr -d '\r' | tail -1 || true)"
+  if ! [[ "$total_bytes" =~ ^[0-9]+$ ]] || [ "$total_bytes" -le 0 ]; then
+    total_bytes=""
+  fi
   if check_local_tarball; then return 0; fi
 
   while IFS= read -r u; do
