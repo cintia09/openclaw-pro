@@ -52,6 +52,8 @@ $STATE_FILE      = Join-Path $SCRIPT_DIR ".install-state.json"
 $script:sshServiceReady = $false
 $script:sshPasswordAuthDisabled = $false
 $script:sshInjectedKeyPath = ""
+$script:sshRootFallback = $false
+$script:hostUserForSSH = ""
 $script:rootPasswordFilePath = ""
 $script:deployedContainerName = ""
 
@@ -112,6 +114,28 @@ function Write-Info {
     param([string]$Text)
     Write-Host "  $Text" -ForegroundColor Gray
     Write-Log $Text
+}
+
+function Convert-ToContainerUserName {
+    param([string]$RawName)
+
+    if (-not $RawName) { return "" }
+
+    $name = $RawName.Trim().ToLower()
+    if (-not $name) { return "" }
+
+    $name = $name -replace '[^a-z0-9_-]', '_'
+    if ($name -notmatch '^[a-z_]') {
+        $name = "u_$name"
+    }
+    if ($name.Length -gt 32) {
+        $name = $name.Substring(0, 32)
+    }
+    if ($name -notmatch '^[a-z_][a-z0-9_-]*$') {
+        return ""
+    }
+
+    return $name
 }
 
 function Write-Suggestion {
@@ -1983,17 +2007,19 @@ function Show-Completion {
             Write-Host "     SSH 服务: 启动状态未知，请执行 docker logs openclaw-pro 排查" -ForegroundColor Yellow
         }
         Write-Host "     密码登录: 已禁用（仅密钥登录）" -ForegroundColor Green
-        Write-Host "     Root 登录: 已禁用" -ForegroundColor Green
 
         # 显示普通用户登录信息
         $sshUser = if ($script:hostUserForSSH) { $script:hostUserForSSH } else { $env:USERNAME }
-        if ($sshUser -and $sshUser -ne "root" -and $sshUser -ne "Administrator") {
+        if ($sshUser -and $sshUser -ne "root" -and $sshUser -ne "administrator") {
+            Write-Host "     Root 登录: 已禁用" -ForegroundColor Green
             Write-Host "     登录用户: $sshUser" -ForegroundColor Green
             Write-Host "     登录命令: ssh ${sshUser}@<host> -p ${SshPort}" -ForegroundColor Cyan
             Write-Host "     容器内提权: 登录后执行 sudo -i" -ForegroundColor DarkGray
         } else {
-            Write-Host "     登录用户: 未创建普通用户（以 Administrator 运行）" -ForegroundColor Yellow
-            Write-Host "     建议: 以普通用户身份重新运行安装脚本" -ForegroundColor DarkGray
+            Write-Host "     Root 登录: 临时允许（仅密钥）" -ForegroundColor Yellow
+            Write-Host "     登录用户: root（普通用户创建/注入失败）" -ForegroundColor Yellow
+            Write-Host "     登录命令: ssh root@<host> -p ${SshPort}" -ForegroundColor Cyan
+            Write-Host "     建议: 修复后重新运行安装脚本恢复普通用户登录" -ForegroundColor DarkGray
         }
 
         if ($script:sshInjectedKeyPath) {
@@ -4051,12 +4077,16 @@ function Main {
             Write-Log "Final image check OK. ID=$finalImageId"
 
             # ── 获取宿主机用户信息（用于容器内创建同名用户）──
-            $hostUser = $env:USERNAME
+            $rawHostUser = $env:USERNAME
+            $hostUser = Convert-ToContainerUserName $rawHostUser
             $hostUid = ""
             $hostGid = ""
             $userHomeDir = ""
 
-            if ($hostUser -and $hostUser -ne "root" -and $hostUser -ne "Administrator") {
+            if ($hostUser -and $hostUser -ne "root" -and $hostUser -ne "administrator") {
+                if ($rawHostUser -and $rawHostUser -ne $hostUser) {
+                    Write-Warn "检测到 Windows 用户名 '$rawHostUser' 含不兼容字符，容器 SSH 用户将使用: $hostUser"
+                }
                 # Windows 用户没有 UID/GID，容器内会自动分配
                 $userHomeDir = Join-Path $homeData $hostUser
 
@@ -4065,6 +4095,9 @@ function Main {
                     New-Item -ItemType Directory -Path $userHomeDir -Force | Out-Null
                 }
                 Write-Info "创建用户持久化目录: $userHomeDir"
+                $script:hostUserForSSH = $hostUser
+            } else {
+                Write-Warn "未检测到可用普通用户，将仅保留 root 密钥登录兜底"
             }
 
             # Build docker run arguments
@@ -4079,7 +4112,7 @@ function Main {
             )
 
             # 添加用户环境变量（用于容器内创建同名用户）
-            if ($hostUser -and $hostUser -ne "root" -and $hostUser -ne "Administrator") {
+            if ($hostUser -and $hostUser -ne "root" -and $hostUser -ne "administrator") {
                 $runArgs += @("-e", "HOST_USER=$hostUser")
                 # 添加用户目录挂载
                 if ($userHomeDir -and (Test-Path $userHomeDir)) {
@@ -4207,17 +4240,34 @@ function Main {
                     $injected = $false
 
                     # 注入到普通用户（如果有）
-                    if ($hostUser -and $hostUser -ne "root" -and $hostUser -ne "Administrator") {
+                    if ($hostUser -and $hostUser -ne "root" -and $hostUser -ne "administrator") {
+                        $userReady = $false
+                        for ($retryUser = 1; $retryUser -le 12; $retryUser++) {
+                            & docker exec $containerName bash -lc "id '$hostUser' >/dev/null 2>&1" 2>$null | Out-Null
+                            if ($LASTEXITCODE -eq 0) {
+                                $userReady = $true
+                                break
+                            }
+                            Start-Sleep -Milliseconds 500
+                        }
+
+                        if (-not $userReady) {
+                            Write-Warn "容器内普通用户 $hostUser 尚未就绪，将尝试 root 密钥登录兜底"
+                        }
+
                         foreach ($keyFile in $pubKeyCandidates) {
                             if (-not (Test-Path $keyFile)) { continue }
+                            if (-not $userReady) { break }
                             Write-Info "注入公钥到用户 $hostUser : $keyFile"
                             & docker exec $containerName bash -lc "mkdir -p '/home/$hostUser/.ssh' && chmod 700 '/home/$hostUser/.ssh'" 2>$null | Out-Null
                             & docker cp $keyFile "${containerName}:/tmp/host_user_key.pub" 2>$null | Out-Null
                             if ($LASTEXITCODE -eq 0) {
-                                & docker exec $containerName bash -lc "cat /tmp/host_user_key.pub >> '/home/$hostUser/.ssh/authorized_keys' && sort -u -o '/home/$hostUser/.ssh/authorized_keys' '/home/$hostUser/.ssh/authorized_keys' && chmod 600 '/home/$hostUser/.ssh/authorized_keys' && chown -R '${hostUser}:${hostUser}' '/home/$hostUser/.ssh' && rm -f /tmp/host_user_key.pub" 2>$null | Out-Null
+                                & docker exec $containerName bash -lc "cat /tmp/host_user_key.pub >> '/home/$hostUser/.ssh/authorized_keys' && sort -u -o '/home/$hostUser/.ssh/authorized_keys' '/home/$hostUser/.ssh/authorized_keys' && chmod 600 '/home/$hostUser/.ssh/authorized_keys' && chown -R '${hostUser}:${hostUser}' '/home/$hostUser/.ssh' && test -s '/home/$hostUser/.ssh/authorized_keys' && rm -f /tmp/host_user_key.pub" 2>$null | Out-Null
                                 if ($LASTEXITCODE -eq 0) {
                                     $script:sshInjectedKeyPath = $keyFile
                                     $injected = $true
+                                    $script:sshRootFallback = $false
+                                    $script:hostUserForSSH = $hostUser
                                     Write-OK "已自动注入宿主机 SSH 公钥到用户 $hostUser : $keyFile"
                                     break
                                 }
@@ -4227,6 +4277,8 @@ function Main {
 
                     if (-not $injected) {
                         # 降级：没有普通用户时，注入到 root（兼容旧行为）
+                        $script:sshRootFallback = $true
+                        $script:hostUserForSSH = "root"
                         foreach ($keyFile in $pubKeyCandidates) {
                             if (-not (Test-Path $keyFile)) { continue }
                             & docker exec $containerName bash -lc "chmod 700 /root 2>/dev/null || true; mkdir -p /root/.ssh && chmod 700 /root/.ssh" 2>$null | Out-Null
@@ -4236,7 +4288,7 @@ function Main {
                             if ($LASTEXITCODE -eq 0) {
                                 $script:sshInjectedKeyPath = $keyFile
                                 $injected = $true
-                                Write-OK "已自动注入宿主机 SSH 公钥: $keyFile"
+                                Write-Warn "普通用户公钥注入失败，已回退为 root 密钥登录: $keyFile"
                                 break
                             }
                         }
@@ -4268,6 +4320,8 @@ function Main {
                                     if ($LASTEXITCODE -eq 0) {
                                         $script:sshInjectedKeyPath = $pubPath
                                         $injected = $true
+                                        $script:sshRootFallback = $true
+                                        $script:hostUserForSSH = "root"
                                         Write-OK "已自动生成并注入宿主机 SSH 公钥: $pubPath"
                                     }
                                 }
@@ -4283,7 +4337,9 @@ function Main {
 
                     # 保存部署信息（供后续显示）
                     $script:sshPasswordAuthDisabled = $true
-                    $script:hostUserForSSH = $hostUser
+                    if (-not $script:hostUserForSSH) {
+                        $script:hostUserForSSH = $hostUser
+                    }
                 } catch {
                     Write-Log "Post-deploy SSH/bootstrap step failed: $_" "WARN"
                     Write-Warn "安装后 SSH/公钥收尾步骤部分失败，请在完成页按提示手动处理"

@@ -19,6 +19,28 @@ function Write-Dim($msg)  { Write-Host "    $msg" -ForegroundColor DarkGray }
 function Write-Warn($msg) { Write-Host "  ⚠️  $msg" -ForegroundColor Yellow }
 function Write-Info($msg) { Write-Host "  $msg" -ForegroundColor Cyan }
 
+function Convert-ToContainerUserName {
+    param([string]$RawName)
+
+    if (-not $RawName) { return "" }
+
+    $name = $RawName.Trim().ToLower()
+    if (-not $name) { return "" }
+
+    $name = $name -replace '[^a-z0-9_-]', '_'
+    if ($name -notmatch '^[a-z_]') {
+        $name = "u_$name"
+    }
+    if ($name.Length -gt 32) {
+        $name = $name.Substring(0, 32)
+    }
+    if ($name -notmatch '^[a-z_][a-z0-9_-]*$') {
+        return ""
+    }
+
+    return $name
+}
+
 # --- Robust Multi-threaded Chunked Download (多线程分块断点续传) --------------
 function Download-Robust {
     param(
@@ -519,6 +541,8 @@ Write-Dim "HTTP 端口: $($config.http_port)  HTTPS 端口: $($config.https_port
 $homeDataMount = ""
 $homeRootMount = ""
 $homeUserMount = ""
+$rawHostUser = $env:USERNAME
+$hostUser = Convert-ToContainerUserName $rawHostUser
 try {
     $mounts = (& docker inspect $CONTAINER_NAME --format '{{json .Mounts}}' 2>$null) | ConvertFrom-Json
     foreach ($m in $mounts) {
@@ -548,6 +572,20 @@ Write-Dim "数据目录: $homeDataMount"
 Write-Dim "root 目录: $homeRootMount"
 if ($homeUserMount) {
     Write-Dim "user 目录: $homeUserMount"
+}
+
+$expectedUserMount = ""
+if ($hostUser -and $hostUser -ne "root" -and $hostUser -ne "administrator") {
+    if ($rawHostUser -and $rawHostUser -ne $hostUser) {
+        Write-Warn "检测到 Windows 用户名 '$rawHostUser' 含不兼容字符，容器 SSH 用户将使用: $hostUser"
+    }
+    $expectedUserMount = Join-Path $homeDataMount $hostUser
+    if (-not (Test-Path $expectedUserMount)) {
+        New-Item -ItemType Directory -Path $expectedUserMount -Force | Out-Null
+    }
+    if ($homeUserMount -and $homeUserMount -ne $expectedUserMount) {
+        Write-Warn "检测到历史用户挂载目录($homeUserMount)，本次将切换为当前用户目录: $expectedUserMount"
+    }
 }
 
 # 获取端口映射（去重）
@@ -798,11 +836,12 @@ $runArgs = @(
 )
 
 if ($homeUserMount -and $homeUserMount.Trim()) {
-    $userLeaf = Split-Path $homeUserMount -Leaf
-    if ($userLeaf -and $userLeaf -ne "root") {
-        $runArgs += @("-v", "${homeUserMount}:/home/$userLeaf")
-        $runArgs += @("-e", "HOST_USER=$userLeaf")
-    }
+    # noop, user mount is rebuilt below from current Windows username
+}
+
+if ($expectedUserMount -and $hostUser -and $hostUser -ne "root" -and $hostUser -ne "administrator") {
+    $runArgs += @("-v", "${expectedUserMount}:/home/$hostUser")
+    $runArgs += @("-e", "HOST_USER=$hostUser")
 }
 $runArgs += $portMappings
 $runArgs += $IMAGE_NAME
@@ -817,6 +856,71 @@ if ($LASTEXITCODE -ne 0) {
     return
 }
 Write-OK "新容器已启动"
+
+# -- 9.1 SSH 公钥注入（优先普通用户，失败回退 root）--
+$pubKeyCandidates = @(
+    (Join-Path $env:USERPROFILE ".ssh\id_ed25519.pub"),
+    (Join-Path $env:USERPROFILE ".ssh\id_rsa.pub"),
+    (Join-Path $env:USERPROFILE ".ssh\id_ecdsa.pub")
+)
+if ($env:HOME -and $env:HOME -ne $env:USERPROFILE) {
+    $pubKeyCandidates += @(
+        (Join-Path $env:HOME ".ssh\id_ed25519.pub"),
+        (Join-Path $env:HOME ".ssh\id_rsa.pub"),
+        (Join-Path $env:HOME ".ssh\id_ecdsa.pub")
+    )
+}
+$pubKeyCandidates = $pubKeyCandidates | Where-Object { $_ } | Select-Object -Unique
+
+$injected = $false
+if ($hostUser -and $hostUser -ne "root" -and $hostUser -ne "administrator") {
+    $userReady = $false
+    for ($retryUser = 1; $retryUser -le 12; $retryUser++) {
+        & docker exec $CONTAINER_NAME bash -lc "id '$hostUser' >/dev/null 2>&1" 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            $userReady = $true
+            break
+        }
+        Start-Sleep -Milliseconds 500
+    }
+
+    if (-not $userReady) {
+        Write-Warn "容器内普通用户 $hostUser 尚未就绪，将尝试 root 密钥登录兜底"
+    } else {
+        foreach ($keyFile in $pubKeyCandidates) {
+            if (-not (Test-Path $keyFile)) { continue }
+            Write-Info "注入公钥到用户 $hostUser : $keyFile"
+            & docker exec $CONTAINER_NAME bash -lc "mkdir -p '/home/$hostUser/.ssh' && chmod 700 '/home/$hostUser/.ssh'" 2>$null | Out-Null
+            & docker cp $keyFile "${CONTAINER_NAME}:/tmp/host_user_key.pub" 2>$null | Out-Null
+            if ($LASTEXITCODE -ne 0) { continue }
+            & docker exec $CONTAINER_NAME bash -lc "cat /tmp/host_user_key.pub >> '/home/$hostUser/.ssh/authorized_keys' && sort -u -o '/home/$hostUser/.ssh/authorized_keys' '/home/$hostUser/.ssh/authorized_keys' && chmod 600 '/home/$hostUser/.ssh/authorized_keys' && chown -R '${hostUser}:${hostUser}' '/home/$hostUser/.ssh' && test -s '/home/$hostUser/.ssh/authorized_keys' && rm -f /tmp/host_user_key.pub" 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                $injected = $true
+                Write-OK "已注入 SSH 公钥到用户 $hostUser"
+                break
+            }
+        }
+    }
+}
+
+if (-not $injected) {
+    foreach ($keyFile in $pubKeyCandidates) {
+        if (-not (Test-Path $keyFile)) { continue }
+        & docker exec $CONTAINER_NAME bash -lc "chmod 700 /root 2>/dev/null || true; mkdir -p /root/.ssh && chmod 700 /root/.ssh" 2>$null | Out-Null
+        & docker cp $keyFile "${CONTAINER_NAME}:/root/.ssh/authorized_keys.tmp" 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) { continue }
+        & docker exec $CONTAINER_NAME bash -lc "cat /root/.ssh/authorized_keys.tmp >> /root/.ssh/authorized_keys && sort -u -o /root/.ssh/authorized_keys /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && rm -f /root/.ssh/authorized_keys.tmp" 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            $injected = $true
+            Write-Warn "普通用户公钥注入失败，已回退为 root 密钥登录"
+            break
+        }
+    }
+}
+
+if (-not $injected) {
+    Write-Warn "未检测到可用宿主机 SSH 公钥，请手动注入 authorized_keys"
+}
 
 # -- 10. 等待服务就绪 --
 Write-Step "等待服务就绪..."

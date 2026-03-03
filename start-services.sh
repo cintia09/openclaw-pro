@@ -153,6 +153,8 @@ HOST_UID="${HOST_UID:-}"
 HOST_GID="${HOST_GID:-}"
 SSH_USER=""
 
+echo "[start-services] HOST_USER=$HOST_USER HOST_UID=${HOST_UID:-auto} HOST_GID=${HOST_GID:-auto}"
+
 create_host_user() {
     local username="$1"
     local uid="$2"
@@ -267,6 +269,7 @@ harden_sshd_config() {
     set_or_append "KbdInteractiveAuthentication" "no"
     set_or_append "ChallengeResponseAuthentication" "no"
     set_or_append "PubkeyAuthentication" "yes"
+    set_or_append "StrictModes" "no"
 
     # 如果有普通用户，配置 AllowUsers 只允许该用户 SSH 登录
     if [ -n "$SSH_USER" ]; then
@@ -296,9 +299,9 @@ fi
 
 # 显示 SSH 登录信息
 if [ -n "$SSH_USER" ]; then
-    echo "[start-services] SSH configured for user: $SSH_USER (root login disabled)"
+    echo "[start-services] SSH configured for user: $SSH_USER (root login disabled, AllowUsers enforced)"
 else
-    echo "[start-services] SSH configured for root (key-only auth)"
+    echo "[start-services] SSH configured for root (key-only auth fallback)"
 fi
 
 # 启动 sshd
