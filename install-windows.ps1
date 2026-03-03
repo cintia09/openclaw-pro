@@ -2005,7 +2005,7 @@ function Show-Completion {
         Write-Host "  🔄 升级到新版本：" -ForegroundColor White
         Write-Host "     重新运行安装命令即可，脚本会自动检测版本差异：" -ForegroundColor DarkGray
         Write-Host "     irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1 | iex" -ForegroundColor Cyan
-        Write-Host "     数据目录 (system-data) 不受影响，升级后原有配置和数据保留。" -ForegroundColor DarkGray
+        Write-Host "     数据目录（home-data/root 与 home-data/用户名）不受影响，升级后原有配置和数据保留。" -ForegroundColor DarkGray
     } else {
         Write-Host ""
         Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray
@@ -2380,8 +2380,8 @@ function Main {
             if (-not ($ImageOnly -and $ImageOnlyExplicit)) {
                 Write-Host ""
                 Write-Host "  安装目录确认:" -ForegroundColor Cyan
-                Write-Host "     数据目录: $(Join-Path $localDeployDir 'system-data[-N]')" -ForegroundColor White
-                Write-Host "     （首个实例为 system-data，多实例时为 system-data-2, system-data-3 ...）" -ForegroundColor DarkGray
+                Write-Host "     数据目录: $(Join-Path $localDeployDir 'home-data[-N]')" -ForegroundColor White
+                Write-Host "     结构: home-data[-N]/root 与 home-data[-N]/用户名" -ForegroundColor DarkGray
                 Write-Host ""
                 Write-Host "     按回车确认，或输入新路径: " -NoNewline -ForegroundColor White
                 $customBaseDir = (Read-Host).Trim()
@@ -2399,7 +2399,7 @@ function Main {
             }
         }
 
-        # 统一目录策略：镜像文件、日志、system-data 全部放在部署目录 openclaw-pro 下
+        # 统一目录策略：镜像文件、日志、home-data 全部放在部署目录 openclaw-pro 下
         if (-not (Test-Path $localDeployDir)) { New-Item -ItemType Directory -Path $localDeployDir -Force | Out-Null }
         $homeBaseDir = $localDeployDir
         $TMP_DIR = $localDeployDir
@@ -2764,7 +2764,7 @@ function Main {
                         return
                     }
 
-                    # Extract ZIP（system-data 已独立于部署目录，无需备份）
+                    # Extract ZIP（home-data 已独立于部署目录，无需备份）
                     Write-Info "正在解压..."
                     if (Test-Path $localDeployDir) {
                         Remove-Item $localDeployDir -Recurse -Force
@@ -2947,7 +2947,7 @@ function Main {
                         Write-Host "  ⚠️  完整重装风险提示:" -ForegroundColor Yellow
                         Write-Host "     - 将删除并重建容器（容器文件系统会重置）" -ForegroundColor Yellow
                         Write-Host "     - 容器内手动安装的软件/临时文件可能丢失" -ForegroundColor Yellow
-                        Write-Host "     - 挂载的 system-data 与配置会保留" -ForegroundColor Green
+                        Write-Host "     - 挂载的 home-data（root/用户名）与配置会保留" -ForegroundColor Green
                         Write-Host ""
                         Write-Host "  是否继续执行安装重装流程？[y/N]: " -NoNewline -ForegroundColor White
                         $continueInstall = (Read-Host).Trim().ToLower()
@@ -2968,7 +2968,7 @@ function Main {
                     Write-Host ""
                     $doReinstall = $hotUpdateReinstallConfirmed
                     if (-not $doReinstall) {
-                        Write-Host "  是否先执行升级重装（删除旧容器，保留配置和 system-data）？[Y/n]: " -NoNewline -ForegroundColor White
+                        Write-Host "  是否先执行升级重装（删除旧容器，保留配置和 home-data 的 root/用户名数据）？[Y/n]: " -NoNewline -ForegroundColor White
                         $upgradeFirst = (Read-Host).Trim().ToLower()
                         if (-not $upgradeFirst -or $upgradeFirst -eq 'y' -or $upgradeFirst -eq 'yes') {
                             $doReinstall = $true
@@ -2995,7 +2995,11 @@ function Main {
                                 $preferredUpgradeContainer = $outdated[0].Name
                             }
                         }
-                        Write-Info "将优先执行升级重装（保留配置和 system-data）"
+                        $preferredHomeDataName = "home-data"
+                        if ($preferredUpgradeContainer -match '^openclaw-pro-(\d+)$') {
+                            $preferredHomeDataName = "home-data-$($Matches[1])"
+                        }
+                        Write-Info "将优先执行升级重装（保留配置和 $preferredHomeDataName）"
                     }
                 }
             }
@@ -3003,8 +3007,8 @@ function Main {
             if (-not $choice) {
                 Write-Host "  请选择操作:" -ForegroundColor White
                 Write-Host "     [1] 新建一个容器（不删除旧容器）" -ForegroundColor Gray
-                Write-Host "     [2] 重新安装容器（删除旧容器，保留配置和 system-data，默认沿用旧配置）" -ForegroundColor Gray
-                Write-Host "     [3] 重新安装容器（删除旧容器 + 配置 + system-data）" -ForegroundColor Gray
+                Write-Host "     [2] 重新安装容器（删除旧容器，保留配置和 home-data 的 root/用户名数据，默认沿用旧配置）" -ForegroundColor Gray
+                Write-Host "     [3] 重新安装容器（删除旧容器 + 配置 + home-data 的 root/用户名数据）" -ForegroundColor Gray
                 Write-Host ""
                 Write-Host "  输入选择 [2]: " -NoNewline -ForegroundColor White
                 $choice = (Read-Host).Trim()
@@ -3014,9 +3018,9 @@ function Main {
             if ($choice -eq '2' -or $choice -eq '3') {
                 Write-Host ""
                 if ($choice -eq '3') {
-                    Write-Host "  ⚠️  高风险操作：将删除旧容器 + 配置 + system-data（不可恢复）" -ForegroundColor Yellow
+                    Write-Host "  ⚠️  高风险操作：将删除旧容器 + 配置 + home-data 的 root/用户名数据（不可恢复）" -ForegroundColor Yellow
                 } else {
-                    Write-Host "  ⚠️  将删除并重建旧容器（配置与 system-data 保留）" -ForegroundColor Yellow
+                    Write-Host "  ⚠️  将删除并重建旧容器（配置与 home-data 的 root/用户名数据保留）" -ForegroundColor Yellow
                 }
                 Write-Host "  请输入 YES 确认继续: " -NoNewline -ForegroundColor White
                 $confirmReinstall = (Read-Host).Trim()
@@ -3045,7 +3049,7 @@ function Main {
                         break
                     }
                 }
-                Write-Info "将创建新容器: $containerName（数据目录: system-data-$idx，位于部署目录下）"
+                Write-Info "将创建新容器: $containerName（数据目录: home-data-$idx，位于部署目录下）"
             } elseif ($choice -eq '2') {
                 # -- 升级模式：读取旧容器对应的配置，删除旧容器后复用相同配置 --
                 $upgradeContainerName = ""
@@ -3086,9 +3090,9 @@ function Main {
                 $containerName = $upgradeContainerName
 
                 # 读取旧容器的配置
-                $upgradeHomeDataName = "system-data"
+                $upgradeHomeDataName = "home-data"
                 if ($containerName -match '^openclaw-pro-(\d+)$') {
-                    $upgradeHomeDataName = "system-data-$($Matches[1])"
+                    $upgradeHomeDataName = "home-data-$($Matches[1])"
                 }
                 $upgradeConfigFile = Join-Path $homeBaseDir "$upgradeHomeDataName\.openclaw\docker-config.json"
                 $upgradeConfig = $null
@@ -3171,10 +3175,10 @@ function Main {
                 & docker rm -f $containerName 2>&1 | Out-Null
                 Start-Sleep -Seconds 2
                 Write-OK "旧容器已删除"
-                Write-Info "💡 数据目录 (system-data) 不会被删除，原有配置和数据均保留"
+                Write-Info "💡 数据目录 ($upgradeHomeDataName) 不会被删除，原有配置和数据均保留"
                 Write-Info "   如需彻底删除数据，请手动删除目录: $(Join-Path $homeBaseDir $upgradeHomeDataName)"
             } else {
-                # [3] 全量重装：删除旧容器，并删除对应配置与 system-data
+                # [3] 全量重装：删除旧容器，并删除对应配置与数据目录
                 if ($runningContainers.Count -eq 1) {
                     # 只有一个，直接删除
                     $rcName = ($runningContainers[0] -split '\|')[0]
@@ -3214,9 +3218,9 @@ function Main {
                 }
                 Start-Sleep -Seconds 2  # 等待端口释放
                 Write-OK "旧容器已删除"
-                $delHomeDataName = "system-data"
+                $delHomeDataName = "home-data"
                 if ($containerName -match '^openclaw-pro-(\d+)$') {
-                    $delHomeDataName = "system-data-$($Matches[1])"
+                    $delHomeDataName = "home-data-$($Matches[1])"
                 }
                 $delHomeDataPath = Join-Path $homeBaseDir $delHomeDataName
                 $delConfigPath = Join-Path $delHomeDataPath ".openclaw"
@@ -3272,10 +3276,10 @@ function Main {
             if ($LASTEXITCODE -eq 0) {
                 Write-OK "检测到本地镜像 openclaw-pro"
                 $localImageReleaseTag = ""
-                # 根据容器名确定对应的数据目录（openclaw-pro → system-data, openclaw-pro-2 → system-data-2）
-                $tagHomeDataName = "system-data"
+                # 根据容器名确定对应的数据目录（openclaw-pro → home-data, openclaw-pro-2 → home-data-2）
+                $tagHomeDataName = "home-data"
                 if ($containerName -match '^openclaw-pro-(\d+)$') {
-                    $tagHomeDataName = "system-data-$($Matches[1])"
+                    $tagHomeDataName = "home-data-$($Matches[1])"
                 }
 
                 # 检测本地镜像的 tag（lite/full/latest）以便与用户选择的镜像类型比对
@@ -3947,20 +3951,22 @@ function Main {
                 Write-OK "端口冲突已处理，已更新端口映射"
             }
 
-            # Create system-data directory — 系统配置目录放在用户运行脚本的目录下
-            # openclaw-pro     → system-data
-            # openclaw-pro-2   → system-data-2
-            # openclaw-pro-N   → system-data-N
-            $homeDataName = "system-data"
+            # Create home-data directory — 容器数据目录放在用户运行脚本的目录下
+            # openclaw-pro     → home-data
+            # openclaw-pro-2   → home-data-2
+            # openclaw-pro-N   → home-data-N
+            $homeDataName = "home-data"
             if ($containerName -match '^openclaw-pro-(\d+)$') {
-                $homeDataName = "system-data-$($Matches[1])"
+                $homeDataName = "home-data-$($Matches[1])"
             }
             $defaultHomeData = Join-Path $homeBaseDir $homeDataName
+            $defaultRootHomeData = Join-Path $defaultHomeData "root"
 
             Write-Host ""
             if (-not ($ImageOnly -and $ImageOnlyExplicit)) {
-                Write-Host "  容器数据挂载目录 (映射为容器内 /root):" -ForegroundColor Cyan
+                Write-Host "  容器数据目录（父目录）:" -ForegroundColor Cyan
                 Write-Host "     默认路径: $defaultHomeData" -ForegroundColor White
+                Write-Host "     root 数据目录: $defaultRootHomeData" -ForegroundColor DarkGray
                 Write-Host ""
                 Write-Host "     [1] 使用默认路径（推荐）" -ForegroundColor White
                 Write-Host "     [2] 自定义路径" -ForegroundColor White
@@ -3991,7 +3997,11 @@ function Main {
             if (-not (Test-Path $homeData)) {
                 New-Item -ItemType Directory -Path $homeData -Force | Out-Null
             }
-            $configDir = Join-Path $homeData ".openclaw"
+            $rootDataDir = Join-Path $homeData "root"
+            if (-not (Test-Path $rootDataDir)) {
+                New-Item -ItemType Directory -Path $rootDataDir -Force | Out-Null
+            }
+            $configDir = Join-Path $rootDataDir ".openclaw"
             if (-not (Test-Path $configDir)) {
                 New-Item -ItemType Directory -Path $configDir -Force | Out-Null
             }
@@ -4045,12 +4055,10 @@ function Main {
             $hostUid = ""
             $hostGid = ""
             $userHomeDir = ""
-            $userHomeName = "system-data"
 
             if ($hostUser -and $hostUser -ne "root" -and $hostUser -ne "Administrator") {
                 # Windows 用户没有 UID/GID，容器内会自动分配
-                $userHomeName = "user-$hostUser"
-                $userHomeDir = Join-Path $homeBaseDir $userHomeName
+                $userHomeDir = Join-Path $homeData $hostUser
 
                 # 创建用户持久化目录
                 if (-not (Test-Path $userHomeDir)) {
@@ -4066,7 +4074,7 @@ function Main {
                 "--hostname", "openclaw",
                 "--dns", "8.8.8.8",
                 "--dns", "8.8.4.4",
-                "-v", "${homeData}:/root",
+                "-v", "${rootDataDir}:/root",
                 "-e", "TZ=Asia/Shanghai"
             )
 
@@ -4842,15 +4850,19 @@ function Main {
                     Write-Info "正在重试启动容器..."
                     $retryHomeData = if ([string]::IsNullOrWhiteSpace("$homeData")) { $defaultHomeData } else { $homeData }
                     if ([string]::IsNullOrWhiteSpace("$retryHomeData")) {
-                        $retryHomeDataName = "system-data"
+                        $retryHomeDataName = "home-data"
                         if ($containerName -match '^openclaw-pro-(\d+)$') {
-                            $retryHomeDataName = "system-data-$($Matches[1])"
+                            $retryHomeDataName = "home-data-$($Matches[1])"
                         }
                         $retryHomeData = Join-Path $homeBaseDir $retryHomeDataName
                         Write-Info "检测到数据目录变量为空，回退到默认数据目录: $retryHomeData"
                     }
                     if (-not (Test-Path $retryHomeData)) {
                         New-Item -ItemType Directory -Path $retryHomeData -Force | Out-Null
+                    }
+                    $retryRootData = Join-Path $retryHomeData "root"
+                    if (-not (Test-Path $retryRootData)) {
+                        New-Item -ItemType Directory -Path $retryRootData -Force | Out-Null
                     }
                     try {
                         $containerExists = (& docker ps -a --filter "name=^/$containerName$" --format "{{.Names}}" 2>$null | Select-Object -First 1)
@@ -4870,7 +4882,7 @@ function Main {
                             "--hostname", "openclaw",
                             "--dns", "8.8.8.8",
                             "--dns", "8.8.4.4",
-                            "-v", "${retryHomeData}:/root",
+                            "-v", "${retryRootData}:/root",
                             "-e", "TZ=Asia/Shanghai",
                             "--restart", "unless-stopped"
                         )

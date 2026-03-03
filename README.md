@@ -80,7 +80,7 @@ Windows 侧同样采用：
 - 镜像文件：`X/openclaw-pro/openclaw-pro-image-lite.tar.gz`
 - 安装日志：`X/openclaw-pro/install.log`
 - root 初始密码文件：`X/openclaw-pro/root-initial-password.txt`
-- 持久化数据：`X/openclaw-pro/system-data`
+- 持久化数据：`X/openclaw-pro/home-data/root` 与 `X/openclaw-pro/home-data/username`
 
 ---
 

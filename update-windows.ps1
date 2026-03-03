@@ -515,24 +515,40 @@ $config = $configJson | ConvertFrom-Json
 Write-Dim "域名: $($config.domain)"
 Write-Dim "HTTP 端口: $($config.http_port)  HTTPS 端口: $($config.https_port)"
 
-# 获取挂载点（system-data 路径）
+# 获取挂载点（home-data 路径）
 $homeDataMount = ""
+$homeRootMount = ""
+$homeUserMount = ""
 try {
     $mounts = (& docker inspect $CONTAINER_NAME --format '{{json .Mounts}}' 2>$null) | ConvertFrom-Json
     foreach ($m in $mounts) {
         if ($m.Destination -eq "/root") {
-            $homeDataMount = $m.Source
-            break
+            $homeRootMount = $m.Source
+        } elseif ($m.Destination -match '^/home/([^/]+)$') {
+            $homeUserMount = $m.Source
+        }
+    }
+    if ($homeRootMount) {
+        $rootLeaf = Split-Path $homeRootMount -Leaf
+        if ($rootLeaf -eq "root") {
+            $homeDataMount = Split-Path $homeRootMount -Parent
+        } else {
+            $homeDataMount = $homeRootMount
+            $homeRootMount = Join-Path $homeDataMount "root"
         }
     }
 } catch {}
 
 if (-not $homeDataMount) {
-    Write-Err "无法获取 system-data 挂载路径"
+    Write-Err "无法获取 home-data 挂载路径"
     Read-Host "按回车退出"
     return
 }
 Write-Dim "数据目录: $homeDataMount"
+Write-Dim "root 目录: $homeRootMount"
+if ($homeUserMount) {
+    Write-Dim "user 目录: $homeUserMount"
+}
 
 # 获取端口映射（去重）
 $portMappings = @()
@@ -776,10 +792,18 @@ $runArgs = @(
     "run", "-d",
     "--name", $CONTAINER_NAME,
     "--hostname", "openclaw",
-    "-v", "${homeDataMount}:/root",
+    "-v", "${homeRootMount}:/root",
     "-e", "TZ=Asia/Shanghai",
     "--restart", "unless-stopped"
 )
+
+if ($homeUserMount -and $homeUserMount.Trim()) {
+    $userLeaf = Split-Path $homeUserMount -Leaf
+    if ($userLeaf -and $userLeaf -ne "root") {
+        $runArgs += @("-v", "${homeUserMount}:/home/$userLeaf")
+        $runArgs += @("-e", "HOST_USER=$userLeaf")
+    }
+}
 $runArgs += $portMappings
 $runArgs += $IMAGE_NAME
 

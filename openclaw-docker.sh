@@ -19,8 +19,16 @@ CONTAINER_NAME="openclaw-pro"
 IMAGE_NAME="openclaw-pro"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TMP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)/tmp"
-HOME_DIR="$(cd "$SCRIPT_DIR/.." && pwd)/system-data"
-CONFIG_FILE="$HOME_DIR/.openclaw/docker-config.json"
+HOME_BASE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+HOME_DIR="$HOME_BASE_DIR/home-data"
+ROOT_HOME_DIR="$HOME_DIR/root"
+HOST_USER_NAME="${SUDO_USER:-${USER:-}}"
+if [ -z "$HOST_USER_NAME" ] || [ "$HOST_USER_NAME" = "root" ]; then
+    USER_HOME_DIR=""
+else
+    USER_HOME_DIR="$HOME_DIR/$HOST_USER_NAME"
+fi
+CONFIG_FILE="$ROOT_HOME_DIR/.openclaw/docker-config.json"
 
 # ---- 工具函数 ----
 info()    { echo -e "${BLUE}[INFO]${NC} $*"; }
@@ -37,6 +45,26 @@ build_proxy_args() {
             PROXY_ARGS="$PROXY_ARGS -e $var=$val"
         fi
     done
+}
+
+build_user_mount_args() {
+    USER_MOUNT_ARGS=()
+    if [ -n "$USER_HOME_DIR" ] && [ -n "$HOST_USER_NAME" ]; then
+        USER_MOUNT_ARGS+=( -v "$USER_HOME_DIR:/home/$HOST_USER_NAME" )
+    fi
+}
+
+build_host_user_env_args() {
+    HOST_USER_ENV_ARGS=()
+    if [ -z "$HOST_USER_NAME" ] || [ "$HOST_USER_NAME" = "root" ]; then
+        return 0
+    fi
+    local uid gid
+    uid=$(id -u "$HOST_USER_NAME" 2>/dev/null || id -u)
+    gid=$(id -g "$HOST_USER_NAME" 2>/dev/null || id -g)
+    HOST_USER_ENV_ARGS+=( -e "HOST_USER=$HOST_USER_NAME" )
+    HOST_USER_ENV_ARGS+=( -e "HOST_UID=$uid" )
+    HOST_USER_ENV_ARGS+=( -e "HOST_GID=$gid" )
 }
 
 # 容器启动后修复：检查并补装缺失依赖、修复 sshd 配置
@@ -233,7 +261,7 @@ build_download_urls() {
 
 # 读取本地镜像版本标记
 get_local_image_tag() {
-    local tag_file="$HOME_DIR/.openclaw/image-release-tag.txt"
+    local tag_file="$ROOT_HOME_DIR/.openclaw/image-release-tag.txt"
     if [ -f "$tag_file" ]; then
         cat "$tag_file" 2>/dev/null
     fi
@@ -242,8 +270,8 @@ get_local_image_tag() {
 # 保存镜像版本标记
 save_image_tag() {
     local tag="$1"
-    mkdir -p "$HOME_DIR/.openclaw"
-    echo "$tag" > "$HOME_DIR/.openclaw/image-release-tag.txt"
+    mkdir -p "$ROOT_HOME_DIR/.openclaw"
+    echo "$tag" > "$ROOT_HOME_DIR/.openclaw/image-release-tag.txt"
 }
 
 # 获取镜像（优先下载预构建，回退到本地构建）
@@ -555,7 +583,7 @@ _load_and_tag_image() {
         local img_id
         img_id=$(docker image inspect "$IMAGE_NAME" --format '{{.Id}}' 2>/dev/null || true)
         if [ -n "$img_id" ]; then
-            echo "$img_id" > "$HOME_DIR/.openclaw/image-digest.txt" 2>/dev/null || true
+            echo "$img_id" > "$ROOT_HOME_DIR/.openclaw/image-digest.txt" 2>/dev/null || true
         fi
 
         success "镜像导入完成 (GitHub Release)"
@@ -570,11 +598,16 @@ _load_and_tag_image() {
 # 确保home目录存在
 ensure_home() {
     if [ ! -d "$HOME_DIR" ]; then
-        mkdir -p "$HOME_DIR/.openclaw"
+        mkdir -p "$HOME_DIR"
         chmod 700 "$HOME_DIR"
-        info "创建 home 目录: $HOME_DIR"
+        info "创建 home-data 目录: $HOME_DIR"
     fi
-    mkdir -p "$HOME_DIR/.openclaw"
+    mkdir -p "$ROOT_HOME_DIR/.openclaw"
+    chmod 700 "$ROOT_HOME_DIR" 2>/dev/null || true
+    if [ -n "$USER_HOME_DIR" ]; then
+        mkdir -p "$USER_HOME_DIR"
+        chmod 700 "$USER_HOME_DIR" 2>/dev/null || true
+    fi
 }
 
 # ---- 端口工具 ----
@@ -710,7 +743,10 @@ show_install_summary() {
     echo -e "${GREEN}║${NC}    时区: ${YELLOW}${tz}${NC}                                          ${GREEN}║${NC}"
     echo -e "${GREEN}║${NC}                                                                  ${GREEN}║${NC}"
     echo -e "${GREEN}║${NC}  ${BOLD}数据目录：${NC}                                                    ${GREEN}║${NC}"
-    echo -e "${GREEN}║${NC}    📂 挂载: ${CYAN}${HOME_DIR}${NC} → 容器 /root"
+    echo -e "${GREEN}║${NC}    📂 挂载: ${CYAN}${ROOT_HOME_DIR}${NC} → 容器 /root"
+    if [ -n "$USER_HOME_DIR" ]; then
+        echo -e "${GREEN}║${NC}    📂 挂载: ${CYAN}${USER_HOME_DIR}${NC} → 容器 /home/${HOST_USER_NAME}"
+    fi
     echo -e "${GREEN}║${NC}                                                                  ${GREEN}║${NC}"
     echo -e "${GREEN}║${NC}  ${BOLD}💡 提示：${NC}                                                      ${GREEN}║${NC}"
     echo -e "${GREEN}║${NC}    访问 Web 管理面板可修改所有配置（端口/AI Key/平台等）   ${GREEN}║${NC}"
@@ -885,7 +921,7 @@ first_time_setup() {
     success "端口配置完成"
 
     # 保存配置
-    mkdir -p "$HOME_DIR/.openclaw"
+    mkdir -p "$ROOT_HOME_DIR/.openclaw"
     cat > "$CONFIG_FILE" << EOF
 {
     "port": $GW_PORT,
@@ -1006,6 +1042,8 @@ F2B
 
     # 创建容器
     build_proxy_args
+    build_user_mount_args
+    build_host_user_env_args
     info "创建容器..."
     docker create \
         --name "$CONTAINER_NAME" \
@@ -1020,11 +1058,13 @@ F2B
         --cap-add FOWNER \
         --cap-add SYS_CHROOT \
         --cap-add AUDIT_WRITE \
-        -v "$HOME_DIR:/root" \
+        -v "$ROOT_HOME_DIR:/root" \
+        ${USER_MOUNT_ARGS[@]} \
         $PORT_ARGS \
         -e "TZ=$TZ_VAL" \
         -e "CERT_MODE=$CERT_MODE" \
         -e "DOMAIN=$DOMAIN" \
+        ${HOST_USER_ENV_ARGS[@]} \
         $PROXY_ARGS \
         --restart unless-stopped \
         "$IMAGE_NAME"
@@ -1303,7 +1343,7 @@ cmd_clean() {
     echo -e "    • 容器: ${CYAN}${CONTAINER_NAME}${NC}"
     echo -e "    • 镜像: ${CYAN}${IMAGE_NAME}${NC}"
     echo -e "    • 配置: ${CYAN}${CONFIG_FILE}${NC}"
-    echo -e "    • 版本标记: ${CYAN}${HOME_DIR}/.openclaw/${NC}"
+    echo -e "    • 版本标记: ${CYAN}${ROOT_HOME_DIR}/.openclaw/${NC}"
     echo -e "  ${YELLOW}⚠ 此操作不可逆！${NC}"
     echo ""
     local confirm=""
@@ -1313,7 +1353,7 @@ cmd_clean() {
         docker rm "$CONTAINER_NAME" 2>/dev/null || true
         docker rmi "$IMAGE_NAME" 2>/dev/null || true
         rm -f "$CONFIG_FILE" 2>/dev/null || true
-        rm -rf "$HOME_DIR/.openclaw" 2>/dev/null || true
+        rm -rf "$ROOT_HOME_DIR/.openclaw" 2>/dev/null || true
         success "已完全清理"
         echo -e "  重新安装: ${CYAN}$0 run${NC}"
     else
@@ -1642,6 +1682,8 @@ _do_full_update() {
 
     # 启动新容器
     build_proxy_args
+    build_user_mount_args
+    build_host_user_env_args
     info "启动新容器..."
     docker run -d \
         --name "$CONTAINER_NAME" \
@@ -1656,11 +1698,13 @@ _do_full_update() {
         --cap-add FOWNER \
         --cap-add SYS_CHROOT \
         --cap-add AUDIT_WRITE \
-        -v "$HOME_DIR:/root" \
+        -v "$ROOT_HOME_DIR:/root" \
+        ${USER_MOUNT_ARGS[@]} \
         $PORT_ARGS \
         -e "TZ=$tz" \
         -e "CERT_MODE=$cert_mode" \
         -e "DOMAIN=$domain" \
+        ${HOST_USER_ENV_ARGS[@]} \
         $PROXY_ARGS \
         --restart unless-stopped \
         "$IMAGE_NAME"
