@@ -12,9 +12,11 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
+# 系统配置文件（由 root 管理）
 CONFIG_FILE="/root/.openclaw/docker-config.json"
-LOGIN_LOG="/root/.openclaw/logs/login.log"
-mkdir -p /root/.openclaw/logs
+# 用户登录日志（放在用户目录）
+LOGIN_LOG="$HOME/.openclaw/logs/login.log"
+mkdir -p "$HOME/.openclaw/logs"
 
 # 记录登录
 echo "$(date '+%Y-%m-%d %H:%M:%S') | IP: ${SSH_CLIENT%% *} | TTY: $(tty)" >> "$LOGIN_LOG" 2>/dev/null

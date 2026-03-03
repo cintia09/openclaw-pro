@@ -1020,7 +1020,6 @@ F2B
         --cap-add FOWNER \
         --cap-add SYS_CHROOT \
         --cap-add AUDIT_WRITE \
-        --security-opt no-new-privileges \
         -v "$HOME_DIR:/root" \
         $PORT_ARGS \
         -e "TZ=$TZ_VAL" \
@@ -1657,7 +1656,6 @@ _do_full_update() {
         --cap-add FOWNER \
         --cap-add SYS_CHROOT \
         --cap-add AUDIT_WRITE \
-        --security-opt no-new-privileges \
         -v "$HOME_DIR:/root" \
         $PORT_ARGS \
         -e "TZ=$tz" \

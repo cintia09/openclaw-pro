@@ -798,7 +798,6 @@ create_and_start(){
     --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID \
     --cap-add NET_BIND_SERVICE --cap-add KILL --cap-add DAC_OVERRIDE \
     --cap-add FOWNER --cap-add SYS_CHROOT --cap-add AUDIT_WRITE \
-    --security-opt no-new-privileges \
     -v "$HOME_DIR:/root" \
     "${port_args[@]}" \
     -e "TZ=${TZ_VALUE}" -e "DOMAIN=${DOMAIN}" -e "CERT_MODE=${CERT_MODE}" \
