@@ -143,6 +143,101 @@ for f in .bashrc .profile .bash_logout; do
     fi
 done
 
+# ── 创建普通用户（从环境变量 HOST_USER 获取宿主机用户名）──
+# 持久化目录：/root/.openclaw/users/ 保存用户创建状态
+USERS_PERSIST_DIR="/root/.openclaw/users"
+mkdir -p "$USERS_PERSIST_DIR"
+
+HOST_USER="${HOST_USER:-}"
+HOST_UID="${HOST_UID:-}"
+HOST_GID="${HOST_GID:-}"
+SSH_USER=""
+
+create_host_user() {
+    local username="$1"
+    local uid="$2"
+    local gid="$3"
+
+    [ -z "$username" ] && return 1
+
+    # 验证用户名合法性
+    if ! [[ "$username" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+        echo "[start-services] Invalid username: $username, skipping user creation"
+        return 1
+    fi
+
+    # 检查用户是否已存在
+    if id -u "$username" >/dev/null 2>&1; then
+        echo "[start-services] User $username already exists"
+        SSH_USER="$username"
+        return 0
+    fi
+
+    echo "[start-services] Creating user: $username"
+
+    # 创建用户
+    if [ -n "$uid" ] && [ -n "$gid" ]; then
+        # 创建与宿主机 UID/GID 一致的用户
+        # 先创建组
+        if ! getent group "$gid" >/dev/null 2>&1; then
+            groupadd -g "$gid" "$username" 2>/dev/null || groupadd -g "$gid" "oc_$username" 2>/dev/null || true
+        fi
+        # 再创建用户
+        useradd -m -u "$uid" -g "$gid" -s /bin/bash "$username" 2>/dev/null || \
+            useradd -m -u "$uid" -g "$gid" -s /bin/bash -d "/home/$username" "$username" 2>/dev/null || \
+            useradd -m -s /bin/bash "$username" 2>/dev/null || true
+    else
+        # 使用系统自动分配 UID/GID
+        useradd -m -s /bin/bash "$username" 2>/dev/null || \
+            adduser --disabled-password --gecos '' "$username" 2>/dev/null || true
+    fi
+
+    # 确保用户创建成功
+    if ! id -u "$username" >/dev/null 2>&1; then
+        echo "[start-services] Failed to create user $username"
+        return 1
+    fi
+
+    # 添加到 sudo 组并配置免密 sudo
+    usermod -aG sudo "$username" 2>/dev/null || true
+    echo "$username ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/90-openclaw-$username"
+    chmod 440 "/etc/sudoers.d/90-openclaw-$username"
+
+    # 创建用户 .ssh 目录
+    local user_home
+    user_home=$(getent passwd "$username" | cut -d: -f6)
+    mkdir -p "$user_home/.ssh"
+    chmod 700 "$user_home/.ssh"
+    chown -R "$username:$username" "$user_home/.ssh"
+
+    # 复制默认 shell 配置
+    for f in .bashrc .profile .bash_logout; do
+        if [ ! -f "$user_home/$f" ] && [ -f "/etc/skel/$f" ]; then
+            cp "/etc/skel/$f" "$user_home/$f"
+            chown "$username:$username" "$user_home/$f"
+        fi
+    done
+
+    SSH_USER="$username"
+    echo "[start-services] User $username created successfully (sudo enabled)"
+    echo "$username" > "$USERS_PERSIST_DIR/ssh_user"
+    return 0
+}
+
+# 尝试创建普通用户
+if [ -n "$HOST_USER" ] && [ "$HOST_USER" != "root" ]; then
+    create_host_user "$HOST_USER" "$HOST_UID" "$HOST_GID"
+fi
+
+# 如果用户创建失败或未提供，尝试从持久化状态恢复
+if [ -z "$SSH_USER" ] && [ -f "$USERS_PERSIST_DIR/ssh_user" ]; then
+    saved_user=$(cat "$USERS_PERSIST_DIR/ssh_user" 2>/dev/null | head -1)
+    if [ -n "$saved_user" ] && id -u "$saved_user" >/dev/null 2>&1; then
+        SSH_USER="$saved_user"
+        echo "[start-services] Restored SSH user from persistent state: $SSH_USER"
+    fi
+fi
+
 # ── SSH 持久化：host keys 和 sshd_config 保存到 /root/.openclaw/ssh/ ──
 SSH_PERSIST_DIR="/root/.openclaw/ssh"
 mkdir -p "$SSH_PERSIST_DIR"
@@ -161,12 +256,26 @@ harden_sshd_config() {
         fi
     }
 
-    # 强制仅密钥登录：禁用 SSH 密码登录
-    set_or_append "PermitRootLogin" "prohibit-password"
+    # SSH 安全配置：禁用密码登录，仅密钥认证
+    # 如果有普通用户，禁用 root 登录；否则允许 root 密钥登录
+    if [ -n "$SSH_USER" ]; then
+        set_or_append "PermitRootLogin" "no"
+    else
+        set_or_append "PermitRootLogin" "prohibit-password"
+    fi
     set_or_append "PasswordAuthentication" "no"
     set_or_append "KbdInteractiveAuthentication" "no"
     set_or_append "ChallengeResponseAuthentication" "no"
     set_or_append "PubkeyAuthentication" "yes"
+
+    # 如果有普通用户，配置 AllowUsers 只允许该用户 SSH 登录
+    if [ -n "$SSH_USER" ]; then
+        # 移除旧的 AllowUsers 配置
+        sed -i '/^AllowUsers/d' "$cfg" 2>/dev/null || true
+        sed -i '/^# *AllowUsers/d' "$cfg" 2>/dev/null || true
+        # 添加新的 AllowUsers
+        echo "AllowUsers $SSH_USER" >> "$cfg"
+    fi
 }
 
 if [ -f "$SSH_PERSIST_DIR/sshd_config" ]; then
@@ -183,6 +292,13 @@ else
     harden_sshd_config
     cp /etc/ssh/sshd_config "$SSH_PERSIST_DIR/sshd_config"
     echo "[start-services] Generated and persisted SSH host keys"
+fi
+
+# 显示 SSH 登录信息
+if [ -n "$SSH_USER" ]; then
+    echo "[start-services] SSH configured for user: $SSH_USER (root login disabled)"
+else
+    echo "[start-services] SSH configured for root (key-only auth)"
 fi
 
 # 启动 sshd

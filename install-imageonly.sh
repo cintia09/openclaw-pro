@@ -20,7 +20,7 @@ IMAGE_TARBALL_LITE="openclaw-pro-image-lite.tar.gz"
 TARGET_DIR="${TARGET_DIR:-$(pwd)}"
 BASE_DIR="${TARGET_DIR}/openclaw-pro"
 TMP_DIR="$BASE_DIR"
-HOME_DIR="$BASE_DIR/home-data"
+HOME_DIR="$BASE_DIR/system-data"
 CONFIG_FILE="$HOME_DIR/.openclaw/docker-config.json"
 LOG_FILE="$BASE_DIR/install.log"
 ROOT_PASSWORD_FILE="$BASE_DIR/root-initial-password.txt"
@@ -604,7 +604,7 @@ prompt_hotpatch_first_if_applicable(){
     printf "⚠️  完整重装风险提示：\n" > "$TTY_IN"
     printf "  - 将删除并重建容器（容器文件系统会重置）\n" > "$TTY_IN"
     printf "  - 容器内手工安装的软件/临时文件可能丢失\n" > "$TTY_IN"
-    printf "  - 挂载的 home-data 与配置会保留\n\n" > "$TTY_IN"
+    printf "  - 挂载的 system-data 与配置会保留\n\n" > "$TTY_IN"
     continue_install="$(prompt "是否继续执行安装重装流程？[y/N]: ")"
     continue_install="$(echo "$continue_install" | tr '[:upper:]' '[:lower:]')"
     if [ "$continue_install" != "y" ] && [ "$continue_install" != "yes" ]; then
@@ -622,9 +622,9 @@ reset_home_data_dir(){
     return 0
   fi
 
-  warn "普通权限删除 home-data 失败，尝试通过 Docker 提权清理..."
+  warn "普通权限删除 system-data 失败，尝试通过 Docker 提权清理..."
   if docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
-    if docker run --rm -v "$BASE_DIR:/work" --entrypoint sh "$IMAGE_NAME" -lc 'rm -rf /work/home-data' >/dev/null 2>&1; then
+    if docker run --rm -v "$BASE_DIR:/work" --entrypoint sh "$IMAGE_NAME" -lc 'rm -rf /work/system-data' >/dev/null 2>&1; then
       mkdir -p "$HOME_DIR/.openclaw"
       return 0
     fi
@@ -638,7 +638,7 @@ reset_home_data_dir(){
     fi
   fi
 
-  warn "未能完全清理 home-data（权限受限），将保留目录继续。"
+  warn "未能完全清理 system-data（权限受限），将保留目录继续。"
   mkdir -p "$HOME_DIR/.openclaw"
 }
 
@@ -792,13 +792,29 @@ F2B
 # ─── container create & start ─────────────────────────────────
 
 create_and_start(){
-  local host_user host_user_created key_injected
+  local host_user host_uid host_gid user_home_dir key_injected
   host_user="$(id -un 2>/dev/null || true)"
-  host_user_created="false"
+  host_uid="$(id -u 2>/dev/null || true)"
+  host_gid="$(id -g 2>/dev/null || true)"
   key_injected="false"
 
-  mkdir -p "$HOME_DIR/.openclaw"
-  chmod 700 "$HOME_DIR" || true
+  # 创建持久化目录
+  # - system-data: 系统配置（挂载到 /root）
+  # - user-{username}: 用户个人数据（挂载到 /home/{username}）
+  local system_data_dir="$BASE_DIR/system-data"
+  local user_home_dir=""
+
+  mkdir -p "$system_data_dir/.openclaw"
+  chmod 700 "$system_data_dir" || true
+
+  # 创建用户 home 目录
+  if [ -n "$host_user" ] && [ "$host_user" != "root" ]; then
+    user_home_dir="$BASE_DIR/user-$host_user"
+    mkdir -p "$user_home_dir"
+    chmod 700 "$user_home_dir" || true
+    info "创建用户持久化目录: $user_home_dir"
+  fi
+
   write_config
 
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
@@ -813,73 +829,65 @@ create_and_start(){
     port_args+=(-p "${GW_PORT}:18789" -p "${WEB_PORT}:3000" -p "${SSH_PORT}:22")
   fi
 
+  # Build volume arguments
+  local vol_args=()
+  vol_args+=(-v "$HOME_DIR:/root")  # root 用户数据
+  if [ -n "$host_user" ] && [ "$host_user" != "root" ] && [ -d "$user_home_dir" ]; then
+    vol_args+=(-v "$user_home_dir:/home/$host_user")  # 普通用户数据
+  fi
+
+  # Build environment variables for user creation
+  local env_args=()
+  env_args+=(-e "TZ=${TZ_VALUE}" -e "DOMAIN=${DOMAIN}" -e "CERT_MODE=${CERT_MODE}")
+  if [ -n "$host_user" ] && [ "$host_user" != "root" ]; then
+    env_args+=(-e "HOST_USER=${host_user}" -e "HOST_UID=${host_uid}" -e "HOST_GID=${host_gid}")
+  fi
+
   info "创建容器..."
   docker create --name "$CONTAINER_NAME" \
     --hostname openclaw \
     --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID \
     --cap-add NET_BIND_SERVICE --cap-add KILL --cap-add DAC_OVERRIDE \
     --cap-add FOWNER --cap-add SYS_CHROOT --cap-add AUDIT_WRITE \
-    -v "$HOME_DIR:/root" \
+    "${vol_args[@]}" \
     "${port_args[@]}" \
-    -e "TZ=${TZ_VALUE}" -e "DOMAIN=${DOMAIN}" -e "CERT_MODE=${CERT_MODE}" \
+    "${env_args[@]}" \
     --restart unless-stopped \
     "$IMAGE_NAME"
 
   info "启动容器..."
   docker start "$CONTAINER_NAME"
-  sleep 2
-  if [ -n "$ROOT_PASS" ]; then
-    info "检测到 ROOT_PASS，设置容器内 root 密码"
-    echo "root:${ROOT_PASS}" | docker exec -i "$CONTAINER_NAME" chpasswd || true
-  fi
+  sleep 3  # 等待容器启动和 start-services.sh 执行
 
-  # SSH hardening
-  docker exec "$CONTAINER_NAME" bash -lc "mkdir -p /run/sshd && (/usr/sbin/sshd >/dev/null 2>&1 || service ssh start >/dev/null 2>&1 || true)" >/dev/null 2>&1 || true
-  docker exec "$CONTAINER_NAME" bash -lc "mkdir -p /etc/ssh/sshd_config.d && printf '%s\n' \
-    'PermitRootLogin no' \
-    'PasswordAuthentication no' \
-    'KbdInteractiveAuthentication no' \
-    'ChallengeResponseAuthentication no' \
-    'PubkeyAuthentication yes' \
-    > /etc/ssh/sshd_config.d/99-openclaw-security.conf" >/dev/null 2>&1 || true
-  docker exec "$CONTAINER_NAME" bash -lc "
-    if [ -f /etc/ssh/sshd_config ]; then
-      sed -i -E 's|^[#[:space:]]*PermitRootLogin[[:space:]]+.*|PermitRootLogin no|' /etc/ssh/sshd_config
-      sed -i -E 's|^[#[:space:]]*PasswordAuthentication[[:space:]]+.*|PasswordAuthentication no|' /etc/ssh/sshd_config
-      sed -i -E 's|^[#[:space:]]*KbdInteractiveAuthentication[[:space:]]+.*|KbdInteractiveAuthentication no|' /etc/ssh/sshd_config
-      sed -i -E 's|^[#[:space:]]*ChallengeResponseAuthentication[[:space:]]+.*|ChallengeResponseAuthentication no|' /etc/ssh/sshd_config
-    fi" >/dev/null 2>&1 || true
-  docker exec "$CONTAINER_NAME" bash -lc "mkdir -p /run/sshd; pkill -x sshd >/dev/null 2>&1 || true; (/usr/sbin/sshd >/dev/null 2>&1 || service ssh restart >/dev/null 2>&1 || true)" >/dev/null 2>&1 || true
-
-  # Create host-mapped normal user (optional best-effort)
-  if [ -n "$host_user" ] && [ "$host_user" != "root" ]; then
-    if [[ "$host_user" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
-      if docker exec "$CONTAINER_NAME" bash -lc "id -u '$host_user' >/dev/null 2>&1 || (useradd -m -s /bin/bash '$host_user' >/dev/null 2>&1 || adduser --disabled-password --gecos '' '$host_user' >/dev/null 2>&1)"; then
-        docker exec "$CONTAINER_NAME" bash -lc "usermod -aG sudo '$host_user' >/dev/null 2>&1 || true" >/dev/null 2>&1
-        docker exec "$CONTAINER_NAME" bash -lc "printf '%s\n' '$host_user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/90-openclaw-host-user && chmod 440 /etc/sudoers.d/90-openclaw-host-user" || true
-        host_user_created="true"
-        info "已在容器中创建同名用户：$host_user"
-      fi
-    fi
-  fi
-
-  # Public key injection
-  for keyfile in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_rsa.pub" "$HOME/.ssh/id_ecdsa.pub"; do
-    if [ -f "$keyfile" ]; then
-      key_injected="true"
-      info "注入公钥 $(basename "$keyfile") 到容器"
-      docker exec "$CONTAINER_NAME" bash -lc "mkdir -p /root/.ssh && chmod 700 /root/.ssh" >/dev/null 2>&1
-      docker cp "$keyfile" "$CONTAINER_NAME":/root/.ssh/authorized_keys.tmp >/dev/null 2>&1
-      docker exec "$CONTAINER_NAME" bash -lc "cat /root/.ssh/authorized_keys.tmp >> /root/.ssh/authorized_keys && sort -u -o /root/.ssh/authorized_keys /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && rm -f /root/.ssh/authorized_keys.tmp" >/dev/null 2>&1
-
-      if [ "$host_user_created" = "true" ]; then
-        docker exec "$CONTAINER_NAME" bash -lc "mkdir -p '/home/$host_user/.ssh' && chmod 700 '/home/$host_user/.ssh' && chown -R '$host_user:$host_user' '/home/$host_user/.ssh'" >/dev/null 2>&1
-        docker cp "$keyfile" "$CONTAINER_NAME":/tmp/host_user_authorized_keys.tmp >/dev/null 2>&1
-        docker exec "$CONTAINER_NAME" bash -lc "cat /tmp/host_user_authorized_keys.tmp >> '/home/$host_user/.ssh/authorized_keys' && sort -u -o '/home/$host_user/.ssh/authorized_keys' '/home/$host_user/.ssh/authorized_keys' && chmod 600 '/home/$host_user/.ssh/authorized_keys' && chown '$host_user:$host_user' '/home/$host_user/.ssh/authorized_keys' && rm -f /tmp/host_user_authorized_keys.tmp" >/dev/null 2>&1
-      fi
+  # 等待 SSH 服务就绪
+  local ssh_ready="false"
+  for i in 1 2 3 4 5 6 7 8; do
+    if docker exec "$CONTAINER_NAME" bash -lc "pgrep -x sshd >/dev/null 2>&1"; then
+      ssh_ready="true"
       break
     fi
+    sleep 1
   done
+
+  if [ "$ssh_ready" = "true" ]; then
+    success "SSH 服务已就绪"
+  else
+    warn "SSH 服务状态未知，请检查容器日志"
+  fi
+
+  # Public key injection (注入到普通用户)
+  if [ -n "$host_user" ] && [ "$host_user" != "root" ]; then
+    for keyfile in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_rsa.pub" "$HOME/.ssh/id_ecdsa.pub"; do
+      if [ -f "$keyfile" ]; then
+        key_injected="true"
+        info "注入公钥 $(basename "$keyfile") 到用户 $host_user"
+        docker exec "$CONTAINER_NAME" bash -lc "mkdir -p '/home/$host_user/.ssh' && chmod 700 '/home/$host_user/.ssh'" >/dev/null 2>&1
+        docker cp "$keyfile" "$CONTAINER_NAME:/tmp/host_user_key.pub" >/dev/null 2>&1
+        docker exec "$CONTAINER_NAME" bash -lc "cat /tmp/host_user_key.pub >> '/home/$host_user/.ssh/authorized_keys' && sort -u -o '/home/$host_user/.ssh/authorized_keys' '/home/$host_user/.ssh/authorized_keys' && chmod 600 '/home/$host_user/.ssh/authorized_keys' && chown -R '$host_user:$host_user' '/home/$host_user/.ssh' && rm -f /tmp/host_user_key.pub" >/dev/null 2>&1
+        break
+      fi
+    done
+  fi
 
   configure_firewall_and_fail2ban
 
@@ -891,16 +899,28 @@ create_and_start(){
   else
     info "访问：Gateway http://<host>:${GW_PORT}  管理面板 http://<host>:${WEB_PORT}"
   fi
-  info "SSH 密码登录：已禁用（仅密钥登录）"
-  if [ "$host_user_created" = "true" ] && [ "$key_injected" = "true" ]; then
-    info "同名用户登录：SSH ${host_user}@<host> -p ${SSH_PORT}"
-    info "容器内提权：ssh 登录后执行 sudo -i"
+
+  # 显示 SSH 登录信息
+  echo ""
+  info "SSH 登录配置:"
+  info "  - 密码登录：已禁用（仅密钥登录）"
+  info "  - Root 登录：已禁用"
+  if [ -n "$host_user" ] && [ "$host_user" != "root" ]; then
+    info "  - 登录用户：$host_user"
+    info "  - 登录命令：ssh ${host_user}@<host> -p ${SSH_PORT}"
+    info "  - 容器内提权：登录后执行 sudo -i"
+    info "  - 用户数据目录：$user_home_dir"
   else
-    info "SSH 登录：请使用已注入公钥登录，端口 ${SSH_PORT}"
+    warn "  - 当前为 root 用户运行，未创建普通用户"
+    info "  - 如需普通用户登录，请以非 root 用户重新运行安装脚本"
   fi
-  if [ -n "$ROOT_PASS" ]; then
-    info "root 密码由 ROOT_PASS 提供（未写入本地文件）"
+
+  if [ "$key_injected" = "true" ]; then
+    success "  - SSH 公钥已注入"
+  else
+    warn "  - 未检测到 SSH 公钥，请手动配置 ~/.ssh/authorized_keys"
   fi
+
   info "日志文件：$LOG_FILE"
 }
 

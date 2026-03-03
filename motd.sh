@@ -2,6 +2,7 @@
 # ============================================================
 # motd.sh — 容器登录欢迎界面
 # 每次 bash -l 进入时显示状态和配置菜单
+# 支持 root 和普通用户登录
 # ============================================================
 
 RED='\033[0;31m'
@@ -18,8 +19,19 @@ CONFIG_FILE="/root/.openclaw/docker-config.json"
 LOGIN_LOG="$HOME/.openclaw/logs/login.log"
 mkdir -p "$HOME/.openclaw/logs"
 
+# 当前用户
+CURRENT_USER=$(whoami)
+IS_SUDOER="false"
+
+# 检查是否有 sudo 权限
+if [ "$CURRENT_USER" != "root" ]; then
+    if sudo -n true 2>/dev/null || groups 2>/dev/null | grep -q '\bsudo\b'; then
+        IS_SUDOER="true"
+    fi
+fi
+
 # 记录登录
-echo "$(date '+%Y-%m-%d %H:%M:%S') | IP: ${SSH_CLIENT%% *} | TTY: $(tty)" >> "$LOGIN_LOG" 2>/dev/null
+echo "$(date '+%Y-%m-%d %H:%M:%S') | 用户: $CURRENT_USER | IP: ${SSH_CLIENT%% *} | TTY: $(tty)" >> "$LOGIN_LOG" 2>/dev/null
 
 # 检查服务状态
 check_service() {
@@ -34,10 +46,14 @@ GATEWAY_STATUS=$(check_service "openclaw.*gateway")
 WEB_STATUS=$(check_service "node.*server\.js")
 CADDY_STATUS=$(check_service "caddy run")
 
-# 读取配置
+# 读取配置（普通用户需要 sudo 读取）
 DOMAIN=""
 if [ -f "$CONFIG_FILE" ]; then
-    DOMAIN=$(jq -r '.domain // empty' "$CONFIG_FILE" 2>/dev/null)
+    if [ "$CURRENT_USER" = "root" ]; then
+        DOMAIN=$(jq -r '.domain // empty' "$CONFIG_FILE" 2>/dev/null)
+    else
+        DOMAIN=$(sudo cat "$CONFIG_FILE" 2>/dev/null | jq -r '.domain // empty' 2>/dev/null)
+    fi
 fi
 
 # 显示欢迎信息
@@ -49,11 +65,21 @@ printf "${CYAN}║${NC}  %-10s %b %28s ${CYAN}║${NC}\n" "Gateway:" "$GATEWAY_S
 printf "${CYAN}║${NC}  %-10s %b %28s ${CYAN}║${NC}\n" "Web面板:" "$WEB_STATUS" ""
 printf "${CYAN}║${NC}  %-10s %b %28s ${CYAN}║${NC}\n" "Caddy:" "$CADDY_STATUS" ""
 echo -e "${CYAN}╠══════════════════════════════════════════════════╣${NC}"
+
+# 读取端口配置
 if [ -f "$CONFIG_FILE" ]; then
-    GW_PORT=$(jq -r '.port // 18789' "$CONFIG_FILE" 2>/dev/null)
-    WEB_PORT=$(jq -r '.web_port // 3000' "$CONFIG_FILE" 2>/dev/null)
-    HTTPS_PORT=$(jq -r '.https_port // 8443' "$CONFIG_FILE" 2>/dev/null)
-    SSH_PORT=$(jq -r '.ssh_port // 2222' "$CONFIG_FILE" 2>/dev/null)
+    if [ "$CURRENT_USER" = "root" ]; then
+        GW_PORT=$(jq -r '.port // 18789' "$CONFIG_FILE" 2>/dev/null)
+        WEB_PORT=$(jq -r '.web_port // 3000' "$CONFIG_FILE" 2>/dev/null)
+        HTTPS_PORT=$(jq -r '.https_port // 8443' "$CONFIG_FILE" 2>/dev/null)
+        SSH_PORT=$(jq -r '.ssh_port // 2222' "$CONFIG_FILE" 2>/dev/null)
+    else
+        CFG_CONTENT=$(sudo cat "$CONFIG_FILE" 2>/dev/null)
+        GW_PORT=$(echo "$CFG_CONTENT" | jq -r '.port // 18789' 2>/dev/null)
+        WEB_PORT=$(echo "$CFG_CONTENT" | jq -r '.web_port // 3000' 2>/dev/null)
+        HTTPS_PORT=$(echo "$CFG_CONTENT" | jq -r '.https_port // 8443' 2>/dev/null)
+        SSH_PORT=$(echo "$CFG_CONTENT" | jq -r '.ssh_port // 2222' 2>/dev/null)
+    fi
 else
     GW_PORT=18789
     WEB_PORT=3000
@@ -61,7 +87,12 @@ else
     SSH_PORT=2222
 fi
 
-SSH_USER=$(awk -F: '$3>=1000 && $1!="nobody" {print $1; exit}' /etc/passwd 2>/dev/null)
+# 获取 SSH 用户（从持久化状态）
+SSH_USER_FILE="/root/.openclaw/users/ssh_user"
+if [ -f "$SSH_USER_FILE" ]; then
+    SSH_USER=$(sudo cat "$SSH_USER_FILE" 2>/dev/null | head -1)
+fi
+[ -z "$SSH_USER" ] && SSH_USER=$(awk -F: '$3>=1000 && $1!="nobody" {print $1; exit}' /etc/passwd 2>/dev/null)
 [ -z "$SSH_USER" ] && SSH_USER="root"
 
 if [ -n "$DOMAIN" ]; then
@@ -72,12 +103,21 @@ else
     echo -e "${CYAN}║${NC}  📋 Gateway: ${BLUE}http://localhost:${GW_PORT}${NC}"
 fi
 echo -e "${CYAN}║${NC}  🔐 SSH登录: ${BLUE}ssh ${SSH_USER}@<host> -p ${SSH_PORT}${NC}"
-echo -e "${CYAN}║${NC}  🛡  Root提权: ${BLUE}sudo -i${NC}"
+
+# 显示当前用户和提权提示
+if [ "$CURRENT_USER" = "root" ]; then
+    echo -e "${CYAN}║${NC}  👤 当前用户: ${GREEN}root${NC}"
+elif [ "$IS_SUDOER" = "true" ]; then
+    echo -e "${CYAN}║${NC}  👤 当前用户: ${GREEN}${CURRENT_USER}${NC} (可提权: ${BLUE}sudo -i${NC})"
+else
+    echo -e "${CYAN}║${NC}  👤 当前用户: ${YELLOW}${CURRENT_USER}${NC} (无 sudo 权限)"
+fi
+
 echo -e "${CYAN}╚══════════════════════════════════════════════════╝${NC}"
 echo ""
 
-# 交互式菜单（仅在交互终端）
-if [ -t 0 ]; then
+# 交互式菜单（仅 root 用户可用）
+if [ -t 0 ] && [ "$CURRENT_USER" = "root" ]; then
     echo -e "${YELLOW}[C]${NC} 配置菜单  ${YELLOW}[回车/10秒]${NC} 跳过"
     read -t 10 -n 1 CHOICE 2>/dev/null || CHOICE=""
     echo ""
@@ -131,4 +171,7 @@ if [ -t 0 ]; then
         esac
         echo ""
     fi
+elif [ -t 0 ] && [ "$IS_SUDOER" = "true" ]; then
+    # 普通用户但有 sudo 权限
+    echo -e "${YELLOW}提示: 执行 ${CYAN}sudo -i${NC}${YELLOW} 切换到 root 用户使用配置菜单${NC}"
 fi

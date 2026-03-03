@@ -1975,35 +1975,37 @@ function Show-Completion {
         Write-Host "     docker stop $showContainerName       # 停止服务" -ForegroundColor Gray
         Write-Host "     docker start $showContainerName      # 启动服务" -ForegroundColor Gray
         Write-Host "     docker exec -it $showContainerName bash  # 进入容器终端" -ForegroundColor Gray
-        Write-Host "     ssh root@localhost -p ${SshPort}    # SSH 远程登录" -ForegroundColor Gray
         Write-Host ""
-        Write-Host "  🔐 SSH 安全状态：" -ForegroundColor White
+        Write-Host "  🔐 SSH 登录信息：" -ForegroundColor White
         if ($script:sshServiceReady) {
             Write-Host "     SSH 服务: 已启动" -ForegroundColor Green
         } else {
             Write-Host "     SSH 服务: 启动状态未知，请执行 docker logs openclaw-pro 排查" -ForegroundColor Yellow
         }
-        Write-Host "     PasswordAuthentication: 已关闭（仅允许密钥登录）" -ForegroundColor Green
-        Write-Host "     🔒 SSH 密码登录已关闭，只能通过密钥方式登录" -ForegroundColor Green
+        Write-Host "     密码登录: 已禁用（仅密钥登录）" -ForegroundColor Green
+        Write-Host "     Root 登录: 已禁用" -ForegroundColor Green
+
+        # 显示普通用户登录信息
+        $sshUser = if ($script:hostUserForSSH) { $script:hostUserForSSH } else { $env:USERNAME }
+        if ($sshUser -and $sshUser -ne "root" -and $sshUser -ne "Administrator") {
+            Write-Host "     登录用户: $sshUser" -ForegroundColor Green
+            Write-Host "     登录命令: ssh ${sshUser}@<host> -p ${SshPort}" -ForegroundColor Cyan
+            Write-Host "     容器内提权: 登录后执行 sudo -i" -ForegroundColor DarkGray
+        } else {
+            Write-Host "     登录用户: 未创建普通用户（以 Administrator 运行）" -ForegroundColor Yellow
+            Write-Host "     建议: 以普通用户身份重新运行安装脚本" -ForegroundColor DarkGray
+        }
 
         if ($script:sshInjectedKeyPath) {
             Write-Host "     公钥注入: 已自动注入 $script:sshInjectedKeyPath" -ForegroundColor Green
         } else {
-            Write-Host "     公钥注入: 未自动注入，你可以使用任意来源的公钥手动写入 /root/.ssh/authorized_keys" -ForegroundColor Yellow
-            Write-Host "     示例(Linux/macOS): cat /path/to/your_key.pub | docker exec -i openclaw-pro bash -lc 'mkdir -p /root/.ssh && cat >> /root/.ssh/authorized_keys && chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys'" -ForegroundColor DarkGray
-            Write-Host '     示例(Windows): type C:\path\to\your_key.pub | docker exec -i openclaw-pro bash -lc "mkdir -p /root/.ssh && cat >> /root/.ssh/authorized_keys && chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys"' -ForegroundColor DarkGray
-        }
-
-        if ($script:rootPasswordFilePath) {
-            Write-Host "     Root 初始密码: 已生成并保存到 $script:rootPasswordFilePath" -ForegroundColor Green
-            Write-Host "     注意: 该密码仅供容器内本地管理使用，SSH 仍为密钥登录" -ForegroundColor DarkGray
-            Write-Host "     建议立即修改: docker exec -it $showContainerName bash -lc 'passwd root'" -ForegroundColor DarkGray
+            Write-Host "     公钥注入: 未自动注入，请手动配置 authorized_keys" -ForegroundColor Yellow
         }
         Write-Host ""
         Write-Host "  🔄 升级到新版本：" -ForegroundColor White
         Write-Host "     重新运行安装命令即可，脚本会自动检测版本差异：" -ForegroundColor DarkGray
         Write-Host "     irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1 | iex" -ForegroundColor Cyan
-        Write-Host "     数据目录 (home-data) 不受影响，升级后原有配置和数据保留。" -ForegroundColor DarkGray
+        Write-Host "     数据目录 (system-data) 不受影响，升级后原有配置和数据保留。" -ForegroundColor DarkGray
     } else {
         Write-Host ""
         Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray
@@ -2378,8 +2380,8 @@ function Main {
             if (-not ($ImageOnly -and $ImageOnlyExplicit)) {
                 Write-Host ""
                 Write-Host "  安装目录确认:" -ForegroundColor Cyan
-                Write-Host "     数据目录: $(Join-Path $localDeployDir 'home-data[-N]')" -ForegroundColor White
-                Write-Host "     （首个实例为 home-data，多实例时为 home-data-2, home-data-3 ...）" -ForegroundColor DarkGray
+                Write-Host "     数据目录: $(Join-Path $localDeployDir 'system-data[-N]')" -ForegroundColor White
+                Write-Host "     （首个实例为 system-data，多实例时为 system-data-2, system-data-3 ...）" -ForegroundColor DarkGray
                 Write-Host ""
                 Write-Host "     按回车确认，或输入新路径: " -NoNewline -ForegroundColor White
                 $customBaseDir = (Read-Host).Trim()
@@ -2397,7 +2399,7 @@ function Main {
             }
         }
 
-        # 统一目录策略：镜像文件、日志、home-data 全部放在部署目录 openclaw-pro 下
+        # 统一目录策略：镜像文件、日志、system-data 全部放在部署目录 openclaw-pro 下
         if (-not (Test-Path $localDeployDir)) { New-Item -ItemType Directory -Path $localDeployDir -Force | Out-Null }
         $homeBaseDir = $localDeployDir
         $TMP_DIR = $localDeployDir
@@ -2762,7 +2764,7 @@ function Main {
                         return
                     }
 
-                    # Extract ZIP（home-data 已独立于部署目录，无需备份）
+                    # Extract ZIP（system-data 已独立于部署目录，无需备份）
                     Write-Info "正在解压..."
                     if (Test-Path $localDeployDir) {
                         Remove-Item $localDeployDir -Recurse -Force
@@ -2945,7 +2947,7 @@ function Main {
                         Write-Host "  ⚠️  完整重装风险提示:" -ForegroundColor Yellow
                         Write-Host "     - 将删除并重建容器（容器文件系统会重置）" -ForegroundColor Yellow
                         Write-Host "     - 容器内手动安装的软件/临时文件可能丢失" -ForegroundColor Yellow
-                        Write-Host "     - 挂载的 home-data 与配置会保留" -ForegroundColor Green
+                        Write-Host "     - 挂载的 system-data 与配置会保留" -ForegroundColor Green
                         Write-Host ""
                         Write-Host "  是否继续执行安装重装流程？[y/N]: " -NoNewline -ForegroundColor White
                         $continueInstall = (Read-Host).Trim().ToLower()
@@ -2966,7 +2968,7 @@ function Main {
                     Write-Host ""
                     $doReinstall = $hotUpdateReinstallConfirmed
                     if (-not $doReinstall) {
-                        Write-Host "  是否先执行升级重装（删除旧容器，保留配置和 home-data）？[Y/n]: " -NoNewline -ForegroundColor White
+                        Write-Host "  是否先执行升级重装（删除旧容器，保留配置和 system-data）？[Y/n]: " -NoNewline -ForegroundColor White
                         $upgradeFirst = (Read-Host).Trim().ToLower()
                         if (-not $upgradeFirst -or $upgradeFirst -eq 'y' -or $upgradeFirst -eq 'yes') {
                             $doReinstall = $true
@@ -2993,7 +2995,7 @@ function Main {
                                 $preferredUpgradeContainer = $outdated[0].Name
                             }
                         }
-                        Write-Info "将优先执行升级重装（保留配置和 home-data）"
+                        Write-Info "将优先执行升级重装（保留配置和 system-data）"
                     }
                 }
             }
@@ -3001,8 +3003,8 @@ function Main {
             if (-not $choice) {
                 Write-Host "  请选择操作:" -ForegroundColor White
                 Write-Host "     [1] 新建一个容器（不删除旧容器）" -ForegroundColor Gray
-                Write-Host "     [2] 重新安装容器（删除旧容器，保留配置和 home-data，默认沿用旧配置）" -ForegroundColor Gray
-                Write-Host "     [3] 重新安装容器（删除旧容器 + 配置 + home-data）" -ForegroundColor Gray
+                Write-Host "     [2] 重新安装容器（删除旧容器，保留配置和 system-data，默认沿用旧配置）" -ForegroundColor Gray
+                Write-Host "     [3] 重新安装容器（删除旧容器 + 配置 + system-data）" -ForegroundColor Gray
                 Write-Host ""
                 Write-Host "  输入选择 [2]: " -NoNewline -ForegroundColor White
                 $choice = (Read-Host).Trim()
@@ -3012,9 +3014,9 @@ function Main {
             if ($choice -eq '2' -or $choice -eq '3') {
                 Write-Host ""
                 if ($choice -eq '3') {
-                    Write-Host "  ⚠️  高风险操作：将删除旧容器 + 配置 + home-data（不可恢复）" -ForegroundColor Yellow
+                    Write-Host "  ⚠️  高风险操作：将删除旧容器 + 配置 + system-data（不可恢复）" -ForegroundColor Yellow
                 } else {
-                    Write-Host "  ⚠️  将删除并重建旧容器（配置与 home-data 保留）" -ForegroundColor Yellow
+                    Write-Host "  ⚠️  将删除并重建旧容器（配置与 system-data 保留）" -ForegroundColor Yellow
                 }
                 Write-Host "  请输入 YES 确认继续: " -NoNewline -ForegroundColor White
                 $confirmReinstall = (Read-Host).Trim()
@@ -3043,7 +3045,7 @@ function Main {
                         break
                     }
                 }
-                Write-Info "将创建新容器: $containerName（数据目录: home-data-$idx，位于部署目录下）"
+                Write-Info "将创建新容器: $containerName（数据目录: system-data-$idx，位于部署目录下）"
             } elseif ($choice -eq '2') {
                 # -- 升级模式：读取旧容器对应的配置，删除旧容器后复用相同配置 --
                 $upgradeContainerName = ""
@@ -3084,9 +3086,9 @@ function Main {
                 $containerName = $upgradeContainerName
 
                 # 读取旧容器的配置
-                $upgradeHomeDataName = "home-data"
+                $upgradeHomeDataName = "system-data"
                 if ($containerName -match '^openclaw-pro-(\d+)$') {
-                    $upgradeHomeDataName = "home-data-$($Matches[1])"
+                    $upgradeHomeDataName = "system-data-$($Matches[1])"
                 }
                 $upgradeConfigFile = Join-Path $homeBaseDir "$upgradeHomeDataName\.openclaw\docker-config.json"
                 $upgradeConfig = $null
@@ -3169,10 +3171,10 @@ function Main {
                 & docker rm -f $containerName 2>&1 | Out-Null
                 Start-Sleep -Seconds 2
                 Write-OK "旧容器已删除"
-                Write-Info "💡 数据目录 (home-data) 不会被删除，原有配置和数据均保留"
+                Write-Info "💡 数据目录 (system-data) 不会被删除，原有配置和数据均保留"
                 Write-Info "   如需彻底删除数据，请手动删除目录: $(Join-Path $homeBaseDir $upgradeHomeDataName)"
             } else {
-                # [3] 全量重装：删除旧容器，并删除对应配置与 home-data
+                # [3] 全量重装：删除旧容器，并删除对应配置与 system-data
                 if ($runningContainers.Count -eq 1) {
                     # 只有一个，直接删除
                     $rcName = ($runningContainers[0] -split '\|')[0]
@@ -3212,9 +3214,9 @@ function Main {
                 }
                 Start-Sleep -Seconds 2  # 等待端口释放
                 Write-OK "旧容器已删除"
-                $delHomeDataName = "home-data"
+                $delHomeDataName = "system-data"
                 if ($containerName -match '^openclaw-pro-(\d+)$') {
-                    $delHomeDataName = "home-data-$($Matches[1])"
+                    $delHomeDataName = "system-data-$($Matches[1])"
                 }
                 $delHomeDataPath = Join-Path $homeBaseDir $delHomeDataName
                 $delConfigPath = Join-Path $delHomeDataPath ".openclaw"
@@ -3270,10 +3272,10 @@ function Main {
             if ($LASTEXITCODE -eq 0) {
                 Write-OK "检测到本地镜像 openclaw-pro"
                 $localImageReleaseTag = ""
-                # 根据容器名确定对应的数据目录（openclaw-pro → home-data, openclaw-pro-2 → home-data-2）
-                $tagHomeDataName = "home-data"
+                # 根据容器名确定对应的数据目录（openclaw-pro → system-data, openclaw-pro-2 → system-data-2）
+                $tagHomeDataName = "system-data"
                 if ($containerName -match '^openclaw-pro-(\d+)$') {
-                    $tagHomeDataName = "home-data-$($Matches[1])"
+                    $tagHomeDataName = "system-data-$($Matches[1])"
                 }
 
                 # 检测本地镜像的 tag（lite/full/latest）以便与用户选择的镜像类型比对
@@ -3940,13 +3942,13 @@ function Main {
                 Write-OK "端口冲突已处理，已更新端口映射"
             }
 
-            # Create home-data directory — 数据目录放在用户运行脚本的目录下（与 openclaw-pro 代码目录平级）
-            # openclaw-pro     → home-data
-            # openclaw-pro-2   → home-data-2
-            # openclaw-pro-N   → home-data-N
-            $homeDataName = "home-data"
+            # Create system-data directory — 系统配置目录放在用户运行脚本的目录下
+            # openclaw-pro     → system-data
+            # openclaw-pro-2   → system-data-2
+            # openclaw-pro-N   → system-data-N
+            $homeDataName = "system-data"
             if ($containerName -match '^openclaw-pro-(\d+)$') {
-                $homeDataName = "home-data-$($Matches[1])"
+                $homeDataName = "system-data-$($Matches[1])"
             }
             $defaultHomeData = Join-Path $homeBaseDir $homeDataName
 
@@ -4033,6 +4035,25 @@ function Main {
             $finalImageId = & docker image inspect openclaw-pro --format '{{.Id}}' 2>$null
             Write-Log "Final image check OK. ID=$finalImageId"
 
+            # ── 获取宿主机用户信息（用于容器内创建同名用户）──
+            $hostUser = $env:USERNAME
+            $hostUid = ""
+            $hostGid = ""
+            $userHomeDir = ""
+            $userHomeName = "system-data"
+
+            if ($hostUser -and $hostUser -ne "root" -and $hostUser -ne "Administrator") {
+                # Windows 用户没有 UID/GID，容器内会自动分配
+                $userHomeName = "user-$hostUser"
+                $userHomeDir = Join-Path $homeBaseDir $userHomeName
+
+                # 创建用户持久化目录
+                if (-not (Test-Path $userHomeDir)) {
+                    New-Item -ItemType Directory -Path $userHomeDir -Force | Out-Null
+                }
+                Write-Info "创建用户持久化目录: $userHomeDir"
+            }
+
             # Build docker run arguments
             $runArgs = @(
                 "run", "-d",
@@ -4041,9 +4062,19 @@ function Main {
                 "--dns", "8.8.8.8",
                 "--dns", "8.8.4.4",
                 "-v", "${homeData}:/root",
-                "-e", "TZ=Asia/Shanghai",
-                "--restart", "unless-stopped"
+                "-e", "TZ=Asia/Shanghai"
             )
+
+            # 添加用户环境变量（用于容器内创建同名用户）
+            if ($hostUser -and $hostUser -ne "root" -and $hostUser -ne "Administrator") {
+                $runArgs += @("-e", "HOST_USER=$hostUser")
+                # 添加用户目录挂载
+                if ($userHomeDir -and (Test-Path $userHomeDir)) {
+                    $runArgs += @("-v", "${userHomeDir}:/home/$hostUser")
+                }
+            }
+
+            $runArgs += @("--restart", "unless-stopped")
             # 如果使用 IP 自签证书（internal），不要在宿主机上映射 HTTP 80
             $filteredPortArgs = @()
             for ($i = 0; $i -lt $deployConfig.PortArgs.Count; $i++) {
@@ -4128,16 +4159,8 @@ function Main {
                         Write-Warn "SSH 服务状态未确认，请稍后执行 docker logs $containerName 查看"
                     }
 
-                    # 强制应用 SSH 安全配置（禁用密码登录，仅允许密钥）
-                    # 使用 /etc/ssh/sshd_config.d/99-openclaw-security.conf 覆盖，避免被其他 include 文件反向覆盖
-                    & docker exec $containerName bash -lc "mkdir -p /etc/ssh/sshd_config.d && printf '%s\n' 'PermitRootLogin prohibit-password' 'PasswordAuthentication no' 'KbdInteractiveAuthentication no' 'ChallengeResponseAuthentication no' 'PubkeyAuthentication yes' > /etc/ssh/sshd_config.d/99-openclaw-security.conf" 2>$null | Out-Null
-                    & docker exec $containerName bash -lc "chmod 700 /root 2>/dev/null || true" 2>$null | Out-Null
-                    & docker exec $containerName bash -lc "if [ -f /etc/ssh/sshd_config ]; then sed -i -E 's|^[#[:space:]]*PermitRootLogin[[:space:]]+.*|PermitRootLogin prohibit-password|' /etc/ssh/sshd_config; sed -i -E 's|^[#[:space:]]*PasswordAuthentication[[:space:]]+.*|PasswordAuthentication no|' /etc/ssh/sshd_config; sed -i -E 's|^[#[:space:]]*KbdInteractiveAuthentication[[:space:]]+.*|KbdInteractiveAuthentication no|' /etc/ssh/sshd_config; sed -i -E 's|^[#[:space:]]*ChallengeResponseAuthentication[[:space:]]+.*|ChallengeResponseAuthentication no|' /etc/ssh/sshd_config; fi" 2>$null | Out-Null
-                    & docker exec $containerName bash -lc "mkdir -p /run/sshd; pkill -x sshd >/dev/null 2>&1 || true; (/usr/sbin/sshd >/dev/null 2>&1 || service ssh restart >/dev/null 2>&1 || true)" 2>$null | Out-Null
-
-                    $script:sshPasswordAuthDisabled = $true
-                    Write-OK "SSH 密码登录已禁用（仅密钥登录）"
-
+                    # ── SSH 安全配置：禁用密码登录，禁用 root 登录，仅密钥登录 ──
+                    # 配置由 start-services.sh 自动完成，这里仅注入公钥到普通用户
                     $pubKeyCandidates = @(
                         (Join-Path $env:USERPROFILE ".ssh\id_ed25519.pub"),
                         (Join-Path $env:USERPROFILE ".ssh\id_rsa.pub"),
@@ -4169,17 +4192,40 @@ function Main {
                     # 去重
                     $pubKeyCandidates = $pubKeyCandidates | Where-Object { $_ } | Select-Object -Unique
                     $injected = $false
-                    foreach ($keyFile in $pubKeyCandidates) {
-                        if (-not (Test-Path $keyFile)) { continue }
-                        & docker exec $containerName bash -lc "chmod 700 /root 2>/dev/null || true; mkdir -p /root/.ssh && chmod 700 /root/.ssh" 2>$null | Out-Null
-                        & docker cp $keyFile "${containerName}:/root/.ssh/authorized_keys.tmp" 2>$null | Out-Null
-                        if ($LASTEXITCODE -ne 0) { continue }
-                        & docker exec $containerName bash -lc "cat /root/.ssh/authorized_keys.tmp >> /root/.ssh/authorized_keys && sort -u -o /root/.ssh/authorized_keys /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && rm -f /root/.ssh/authorized_keys.tmp" 2>$null | Out-Null
-                        if ($LASTEXITCODE -eq 0) {
-                            $script:sshInjectedKeyPath = $keyFile
-                            $injected = $true
-                            Write-OK "已自动注入宿主机 SSH 公钥: $keyFile"
-                            break
+
+                    # 注入到普通用户（如果有）
+                    if ($hostUser -and $hostUser -ne "root" -and $hostUser -ne "Administrator") {
+                        foreach ($keyFile in $pubKeyCandidates) {
+                            if (-not (Test-Path $keyFile)) { continue }
+                            Write-Info "注入公钥到用户 $hostUser : $keyFile"
+                            & docker exec $containerName bash -lc "mkdir -p '/home/$hostUser/.ssh' && chmod 700 '/home/$hostUser/.ssh'" 2>$null | Out-Null
+                            & docker cp $keyFile "${containerName}:/tmp/host_user_key.pub" 2>$null | Out-Null
+                            if ($LASTEXITCODE -eq 0) {
+                                & docker exec $containerName bash -lc "cat /tmp/host_user_key.pub >> '/home/$hostUser/.ssh/authorized_keys' && sort -u -o '/home/$hostUser/.ssh/authorized_keys' '/home/$hostUser/.ssh/authorized_keys' && chmod 600 '/home/$hostUser/.ssh/authorized_keys' && chown -R '$hostUser:$hostUser' '/home/$hostUser/.ssh' && rm -f /tmp/host_user_key.pub" 2>$null | Out-Null
+                                if ($LASTEXITCODE -eq 0) {
+                                    $script:sshInjectedKeyPath = $keyFile
+                                    $injected = $true
+                                    Write-OK "已自动注入宿主机 SSH 公钥到用户 $hostUser : $keyFile"
+                                    break
+                                }
+                            }
+                        }
+                    }
+
+                    if (-not $injected) {
+                        # 降级：没有普通用户时，注入到 root（兼容旧行为）
+                        foreach ($keyFile in $pubKeyCandidates) {
+                            if (-not (Test-Path $keyFile)) { continue }
+                            & docker exec $containerName bash -lc "chmod 700 /root 2>/dev/null || true; mkdir -p /root/.ssh && chmod 700 /root/.ssh" 2>$null | Out-Null
+                            & docker cp $keyFile "${containerName}:/root/.ssh/authorized_keys.tmp" 2>$null | Out-Null
+                            if ($LASTEXITCODE -ne 0) { continue }
+                            & docker exec $containerName bash -lc "cat /root/.ssh/authorized_keys.tmp >> /root/.ssh/authorized_keys && sort -u -o /root/.ssh/authorized_keys /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && rm -f /root/.ssh/authorized_keys.tmp" 2>$null | Out-Null
+                            if ($LASTEXITCODE -eq 0) {
+                                $script:sshInjectedKeyPath = $keyFile
+                                $injected = $true
+                                Write-OK "已自动注入宿主机 SSH 公钥: $keyFile"
+                                break
+                            }
                         }
                     }
 
@@ -4222,24 +4268,12 @@ function Main {
                         Write-Warn "未发现可用宿主机公钥（id_ed25519/id_rsa/id_ecdsa），请手动注入 authorized_keys"
                     }
 
-                    $rootPwdFile = Join-Path $configDir "root-initial-password.txt"
-                    if (-not (Test-Path $rootPwdFile)) {
-                        $initPwd = New-StrongPassword -Length 20
-                        ("root:{0}" -f $initPwd) | & docker exec -i $containerName chpasswd 2>$null | Out-Null
-                        if ($LASTEXITCODE -eq 0) {
-                            $initPwd | Set-Content -Path $rootPwdFile -Force
-                            $script:rootPasswordFilePath = $rootPwdFile
-                            Write-OK "已生成并设置 root 初始密码（已保存到本地文件）"
-                        } else {
-                            Write-Warn "设置 root 初始密码失败，可稍后进入容器手动执行 passwd root"
-                        }
-                    } else {
-                        $script:rootPasswordFilePath = $rootPwdFile
-                        Write-Info "检测到已存在 root 初始密码文件，沿用现有值"
-                    }
+                    # 保存部署信息（供后续显示）
+                    $script:sshPasswordAuthDisabled = $true
+                    $script:hostUserForSSH = $hostUser
                 } catch {
                     Write-Log "Post-deploy SSH/bootstrap step failed: $_" "WARN"
-                    Write-Warn "安装后 SSH/公钥/初始密码收尾步骤部分失败，请在完成页按提示手动处理"
+                    Write-Warn "安装后 SSH/公钥收尾步骤部分失败，请在完成页按提示手动处理"
                 }
 
                 if ($deployConfig.HttpsEnabled) {
@@ -4803,9 +4837,9 @@ function Main {
                     Write-Info "正在重试启动容器..."
                     $retryHomeData = if ([string]::IsNullOrWhiteSpace("$homeData")) { $defaultHomeData } else { $homeData }
                     if ([string]::IsNullOrWhiteSpace("$retryHomeData")) {
-                        $retryHomeDataName = "home-data"
+                        $retryHomeDataName = "system-data"
                         if ($containerName -match '^openclaw-pro-(\d+)$') {
-                            $retryHomeDataName = "home-data-$($Matches[1])"
+                            $retryHomeDataName = "system-data-$($Matches[1])"
                         }
                         $retryHomeData = Join-Path $homeBaseDir $retryHomeDataName
                         Write-Info "检测到数据目录变量为空，回退到默认数据目录: $retryHomeData"

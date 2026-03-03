@@ -515,7 +515,7 @@ $config = $configJson | ConvertFrom-Json
 Write-Dim "域名: $($config.domain)"
 Write-Dim "HTTP 端口: $($config.http_port)  HTTPS 端口: $($config.https_port)"
 
-# 获取挂载点（home-data 路径）
+# 获取挂载点（system-data 路径）
 $homeDataMount = ""
 try {
     $mounts = (& docker inspect $CONTAINER_NAME --format '{{json .Mounts}}' 2>$null) | ConvertFrom-Json
@@ -528,7 +528,7 @@ try {
 } catch {}
 
 if (-not $homeDataMount) {
-    Write-Err "无法获取 home-data 挂载路径"
+    Write-Err "无法获取 system-data 挂载路径"
     Read-Host "按回车退出"
     return
 }
