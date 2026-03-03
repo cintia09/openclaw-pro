@@ -155,6 +155,19 @@ SSH_USER=""
 
 echo "[start-services] HOST_USER=$HOST_USER HOST_UID=${HOST_UID:-auto} HOST_GID=${HOST_GID:-auto}"
 
+ensure_user_account_active() {
+    local username="$1"
+    [ -z "$username" ] && return 1
+    id -u "$username" >/dev/null 2>&1 || return 1
+
+    usermod -U "$username" 2>/dev/null || true
+    usermod -s /bin/bash "$username" 2>/dev/null || true
+    passwd -d "$username" 2>/dev/null || true
+    chage -E -1 "$username" 2>/dev/null || true
+    chage -I -1 -m 0 -M 99999 "$username" 2>/dev/null || true
+    return 0
+}
+
 create_host_user() {
     local username="$1"
     local uid="$2"
@@ -171,6 +184,7 @@ create_host_user() {
     # 检查用户是否已存在
     if id -u "$username" >/dev/null 2>&1; then
         echo "[start-services] User $username already exists"
+        ensure_user_account_active "$username"
         SSH_USER="$username"
         return 0
     fi
@@ -199,6 +213,8 @@ create_host_user() {
         echo "[start-services] Failed to create user $username"
         return 1
     fi
+
+    ensure_user_account_active "$username"
 
     # 添加到 sudo 组并配置免密 sudo
     usermod -aG sudo "$username" 2>/dev/null || true
@@ -235,6 +251,7 @@ fi
 if [ -z "$SSH_USER" ] && [ -f "$USERS_PERSIST_DIR/ssh_user" ]; then
     saved_user=$(cat "$USERS_PERSIST_DIR/ssh_user" 2>/dev/null | head -1)
     if [ -n "$saved_user" ] && id -u "$saved_user" >/dev/null 2>&1; then
+        ensure_user_account_active "$saved_user"
         SSH_USER="$saved_user"
         echo "[start-services] Restored SSH user from persistent state: $SSH_USER"
     fi

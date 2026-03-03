@@ -1998,7 +1998,12 @@ function Show-Completion {
         Write-Host "     docker logs $showContainerName       # 查看日志" -ForegroundColor Gray
         Write-Host "     docker stop $showContainerName       # 停止服务" -ForegroundColor Gray
         Write-Host "     docker start $showContainerName      # 启动服务" -ForegroundColor Gray
-        Write-Host "     docker exec -it $showContainerName bash  # 进入容器终端" -ForegroundColor Gray
+        $showExecUser = if ($script:hostUserForSSH -and $script:hostUserForSSH -ne "root") { $script:hostUserForSSH } else { "" }
+        if ($showExecUser) {
+            Write-Host "     docker exec -it -u $showExecUser $showContainerName bash  # 以普通用户进入容器终端" -ForegroundColor Gray
+        } else {
+            Write-Host "     docker exec -it $showContainerName bash  # 进入容器终端" -ForegroundColor Gray
+        }
         Write-Host ""
         Write-Host "  🔐 SSH 登录信息：" -ForegroundColor White
         if ($script:sshServiceReady) {
@@ -5026,16 +5031,29 @@ function Main {
 
     if ($launched) {
         $enterContainerName = if ($script:deployedContainerName) { $script:deployedContainerName } else { "openclaw-pro" }
+        $enterExecUser = if ($script:hostUserForSSH -and $script:hostUserForSSH -ne "root") { $script:hostUserForSSH } else { "" }
         Write-LaunchAccessSummary -IsDockerDesktop $dockerDesktopMode -GatewayPort $gwPort -PanelPort $wpPort -Domain $dom -CertMode $cmode -HttpPort $hPort -HttpsPort $hsPort -SshPort $sPort
         Write-Host "  ==================================================" -ForegroundColor DarkCyan
         Write-Host "  🚪 默认进入容器终端（输入 exit 返回）" -ForegroundColor Cyan
-        Write-Host "     docker exec -it $enterContainerName bash" -ForegroundColor Yellow
+        if ($enterExecUser) {
+            Write-Host "     docker exec -it -u $enterExecUser $enterContainerName bash" -ForegroundColor Yellow
+        } else {
+            Write-Host "     docker exec -it $enterContainerName bash" -ForegroundColor Yellow
+        }
         Write-Host "  ==================================================" -ForegroundColor DarkCyan
         Write-Host ""
         try {
-            & docker exec -it $enterContainerName bash
+            if ($enterExecUser) {
+                & docker exec -it -u $enterExecUser $enterContainerName bash
+            } else {
+                & docker exec -it $enterContainerName bash
+            }
         } catch {
-            Write-Warn "自动进入容器失败，请手动执行: docker exec -it $enterContainerName bash"
+            if ($enterExecUser) {
+                Write-Warn "自动进入容器失败，请手动执行: docker exec -it -u $enterExecUser $enterContainerName bash"
+            } else {
+                Write-Warn "自动进入容器失败，请手动执行: docker exec -it $enterContainerName bash"
+            }
         }
     }
 
