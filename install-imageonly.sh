@@ -253,13 +253,34 @@ build_download_urls(){
 
 check_local_tarball(){
   local target="$TMP_DIR/$IMAGE_TARBALL"
+  local target_meta="$target.meta"
+  local expected_sig="${TAG}|${IMAGE_TARBALL}"
+
   [ ! -f "$target" ] && return 1
+
+  # 检查版本签名（避免使用旧版本镜像）
+  if [ -f "$target_meta" ]; then
+    local meta_sig
+    meta_sig="$(awk -F= '/^sig=/{print substr($0,5); exit}' "$target_meta" 2>/dev/null || true)"
+    if [ -n "$meta_sig" ] && [ "$meta_sig" != "$expected_sig" ]; then
+      warn "检测到旧版本本地镜像（$meta_sig），当前需要 ${TAG}，已清理"
+      rm -f "$target" "$target_meta" || true
+      return 1
+    fi
+  else
+    # 无版本标记的本地镜像，清理避免跨版本复用
+    warn "检测到无版本标记的本地镜像，已清理避免跨版本复用"
+    rm -f "$target" || true
+    return 1
+  fi
+
+  # 检查 gzip 完整性
   if gzip -t "$target" >/dev/null 2>&1; then
     info "检测到本地镜像且校验通过：$target"
     return 0
   fi
   warn "检测到本地镜像损坏（gzip 校验失败），将自动删除并重新下载"
-  rm -f "$target" || true
+  rm -f "$target" "$target_meta" || true
   return 1
 }
 
