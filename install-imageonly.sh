@@ -21,7 +21,9 @@ TARGET_DIR="${TARGET_DIR:-$(pwd)}"
 BASE_DIR="${TARGET_DIR}/openclaw-pro"
 TMP_DIR="$BASE_DIR"
 HOME_DIR="$BASE_DIR/home-data"
-CONFIG_FILE="$HOME_DIR/.openclaw/docker-config.json"
+ROOT_HOME_DIR="$HOME_DIR/root"
+CONFIG_FILE="$ROOT_HOME_DIR/.openclaw/docker-config.json"
+CONFIG_FILE_LEGACY="$HOME_DIR/.openclaw/docker-config.json"
 LOG_FILE="$BASE_DIR/install.log"
 ROOT_PASSWORD_FILE="$BASE_DIR/root-initial-password.txt"
 
@@ -55,7 +57,10 @@ UPGRADE_MODE="false"
 # ─── helpers ──────────────────────────────────────────────────
 
 init_dirs(){
-  mkdir -p "$TMP_DIR" "$HOME_DIR" "$HOME_DIR/.openclaw"
+  mkdir -p "$TMP_DIR" "$HOME_DIR" "$ROOT_HOME_DIR" "$ROOT_HOME_DIR/.openclaw"
+  if [ ! -f "$CONFIG_FILE" ] && [ -f "$CONFIG_FILE_LEGACY" ]; then
+    cp -f "$CONFIG_FILE_LEGACY" "$CONFIG_FILE" 2>/dev/null || true
+  fi
   touch "$LOG_FILE" 2>/dev/null || true
 }
 
@@ -175,13 +180,15 @@ apply_port_conflicts(){
 
 safe_json_value(){
   local key="$1"
-  [ ! -f "$CONFIG_FILE" ] && return 0
+  local cfg="$CONFIG_FILE"
+  [ ! -f "$cfg" ] && [ -f "$CONFIG_FILE_LEGACY" ] && cfg="$CONFIG_FILE_LEGACY"
+  [ ! -f "$cfg" ] && return 0
   grep -oE "\"${key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"|\"${key}\"[[:space:]]*:[[:space:]]*[0-9]+|\"${key}\"[[:space:]]*:[[:space:]]*(true|false)" \
-    "$CONFIG_FILE" 2>/dev/null | head -1 | sed -E 's/^.*:[[:space:]]*//; s/^"//; s/"$//' || true
+    "$cfg" 2>/dev/null | head -1 | sed -E 's/^.*:[[:space:]]*//; s/^"//; s/"$//' || true
 }
 
 load_existing_config(){
-  [ ! -f "$CONFIG_FILE" ] && return 1
+  [ ! -f "$CONFIG_FILE" ] && [ ! -f "$CONFIG_FILE_LEGACY" ] && return 1
   local v
   v="$(safe_json_value port)";       [ -n "$v" ] && GW_PORT="$v"
   v="$(safe_json_value web_port)";   [ -n "$v" ] && WEB_PORT="$v"
@@ -737,28 +744,30 @@ prompt_hotpatch_first_if_applicable(){
 
 reset_home_data_dir(){
   if rm -rf "$HOME_DIR" 2>/dev/null; then
-    mkdir -p "$HOME_DIR/.openclaw"
+    mkdir -p "$ROOT_HOME_DIR/.openclaw"
+    find "$BASE_DIR" -maxdepth 1 -mindepth 1 \( -name 'system-data' -o -name 'user-*' \) -exec rm -rf {} + 2>/dev/null || true
     return 0
   fi
 
-  warn "普通权限删除 system-data 失败，尝试通过 Docker 提权清理..."
+  warn "普通权限删除 home-data 失败，尝试通过 Docker 提权清理..."
   if docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
-    if docker run --rm -v "$BASE_DIR:/work" --entrypoint sh "$IMAGE_NAME" -lc 'rm -rf /work/system-data' >/dev/null 2>&1; then
-      mkdir -p "$HOME_DIR/.openclaw"
+    if docker run --rm -v "$BASE_DIR:/work" --entrypoint sh "$IMAGE_NAME" -lc 'rm -rf /work/home-data /work/system-data /work/user-*' >/dev/null 2>&1; then
+      mkdir -p "$ROOT_HOME_DIR/.openclaw"
       return 0
     fi
   fi
 
   if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
     if sudo rm -rf "$HOME_DIR" >/dev/null 2>&1; then
-      sudo mkdir -p "$HOME_DIR/.openclaw" >/dev/null 2>&1 || true
+      sudo mkdir -p "$ROOT_HOME_DIR/.openclaw" >/dev/null 2>&1 || true
       sudo chown -R "$(id -u):$(id -g)" "$HOME_DIR" >/dev/null 2>&1 || true
+      find "$BASE_DIR" -maxdepth 1 -mindepth 1 \( -name 'system-data' -o -name 'user-*' \) -exec rm -rf {} + 2>/dev/null || true
       return 0
     fi
   fi
 
-  warn "未能完全清理 system-data（权限受限），将保留目录继续。"
-  mkdir -p "$HOME_DIR/.openclaw"
+  warn "未能完全清理 home-data（权限受限），将保留目录继续。"
+  mkdir -p "$ROOT_HOME_DIR/.openclaw"
 }
 
 
@@ -768,7 +777,7 @@ handle_existing_installation(){
   local exists running choice installed_tag latest_matched
   exists="$(docker ps -a --filter "name=^/${CONTAINER_NAME}$" --format '{{.Names}}' | head -1 || true)"
   running="$(docker ps   --filter "name=^/${CONTAINER_NAME}$" --format '{{.Names}}' | head -1 || true)"
-  [ -z "$exists" ] && [ ! -f "$CONFIG_FILE" ] && return 0
+  [ -z "$exists" ] && [ ! -f "$CONFIG_FILE" ] && [ ! -f "$CONFIG_FILE_LEGACY" ] && return 0
 
   warn "检测到已有安装（容器或配置已存在）。"
   show_upgrade_detection
@@ -914,7 +923,7 @@ F2B
 # ─── container create & start ─────────────────────────────────
 
 create_and_start(){
-  local host_user host_uid host_gid user_home_dir key_injected ssh_login_user user_ready ssh_hardened
+  local host_user host_uid host_gid root_home_dir user_home_dir key_injected ssh_login_user user_ready ssh_hardened
   host_user="$(id -un 2>/dev/null || true)"
   host_uid="$(id -u 2>/dev/null || true)"
   host_gid="$(id -g 2>/dev/null || true)"
@@ -923,18 +932,18 @@ create_and_start(){
   user_ready="false"
   ssh_hardened="false"
 
-  # 创建持久化目录
-  # - system-data: 系统配置（挂载到 /root）
-  # - user-{username}: 用户个人数据（挂载到 /home/{username}）
-  local system_data_dir="$BASE_DIR/system-data"
-  local user_home_dir=""
+  # 创建持久化目录（对齐 Windows）
+  # - home-data/root: root 用户数据（挂载到 /root）
+  # - home-data/{username}: 普通用户数据（挂载到 /home/{username}）
+  root_home_dir="$HOME_DIR/root"
+  user_home_dir=""
 
-  mkdir -p "$system_data_dir/.openclaw"
-  chmod 700 "$system_data_dir" || true
+  mkdir -p "$root_home_dir/.openclaw"
+  chmod 700 "$root_home_dir" || true
 
   # 创建用户 home 目录
   if [ -n "$host_user" ] && [ "$host_user" != "root" ]; then
-    user_home_dir="$BASE_DIR/user-$host_user"
+    user_home_dir="$HOME_DIR/$host_user"
     mkdir -p "$user_home_dir"
     chmod 700 "$user_home_dir" || true
     info "创建用户持久化目录: $user_home_dir"
@@ -956,7 +965,7 @@ create_and_start(){
 
   # Build volume arguments
   local vol_args=()
-  vol_args+=(-v "$HOME_DIR:/root")  # root 用户数据
+  vol_args+=(-v "$root_home_dir:/root")  # root 用户数据
   if [ -n "$host_user" ] && [ "$host_user" != "root" ] && [ -d "$user_home_dir" ]; then
     vol_args+=(-v "$user_home_dir:/home/$host_user")  # 普通用户数据
   fi
