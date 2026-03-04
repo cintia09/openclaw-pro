@@ -1,4 +1,4 @@
-# OpenClaw 安装/更新/启动重构设计文档
+# OpenClaw 安装/更新/启动重构设计文档（按当前代码校准）
 
 ## 1. 背景与目标
 
@@ -26,22 +26,30 @@
   - 已有从 GitHub Release 获取源码包并本地编译的命令构建器（`buildOpenClawSourceInstallCommand`）。
   - 已有 OpenClaw 状态接口（`/api/openclaw`）及任务轮询接口。
   - 已有配置备份列表与恢复接口（`/api/openclaw/config/backups`、`/api/openclaw/config/restore`）。
+  - 接口鉴权已接入（`app.use('/api', requireAuthApi)`，未登录返回 401）。
 - `scripts/openclaw-gateway-watchdog.sh`
   - 已有 watchdog 单实例锁、进程/端口健康检测、自动重启。
   - 已有“配置变更自动备份”（hash 比对）。
-  - 已有“配置失败时自动回滚最近备份”逻辑。
+  - 已有“配置失败时自动回滚最近备份并重试一次”逻辑。
 - `web/public/app.js`
   - 已有安装/更新/重启按钮及并发禁用逻辑（`syncOpenClawButtons`）。
   - 已有手动配置恢复流程（当前为 `prompt` 输入选择）。
   - 已有状态轮询并更新 OpenClaw 卡片状态。
 
-### 2.2 主要差距
+### 2.2 Docker 镜像编译依赖检查结论
 
-1. **“官方 repo 源码构建”入口不够显式**：需要明确默认仓库策略、来源可追踪信息、失败回退规则。
-2. **watchdog 回滚策略需强化“只自动恢复一次”**：当前逻辑隐式，需状态化，避免反复抖动。
+- `Dockerfile` / `Dockerfile.lite` 已内置源码构建关键依赖：`nodejs 22`、`npm`、`git`、`curl`、`tar`、`python3`、`build-essential`。
+- 镜像已预装 `pnpm@10.23.0` 与 `rolldown@1.0.0-rc.6`（降低运行时安装抖动）。
+- `buildOpenClawSourceInstallCommand` 在 node/npm 缺失时仍有兜底安装逻辑（`apt + nodesource`）。
+- 结论：按当前安装链路（`npm install` + `npm run build/compile`）所需依赖已覆盖；当前流程未显式使用 `cmake` 等额外 C/C++ 工具链。
+
+### 2.3 主要差距
+
+1. **源码来源约束仍可增强**：当前默认仓库为 `openclaw/openclaw`，但允许环境变量覆写，尚未做仓库白名单开关。
+2. **watchdog “单次自动回滚”仍为隐式逻辑**：当前通过失败后仅回滚并重试一次实现，缺少结构化状态字段与事件指标。
 3. **手动恢复交互较弱**：当前 `prompt` 方式不适合备份较多场景，缺少按时间可视化选择。
 4. **状态面统一度不足**：Web 状态、watchdog 事件、控制台反馈需同源并可解释（如“已回滚/待人工处理”）。
-5. **安装/更新/重启互斥策略需标准化**：前端与后端都要有统一 operation lock，防止并发请求穿透。
+5. **后端互斥锁仍分散**：当前为安装任务锁、修复文件锁、重启布尔锁，尚未统一 operation lock 域。
 
 ---
 
@@ -120,7 +128,7 @@ Watchdog (openclaw-gateway-watchdog.sh)
 规则：
 
 1. 任一非 `idle` 状态时，安装/更新/重启/恢复按钮全部禁用。
-2. 后端接口执行前必须先检查 operation lock。
+2. 后端接口执行前必须先检查 operation lock（当前为分散锁，见第 11 节）。
 3. 前端状态以 `/api/openclaw` 返回的远端状态为准，本地状态仅作过渡。
 
 ### 6.2 watchdog 启动状态机
@@ -130,7 +138,7 @@ Watchdog (openclaw-gateway-watchdog.sh)
 - `failed_config` → `rollback_once` → `starting`
 - `rollback_once` 后再次失败 → `failed_manual_intervention`
 
-核心约束：**每次启动周期最多自动回滚一次**。
+核心约束：每次启动流程仅自动回滚并重试一次。
 
 ---
 
@@ -139,28 +147,27 @@ Watchdog (openclaw-gateway-watchdog.sh)
 ## 7.1 安装流程（从官方 GitHub repo 源码）
 
 1. Web 调用 `POST /api/openclaw/install`。
-2. 后端获取 operation lock；若已有任务则返回复用 taskId。
-3. 获取 release 信息（默认 `openclaw/openclaw`，可配置但必须校验）。
-4. 下载 tarball（支持缓存与重试），失败回退 `git clone --branch <tag>`。
-5. 安装依赖并本地构建（容器内）。
-6. 原子替换运行目录（先构建到临时目录，成功后切换）。
-7. 写入安装元数据（repo/tag/tarball/installedAt）。
-8. 调用 Gateway 重启（仅杀进程，由 watchdog 拉起）。
-9. 等待健康检查结果并写入任务日志。
-10. 释放 operation lock。
+2. 若安装任务已在运行，后端直接返回复用 `taskId`。
+3. 解析源码仓库（优先环境变量，其次 npm metadata，最终默认 `openclaw/openclaw`）。
+4. 拉取 `releases/latest` 并生成 codeload tarball 地址。
+5. 下载 tarball（本地缓存 + 重试），失败回退 `git clone --branch <tag>`。
+6. 依赖校验与构建（node/npm 检查、npm 依赖安装、pnpm 可用性检查、执行 `build`/`compile` 脚本）。
+7. 原子替换运行目录（先构建到临时目录，成功后切换）。
+8. 写入安装元数据（repo/tag/tarball/installedAt）。
+9. 任务成功后由前端触发 `POST /api/openclaw/start`，仅终止 gateway 进程，由 watchdog 拉起。
 
 ## 7.2 更新流程
 
 与安装流程一致，区别为：
 
-- 对比当前版本与最新 release tag；
-- 若已是最新可直接返回；
-- 成功后保留更新前版本信息用于审计。
+- 前端在调用前先通过 `/api/openclaw` 判断 `hasUpdate`。
+- 后端 `POST /api/openclaw/update` 当前复用安装构建流程。
+- 成功后重启链路同安装流程（由 watchdog 拉起）。
 
 ## 7.3 Gateway 重启流程
 
 1. `POST /api/openclaw/start`。
-2. 后端检查 operation lock 并置 `restarting_gateway`。
+2. 后端检查 `gatewayRestartRunning` 布尔锁并置位。
 3. 仅终止 gateway 进程，不直接启动。
 4. watchdog 检测到 down 后执行标准启动流程。
 5. 启动成功后触发配置变更检查与备份。
@@ -172,7 +179,7 @@ Watchdog (openclaw-gateway-watchdog.sh)
 
 ## 8.1 自动备份触发条件
 
-触发时机：**Gateway 启动成功（healthy）后**。
+触发时机：Gateway 启动成功（healthy）后。
 
 策略：
 
@@ -189,10 +196,9 @@ Watchdog (openclaw-gateway-watchdog.sh)
 
 处理：
 
-1. 若本启动周期未执行过自动回滚，则从 `.last_good`（无则最近备份）恢复；
-2. 标记 `rollback_attempted=1`；
-3. 再次启动一次；
-4. 若仍失败，进入 `failed_manual_intervention`，等待用户手动恢复。
+1. 若本启动周期未执行过自动回滚，则从 `.last_good`（无则最近备份）恢复。
+2. 同一启动流程内仅重试一次。
+3. 若仍失败，进入 `failed_manual_intervention`，等待用户手动恢复。
 
 ---
 
@@ -203,11 +209,11 @@ Watchdog (openclaw-gateway-watchdog.sh)
 沿用并增强：
 
 - `GET /api/openclaw/config/backups`
-  - 返回字段：`name, size, mtimeMs, mtime, hash(可选), source(可选), isLastGood(可选)`
+  - 当前返回字段：`name, path, size, mtimeMs, mtime`
   - 默认按 `mtime desc` 排序。
 - `POST /api/openclaw/config/restore`
-  - 入参：`name`, `restartGateway`（可选，默认 false）
-  - 行为：恢复前先备份当前配置到 `*.before-restore.<ts>.bak`，再拷贝目标备份。
+  - 当前入参：`name`
+  - 行为：恢复前先备份当前配置到 `openclaw.json.before-restore.<ts>.bak`，再拷贝目标备份。
 
 ## 9.2 前端交互
 
@@ -237,14 +243,19 @@ Watchdog (openclaw-gateway-watchdog.sh)
 
 ## 10.2 状态显示一致性
 
-`/api/openclaw` 增强输出：
+`/api/openclaw` 当前已输出：
 
-- `installed, version, latestVersion, hasUpdate`
+- `installed, version, latestVersion, hasUpdate, updateCheckError`
 - `gatewayRunning`
-- `gatewayWatchdogRunning`（建议新增）
-- `operationState`（建议新增）
-- `lastBackupAt` / `lastRollbackAt`（建议新增）
+- `installSource`
+- `installTaskRunning, repairTaskRunning, gatewayRestartRunning`
 - `invalidConfigKeys`
+
+建议新增：
+
+- `gatewayWatchdogRunning`
+- `operationState`
+- `lastBackupAt` / `lastRollbackAt`
 
 Web 卡片与 Gateway 控制台统一展示：
 
@@ -257,11 +268,19 @@ Web 卡片与 Gateway 控制台统一展示：
 
 ## 11. 并发控制与幂等
 
+当前实现：
+
+1. install/update 复用 `activeInstallTaskId` 作为任务幂等入口。
+2. repair 使用独立文件锁 `REPAIR_LOCK_FILE=/tmp/openclaw-config-repair.lock`。
+3. gateway restart 使用 `gatewayRestartRunning` 布尔锁。
+4. watchdog 单实例锁已实现（`flock + lock_dir`）。
+
+待完善：
+
 1. 后端统一 operation lock（文件锁或内存锁+pid 校验）：
    - `/tmp/openclaw-operation.lock`
-2. install/update/start/repair 必须共享同一锁域。
-3. 重复请求返回同一 taskId（幂等复用）。
-4. watchdog 单实例锁继续保留（已存在）。
+2. install/update/start/repair 共享同一锁域。
+3. 明确跨接口复用策略（统一 taskId 或标准拒绝码）。
 
 ---
 
@@ -284,10 +303,10 @@ Web 卡片与 Gateway 控制台统一展示：
 
 ### 12.2 供应链与源码安装安全
 
-1. 默认仓库固定为官方仓库（`openclaw/openclaw`），自定义仓库必须通过白名单开关显式启用。
+1. 当前默认仓库为官方仓库（`openclaw/openclaw`），但允许通过 `OPENCLAW_SOURCE_REPO` 覆写；建议增加白名单开关。
 2. 仅允许 `https://github.com/<owner>/<repo>` 与 GitHub release tarball 源。
-3. 强制记录安装来源元数据（repo/tag/tarballUrl/hash/installedAt）到 `/root/.openclaw/openclaw-source-install.json`。
-4. 对下载 tarball 执行完整性校验（`tar -tzf` + 可选 sha256 校验），失败不进入构建阶段。
+3. 当前已记录安装来源元数据（`repo/tag/tarballUrl/installedAt`）到 `/root/.openclaw/openclaw-source-install.json`。
+4. 对下载 tarball 执行完整性校验（`tar -tzf`），失败不进入构建阶段。
 5. 构建时使用最小权限环境，不允许执行来源不明的额外脚本（仅执行受控 npm/build 命令）。
 
 ### 12.3 配置备份/恢复安全
@@ -298,7 +317,7 @@ Web 卡片与 Gateway 控制台统一展示：
 4. 备份目录权限建议：
    - `/root/.openclaw/config-backups`：`700`
    - 备份文件：`600`
-5. 恢复动作必须审计（记录操作者会话、时间、目标备份、恢复结果）。
+5. 恢复动作审计（记录操作者会话、时间、目标备份、恢复结果）为待补齐项。
 
 ### 12.4 API 与会话安全
 
@@ -325,7 +344,7 @@ Web 卡片与 Gateway 控制台统一展示：
 
 ---
 
-## 13. 可观测性设计
+## 13. 可观测性设计（待增强）
 
 watchdog 日志统一事件前缀：
 
@@ -349,17 +368,17 @@ Web 状态接口聚合以下信号：
 
 ## 14.1 功能测试
 
-1. **安装**：全新环境从官方 GitHub repo 安装成功，Gateway 由 watchdog 拉起。
-2. **更新**：检测到新版本后更新成功，状态正确刷新。
-3. **自动备份**：修改配置并重启成功后生成新备份。
-4. **自动回滚**：注入无效配置，启动失败触发一次自动回滚并恢复。
-5. **手动恢复**：Web 选择指定时间备份恢复成功。
-6. **按钮禁用**：安装/更新/重启期间相关按钮不可用。
-7. **状态一致**：Web 状态、watchdog 日志、Gateway 控制台状态一致。
+1. 安装：全新环境从官方 GitHub repo 安装成功，Gateway 由 watchdog 拉起。
+2. 更新：检测到新版本后更新成功，状态正确刷新。
+3. 自动备份：修改配置并重启成功后生成新备份。
+4. 自动回滚：注入无效配置，启动失败触发一次自动回滚并恢复。
+5. 手动恢复：Web 选择指定时间备份恢复成功。
+6. 按钮禁用：安装/更新/重启期间相关按钮不可用。
+7. 状态一致：Web 状态、watchdog 日志、Gateway 控制台状态一致。
 
 ## 14.2 失败场景
 
-- GitHub 下载失败（重试+回退 git clone）。
+- GitHub 下载失败（重试 + 回退 git clone）。
 - 构建失败（任务失败并保留日志）。
 - 无可用备份时自动回滚失败（明确提示人工恢复）。
 - 自动回滚后仍失败（不再自动循环）。
@@ -389,14 +408,14 @@ Web 状态接口聚合以下信号：
 
 ## 16. 需求映射（逐条对应）
 
-1. **GitHub 官方 repo + 本地编译安装**：第 7.1 节。
-2. **watchdog 启动**：第 6.2/7.3 节。
-3. **成功重启后配置变更自动备份**：第 8.1 节。
-4. **配置问题导致启动失败时自动恢复一次**：第 8.2 节。
-5. **Web 手动按时间恢复备份**：第 9 节。
-6. **安装/更新/重启期间按钮禁用**：第 10.1 节。
-7. **安装启动后 Web 状态正确反映**：第 10.2 节。
-8. **Gateway 启动后控制台状态正确反映**：第 10.2/13 节。
+1. GitHub 官方 repo + 本地编译安装：第 7.1 节。
+2. watchdog 启动：第 6.2/7.3 节。
+3. 成功重启后配置变更自动备份：第 8.1 节。
+4. 配置问题导致启动失败时自动恢复一次：第 8.2 节。
+5. Web 手动按时间恢复备份：第 9 节。
+6. 安装/更新/重启期间按钮禁用：第 10.1 节。
+7. 安装启动后 Web 状态正确反映：第 10.2 节。
+8. Gateway 启动后控制台状态正确反映：第 10.2/13 节。
 
 ---
 
