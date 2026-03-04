@@ -454,6 +454,25 @@ pull_from_ghcr(){
   return 1
 }
 
+tag_loaded_image_if_needed(){
+  if docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local loaded_ref=""
+  if docker image inspect "openclaw-pro:lite" >/dev/null 2>&1; then
+    loaded_ref="openclaw-pro:lite"
+  elif docker image inspect "ghcr.io/${GITHUB_REPO}:lite" >/dev/null 2>&1; then
+    loaded_ref="ghcr.io/${GITHUB_REPO}:lite"
+  else
+    loaded_ref="$(docker images --format '{{.Repository}}:{{.Tag}}' | awk '/openclaw-pro/ && $0 !~ /<none>/ {print; exit}')"
+  fi
+
+  if [ -n "$loaded_ref" ] && [ "$loaded_ref" != "$IMAGE_NAME" ]; then
+    docker tag "$loaded_ref" "$IMAGE_NAME" >/dev/null 2>&1 || true
+  fi
+}
+
 # ─── password ─────────────────────────────────────────────────
 
 generate_strong_password(){
@@ -470,6 +489,82 @@ ensure_root_password(){
   fi
   ROOT_PASS=""
   info "默认不生成 root 密码文件（SSH key-only）；如需设置请传入 ROOT_PASS"
+}
+
+ensure_container_host_user(){
+  local host_user="$1" host_uid="$2" host_gid="$3"
+  [ -z "$host_user" ] || [ "$host_user" = "root" ] && return 1
+
+  if docker exec "$CONTAINER_NAME" bash -lc "id '$host_user' >/dev/null 2>&1"; then
+    return 0
+  fi
+
+  if ! [[ "$host_user" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+    warn "宿主机用户名格式无效，跳过容器普通用户创建：$host_user"
+    return 1
+  fi
+
+  info "容器内未检测到用户 $host_user，执行兼容创建"
+  docker exec "$CONTAINER_NAME" bash -lc "
+set -e
+if [ -n '$host_gid' ] && [[ '$host_gid' =~ ^[0-9]+$ ]] && ! getent group '$host_gid' >/dev/null 2>&1; then
+  groupadd -g '$host_gid' '$host_user' 2>/dev/null || groupadd -g '$host_gid' 'oc_$host_user' 2>/dev/null || true
+fi
+if [ -n '$host_uid' ] && [[ '$host_uid' =~ ^[0-9]+$ ]] && [ -n '$host_gid' ] && [[ '$host_gid' =~ ^[0-9]+$ ]]; then
+  useradd -m -u '$host_uid' -g '$host_gid' -s /bin/bash '$host_user' 2>/dev/null || useradd -m -s /bin/bash '$host_user' 2>/dev/null || true
+else
+  useradd -m -s /bin/bash '$host_user' 2>/dev/null || adduser --disabled-password --gecos '' '$host_user' 2>/dev/null || true
+fi
+id '$host_user' >/dev/null 2>&1
+usermod -aG sudo '$host_user' 2>/dev/null || true
+echo '$host_user ALL=(ALL) NOPASSWD:ALL' > '/etc/sudoers.d/90-openclaw-$host_user'
+chmod 440 '/etc/sudoers.d/90-openclaw-$host_user'
+mkdir -p '/home/$host_user/.ssh'
+chmod 700 '/home/$host_user/.ssh'
+chown -R '$host_user:$host_user' '/home/$host_user/.ssh'
+" >/dev/null 2>&1 || return 1
+
+  docker exec "$CONTAINER_NAME" bash -lc "id '$host_user' >/dev/null 2>&1"
+}
+
+harden_container_sshd(){
+  local ssh_user="$1"
+  docker exec -e OPENCLAW_SSH_USER="$ssh_user" "$CONTAINER_NAME" bash -lc '
+cfg="/etc/ssh/sshd_config"
+[ -f "$cfg" ] || exit 0
+
+set_or_append() {
+  local key="$1" value="$2"
+  if grep -Eq "^[#[:space:]]*${key}[[:space:]]+" "$cfg"; then
+    sed -i -E "s|^[#[:space:]]*${key}[[:space:]]+.*|${key} ${value}|" "$cfg"
+  else
+    printf "\n%s %s\n" "$key" "$value" >> "$cfg"
+  fi
+}
+
+if [ -n "$OPENCLAW_SSH_USER" ] && [ "$OPENCLAW_SSH_USER" != "root" ] && id "$OPENCLAW_SSH_USER" >/dev/null 2>&1; then
+  set_or_append "PermitRootLogin" "no"
+  sed -i "/^[#[:space:]]*AllowUsers[[:space:]]/d" "$cfg" 2>/dev/null || true
+  echo "AllowUsers $OPENCLAW_SSH_USER" >> "$cfg"
+else
+  set_or_append "PermitRootLogin" "prohibit-password"
+fi
+
+set_or_append "PasswordAuthentication" "no"
+set_or_append "KbdInteractiveAuthentication" "no"
+set_or_append "ChallengeResponseAuthentication" "no"
+set_or_append "PubkeyAuthentication" "yes"
+set_or_append "StrictModes" "no"
+
+mkdir -p /run/sshd
+/usr/sbin/sshd -t >/dev/null 2>&1 || exit 1
+if pgrep -x sshd >/dev/null 2>&1; then
+  pid="$(pgrep -x sshd | head -1)"
+  kill -HUP "$pid" >/dev/null 2>&1 || true
+else
+  /usr/sbin/sshd >/dev/null 2>&1 || true
+fi
+' >/dev/null 2>&1
 }
 
 # ─── detect local IP ─────────────────────────────────────────
@@ -792,11 +887,14 @@ F2B
 # ─── container create & start ─────────────────────────────────
 
 create_and_start(){
-  local host_user host_uid host_gid user_home_dir key_injected
+  local host_user host_uid host_gid user_home_dir key_injected ssh_login_user user_ready ssh_hardened
   host_user="$(id -un 2>/dev/null || true)"
   host_uid="$(id -u 2>/dev/null || true)"
   host_gid="$(id -g 2>/dev/null || true)"
   key_injected="false"
+  ssh_login_user="root"
+  user_ready="false"
+  ssh_hardened="false"
 
   # 创建持久化目录
   # - system-data: 系统配置（挂载到 /root）
@@ -875,18 +973,47 @@ create_and_start(){
     warn "SSH 服务状态未知，请检查容器日志"
   fi
 
-  # Public key injection (注入到普通用户)
   if [ -n "$host_user" ] && [ "$host_user" != "root" ]; then
-    for keyfile in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_rsa.pub" "$HOME/.ssh/id_ecdsa.pub"; do
-      if [ -f "$keyfile" ]; then
+    if docker exec "$CONTAINER_NAME" bash -lc "id '$host_user' >/dev/null 2>&1"; then
+      user_ready="true"
+    elif ensure_container_host_user "$host_user" "$host_uid" "$host_gid"; then
+      user_ready="true"
+    fi
+  fi
+
+  # Public key injection (优先普通用户，失败回退 root)
+  for keyfile in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_rsa.pub" "$HOME/.ssh/id_ecdsa.pub"; do
+    [ -f "$keyfile" ] || continue
+    if [ "$user_ready" = "true" ]; then
+      info "注入公钥 $(basename "$keyfile") 到用户 $host_user"
+      docker exec "$CONTAINER_NAME" bash -lc "mkdir -p '/home/$host_user/.ssh' && chmod 700 '/home/$host_user/.ssh'" >/dev/null 2>&1 || true
+      if docker cp "$keyfile" "$CONTAINER_NAME:/tmp/host_user_key.pub" >/dev/null 2>&1 \
+        && docker exec "$CONTAINER_NAME" bash -lc "cat /tmp/host_user_key.pub >> '/home/$host_user/.ssh/authorized_keys' && sort -u -o '/home/$host_user/.ssh/authorized_keys' '/home/$host_user/.ssh/authorized_keys' && chmod 600 '/home/$host_user/.ssh/authorized_keys' && chown -R '$host_user:$host_user' '/home/$host_user/.ssh' && test -s '/home/$host_user/.ssh/authorized_keys' && rm -f /tmp/host_user_key.pub" >/dev/null 2>&1; then
         key_injected="true"
-        info "注入公钥 $(basename "$keyfile") 到用户 $host_user"
-        docker exec "$CONTAINER_NAME" bash -lc "mkdir -p '/home/$host_user/.ssh' && chmod 700 '/home/$host_user/.ssh'" >/dev/null 2>&1
-        docker cp "$keyfile" "$CONTAINER_NAME:/tmp/host_user_key.pub" >/dev/null 2>&1
-        docker exec "$CONTAINER_NAME" bash -lc "cat /tmp/host_user_key.pub >> '/home/$host_user/.ssh/authorized_keys' && sort -u -o '/home/$host_user/.ssh/authorized_keys' '/home/$host_user/.ssh/authorized_keys' && chmod 600 '/home/$host_user/.ssh/authorized_keys' && chown -R '$host_user:$host_user' '/home/$host_user/.ssh' && rm -f /tmp/host_user_key.pub" >/dev/null 2>&1
+        ssh_login_user="$host_user"
         break
       fi
-    done
+    fi
+    if docker exec "$CONTAINER_NAME" bash -lc "chmod 700 /root 2>/dev/null || true; mkdir -p /root/.ssh && chmod 700 /root/.ssh" >/dev/null 2>&1 \
+      && docker cp "$keyfile" "$CONTAINER_NAME:/root/.ssh/authorized_keys.tmp" >/dev/null 2>&1 \
+      && docker exec "$CONTAINER_NAME" bash -lc "cat /root/.ssh/authorized_keys.tmp >> /root/.ssh/authorized_keys && sort -u -o /root/.ssh/authorized_keys /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && test -s /root/.ssh/authorized_keys && rm -f /root/.ssh/authorized_keys.tmp" >/dev/null 2>&1; then
+      key_injected="true"
+      ssh_login_user="root"
+      warn "普通用户公钥注入失败，已回退 root 密钥登录"
+      break
+    fi
+  done
+
+  if harden_container_sshd "$ssh_login_user"; then
+    ssh_hardened="true"
+  else
+    warn "SSH 安全配置加固失败，请检查容器内 /etc/ssh/sshd_config"
+  fi
+
+  if [ "$ssh_hardened" = "true" ] && docker exec "$CONTAINER_NAME" bash -lc "/usr/sbin/sshd -T 2>/dev/null | grep -q '^passwordauthentication no$'"; then
+    success "SSH 密码认证已禁用（与 Windows 安装对齐）"
+  else
+    warn "未确认 SSH 密码认证状态，建议执行: docker exec $CONTAINER_NAME /usr/sbin/sshd -T | grep passwordauthentication"
   fi
 
   configure_firewall_and_fail2ban
@@ -903,9 +1030,17 @@ create_and_start(){
   # 显示 SSH 登录信息
   echo ""
   info "SSH 登录配置:"
-  info "  - 密码登录：已禁用（仅密钥登录）"
-  info "  - Root 登录：已禁用"
-  if [ -n "$host_user" ] && [ "$host_user" != "root" ]; then
+  if [ "$ssh_hardened" = "true" ]; then
+    info "  - 密码登录：已禁用（仅密钥登录）"
+  else
+    warn "  - 密码登录：状态未知（请手动检查）"
+  fi
+  if [ "$ssh_login_user" = "root" ]; then
+    warn "  - Root 登录：仅密钥兜底（普通用户不可用时）"
+    info "  - 登录用户：root"
+    info "  - 登录命令：ssh root@<host> -p ${SSH_PORT}"
+  elif [ -n "$host_user" ] && [ "$host_user" != "root" ]; then
+    info "  - Root 登录：已禁用"
     info "  - 登录用户：$host_user"
     info "  - 登录命令：ssh ${host_user}@<host> -p ${SSH_PORT}"
     info "  - 容器内提权：登录后执行 sudo -i"
