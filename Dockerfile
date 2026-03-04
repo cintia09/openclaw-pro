@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
     vim nano \
     curl wget net-tools iputils-ping dnsutils traceroute telnet nmap openssh-client openssh-server \
     htop procps tmux screen tree less file unzip tar gzip \
-    git jq python3 python3-pip python3-venv \
+    git jq python3 python3-pip python3-venv build-essential \
     sudo cron rsync ca-certificates gnupg gettext-base \
     dnsmasq \
     && rm -rf /var/lib/apt/lists/*
@@ -29,6 +29,10 @@ RUN echo 'Defaults env_keep += "http_proxy https_proxy HTTP_PROXY HTTPS_PROXY no
 # Node.js 22
 RUN curl -fsSL --retry 3 --retry-delay 3 https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs && rm -rf /var/lib/apt/lists/*
+
+# 预装 pnpm（源码编译更新时需要，避免运行时网络抖动）
+RUN npm install -g pnpm@10.23.0 --no-audit --no-fund \
+    && corepack disable >/dev/null 2>&1 || true
 
 # Caddy
 RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
