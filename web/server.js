@@ -175,6 +175,7 @@ const WEB_AI_CONFIG_PATH = '/root/.openclaw/web-ai-config.json';
 const DOCKER_CONFIG_PATH = '/root/.openclaw/docker-config.json';
 const STT_CONFIG_PATH = '/root/.openclaw/stt-config.json';
 const PLUGINS_STATE_PATH = '/root/.openclaw/plugins-state.json';
+const OPENCLAW_SOURCE_INSTALL_META_PATH = '/root/.openclaw/openclaw-source-install.json';
 const OPENCLAW_SOURCE_REPO_DEFAULT = 'openclaw/openclaw';
 const OPENCLAW_SOURCE_ROOT = '/workspace/project/openclaw';
 const OPENCLAW_SOURCE_ENTRY = `${OPENCLAW_SOURCE_ROOT}/openclaw.mjs`;
@@ -182,6 +183,7 @@ const OPENCLAW_CONFIG_BACKUP_DIR = '/root/.openclaw/config-backups';
 const GATEWAY_RUNTIME_LOG_FILE = '/workspace/tmp/openclaw-gateway.log';
 const GATEWAY_LEGACY_LOG_FILE = '/root/.openclaw/logs/gateway.log';
 const GATEWAY_WATCHDOG_LOG = '/root/.openclaw/logs/gateway-watchdog.log';
+const WEB_PANEL_LOG_FILE = '/tmp/openclaw-web.log';
 
 const TRADING_DIR = '/root/trading-system';
 const STRATEGY_PARAMS_PATH = path.join(TRADING_DIR, 'strategy_params.json');
@@ -611,6 +613,22 @@ function isOpenClawInstalledByNpmPackage() {
     || runCommandOk('npm root -g 2>/dev/null | xargs -I{} test -f "{}/openclaw/package.json"', 2500);
 }
 
+function getOpenClawSourceInstallMeta() {
+  const meta = readJson(OPENCLAW_SOURCE_INSTALL_META_PATH, null);
+  if (!meta || typeof meta !== 'object') return null;
+  const tag = String(meta.tag || '').trim();
+  const repo = parseGitHubRepo(meta.repo || '') || '';
+  const installedAt = String(meta.installedAt || '').trim();
+  const parsedVersion = parseOpenClawVersion(tag || '');
+  if (!tag && !repo && !installedAt) return null;
+  return {
+    tag,
+    repo,
+    installedAt,
+    version: parsedVersion || ''
+  };
+}
+
 const openClawInstallCache = {
   snapshot: null,
   checkedAt: 0
@@ -621,6 +639,11 @@ function detectOpenClawInstallation() {
   const version = getInstalledOpenClawVersion();
   if (version) {
     return { installed: true, version, source: 'version' };
+  }
+
+  const sourceMeta = getOpenClawSourceInstallMeta();
+  if (sourceMeta) {
+    return { installed: true, version: sourceMeta.version || '', source: 'source' };
   }
 
   if (isOpenClawInstalledByPath()) {
@@ -1531,7 +1554,7 @@ app.get('/api/status', (req, res) => {
   const status = { gateway: false, web: true, caddy: false, uptime: 0, memory: {}, version: getCurrentVersion() };
 
   status.gateway = runCommandOk('curl -sS --connect-timeout 1 --max-time 2 http://127.0.0.1:18789/health >/dev/null 2>&1', 2500)
-    || runCommandOk('pgrep -f "[o]penclaw.*gateway" >/dev/null 2>&1', 1200);
+    || runCommandOk('ss -ltn 2>/dev/null | grep -q "[:.]18789[[:space:]]" || netstat -ltn 2>/dev/null | grep -q "[:.]18789[[:space:]]"', 1200);
   if (!status.gateway) {
     const e = new Error('gateway not detected');
     if (req.query.debug === '1') {
@@ -2320,15 +2343,13 @@ app.get('/api/openclaw', async (req, res) => {
 
     let latestVersion = '';
     let updateCheckError = '';
-    if (installed) {
-      if (forceCheck) {
-        await refreshLatestOpenClawVersionCache({ force: true });
-      } else {
-        refreshLatestOpenClawVersionCache().catch(() => {});
-      }
-      latestVersion = latestOpenClawVersionCache.version || '';
-      updateCheckError = latestVersion ? '' : (latestOpenClawVersionCache.error || '');
+    if (forceCheck) {
+      await refreshLatestOpenClawVersionCache({ force: true });
+    } else {
+      refreshLatestOpenClawVersionCache().catch(() => {});
     }
+    latestVersion = latestOpenClawVersionCache.version || '';
+    updateCheckError = latestVersion ? '' : (latestOpenClawVersionCache.error || '');
 
     const hasUpdate = !!(installed && version && latestVersion && compareSemver(latestVersion, version) > 0);
 
@@ -2674,17 +2695,84 @@ function tailLogLines(lines = 200) {
     .map(sanitizeLogLine);
 }
 
+function getLatestTaskLog(taskMap) {
+  const items = Object.values(taskMap || {}).filter(Boolean);
+  if (!items.length) return null;
+  items.sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0));
+  return items[0] || null;
+}
+
+function formatTaskLogBlock(title, task, lines = 200) {
+  if (!task || typeof task !== 'object') return '';
+  const text = String(task.log || '').trim();
+  if (!text) return '';
+  const safeLines = Math.max(20, Math.min(lines, 2000));
+  const tail = text.split('\n').slice(-safeLines).map(sanitizeLogLine).join('\n').trim();
+  if (!tail) return '';
+  const status = String(task.status || 'unknown');
+  const startedAt = task.startedAt ? new Date(task.startedAt).toISOString() : '';
+  const header = `[${title}] status=${status}${startedAt ? ` startedAt=${startedAt}` : ''}`;
+  return `${header}\n${tail}`;
+}
+
 app.get('/api/logs', (req, res) => {
   const lines = parseInt(req.query.lines, 10) || 100;
   try {
+    const safeLines = Math.max(20, Math.min(lines, 5000));
+    const mergedBlocks = [];
+
     const logFile = resolveGatewayLogFileForStreaming();
-    if (!fs.existsSync(logFile)) return res.json({ logs: 'No log file found' });
-    const output = execSync(`tail -${Math.max(1, Math.min(lines, 5000))} "${logFile}"`, { encoding: 'utf8', timeout: 2500 });
-    const sanitized = output
-      .split('\n')
-      .map(sanitizeLogLine)
-      .join('\n');
-    res.json({ logs: sanitized });
+    if (fs.existsSync(logFile)) {
+      const output = execSync(`tail -${safeLines} "${logFile}"`, { encoding: 'utf8', timeout: 2500 });
+      const gatewayLogs = output
+        .split('\n')
+        .map(sanitizeLogLine)
+        .join('\n')
+        .trim();
+      if (gatewayLogs) {
+        mergedBlocks.push(`[gateway]\n${gatewayLogs}`);
+      }
+    }
+
+    const activeInstall = activeInstallTaskId ? installLogs[activeInstallTaskId] : null;
+    const installTask = activeInstall || getLatestTaskLog(installLogs);
+    const installBlock = formatTaskLogBlock('openclaw-install', installTask, Math.min(safeLines, 400));
+    if (installBlock) mergedBlocks.push(installBlock);
+
+    const activeRepair = activeRepairTaskId ? repairLogs[activeRepairTaskId] : null;
+    const repairTask = activeRepair || getLatestTaskLog(repairLogs);
+    const repairBlock = formatTaskLogBlock('openclaw-repair', repairTask, Math.min(safeLines, 300));
+    if (repairBlock) mergedBlocks.push(repairBlock);
+
+    const gatewayCombined = readOpenClawGatewayLogs(Math.min(safeLines, 400), { includeWatchdog: true }).trim();
+    if (gatewayCombined) {
+      mergedBlocks.push(gatewayCombined);
+    }
+
+    const panelLog = tailFile(WEB_PANEL_LOG_FILE, Math.min(safeLines, 220), 2500).trim();
+    if (panelLog) {
+      const sanitizedPanel = panelLog
+        .split('\n')
+        .map(sanitizeLogLine)
+        .join('\n')
+        .trim();
+      if (sanitizedPanel) {
+        mergedBlocks.push(`[web-panel]\n${sanitizedPanel}`);
+      }
+    }
+
+    if (!mergedBlocks.length) {
+      const hints = [
+        '[logs] 当前尚未产生可展示日志。',
+        `[logs] checked: ${GATEWAY_RUNTIME_LOG_FILE}`,
+        `[logs] checked: ${GATEWAY_LEGACY_LOG_FILE}`,
+        `[logs] checked: ${GATEWAY_WATCHDOG_LOG}`,
+        `[logs] checked: ${WEB_PANEL_LOG_FILE}`
+      ].join('\n');
+      return res.json({ logs: hints });
+    }
+
+    res.json({ logs: mergedBlocks.join('\n\n') });
   } catch (e) {
     res.json({ logs: e.message });
   }
