@@ -33,8 +33,8 @@ RUN echo 'Defaults env_keep += "http_proxy https_proxy HTTP_PROXY HTTPS_PROXY no
 RUN curl -fsSL --retry 3 --retry-delay 3 https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs && rm -rf /var/lib/apt/lists/*
 
-# 预装 pnpm（源码编译更新时需要，避免运行时网络抖动）
-RUN npm install -g pnpm@10.23.0 --no-audit --no-fund \
+# 预装源码构建工具（避免运行时网络抖动）
+RUN npm install -g pnpm@10.23.0 rolldown@1.0.0-rc.6 --no-audit --no-fund \
     && corepack disable >/dev/null 2>&1 || true
 
 # Caddy（网关）
