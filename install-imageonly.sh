@@ -289,6 +289,7 @@ download_tarball(){
   local part="$target.part"
   local target_meta="$target.meta"
   local part_meta="$part.meta"
+  local primary_http_code=""
   local total_bytes=""
   local cached_bytes="0"
   local cached_mib="0"
@@ -303,6 +304,11 @@ download_tarball(){
   fi
   local primary_url="https://github.com/${GITHUB_REPO}/releases/download/${TAG}/${IMAGE_TARBALL}"
   expected_sig="${TAG}|${IMAGE_TARBALL}"
+  primary_http_code="$(curl -sSLI -o /dev/null -w '%{http_code}' --connect-timeout 8 --max-time 20 "$primary_url" 2>/dev/null || true)"
+  if [ "$primary_http_code" = "404" ]; then
+    warn "Release 资产不存在：${TAG}/${IMAGE_TARBALL}（HTTP 404），跳过 release 下载并回退 GHCR"
+    return 1
+  fi
   total_bytes="$(curl -fsSLI --connect-timeout 8 --max-time 20 "$primary_url" 2>/dev/null | awk -F': ' 'tolower($1)=="content-length"{print $2}' | tr -d '\r' | tail -1 || true)"
   if ! [[ "$total_bytes" =~ ^[0-9]+$ ]] || [ "$total_bytes" -le 0 ]; then
     total_bytes=""
