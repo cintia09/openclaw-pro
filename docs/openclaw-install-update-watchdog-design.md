@@ -26,6 +26,7 @@
   - 已有从 GitHub Release 获取源码包并本地编译的命令构建器（`buildOpenClawSourceInstallCommand`）。
   - 已有 OpenClaw 状态接口（`/api/openclaw`）及任务轮询接口。
   - 已有配置备份列表与恢复接口（`/api/openclaw/config/backups`、`/api/openclaw/config/restore`）。
+  - 已提供 Gateway/Watchdog 启动日志聚合读取接口（`/api/openclaw/gateway/logs`），并在 `/api/openclaw/start` 返回重启相关日志快照。
   - 接口鉴权已接入（`app.use('/api', requireAuthApi)`，未登录返回 401）。
 - `scripts/openclaw-gateway-watchdog.sh`
   - 已有 watchdog 单实例锁、进程/端口健康检测、自动重启。
@@ -264,6 +265,22 @@ Web 卡片与 Gateway 控制台统一展示：
 3. watchdog 在线状态
 4. 最近备份/回滚事件
 
+## 10.3 日志显示正确性（新增要求）
+
+OpenClaw 引擎页“安装/更新/Gateway 启动日志”必须覆盖三类信息并可读：
+
+1. 安装/更新任务实时日志（`/api/openclaw/install/:taskId` 增量日志）。
+2. Gateway 重启请求返回的即时日志快照（`/api/openclaw/start` 返回 `logs`）。
+3. 启动后最新日志快照（`/api/openclaw/gateway/logs`），来源于 gateway + watchdog 日志聚合。
+
+日志源优先级：
+
+- Gateway 运行日志：`/workspace/tmp/openclaw-gateway.log`（主路径）。
+- 兼容旧路径：`/root/.openclaw/logs/gateway.log`。
+- Watchdog 日志：`/root/.openclaw/logs/gateway-watchdog.log`。
+
+目标：避免“任务成功但日志空白/日志源错位/仅有提示无细节”。
+
 ---
 
 ## 11. 并发控制与幂等
@@ -327,6 +344,11 @@ Web 卡片与 Gateway 控制台统一展示：
    - repo/tag/name 参数采用白名单字符集。
    - 对 JSON body 做字段白名单过滤，拒绝未知关键字段。
 4. 高风险接口（恢复配置、触发更新）建议增加二次确认 token（短时有效）。
+
+### 12.4.1 SSH 密钥登录一致性（新增要求）
+
+当 `HOST_USER` 存在且 SSH 限制为普通用户登录（`AllowUsers <HOST_USER>`、`PermitRootLogin no`）时，必须确保该用户 `authorized_keys` 可用。  
+兼容场景：安装器先将公钥写入 root；运行时需同步到 `HOST_USER`，避免出现 `Permission denied (publickey)`。
 
 ### 12.5 日志与敏感信息保护
 

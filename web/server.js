@@ -179,8 +179,9 @@ const OPENCLAW_SOURCE_REPO_DEFAULT = 'openclaw/openclaw';
 const OPENCLAW_SOURCE_ROOT = '/workspace/project/openclaw';
 const OPENCLAW_SOURCE_ENTRY = `${OPENCLAW_SOURCE_ROOT}/openclaw.mjs`;
 const OPENCLAW_CONFIG_BACKUP_DIR = '/root/.openclaw/config-backups';
-
-const LOG_FILE = '/root/.openclaw/logs/gateway.log';
+const GATEWAY_RUNTIME_LOG_FILE = '/workspace/tmp/openclaw-gateway.log';
+const GATEWAY_LEGACY_LOG_FILE = '/root/.openclaw/logs/gateway.log';
+const GATEWAY_WATCHDOG_LOG = '/root/.openclaw/logs/gateway-watchdog.log';
 
 const TRADING_DIR = '/root/trading-system';
 const STRATEGY_PARAMS_PATH = path.join(TRADING_DIR, 'strategy_params.json');
@@ -219,13 +220,43 @@ function repairOpenClawConfigProviders() {
   return true;
 }
 
-function readGatewayLogTail(lines = 200) {
+function tailFile(filePath, lines = 200, timeoutMs = 2500) {
   try {
-    if (!fs.existsSync(LOG_FILE)) return '';
-    return execSync(`tail -${Math.max(1, Math.min(lines, 2000))} "${LOG_FILE}"`, { encoding: 'utf8', timeout: 2500 });
+    if (!filePath || !fs.existsSync(filePath)) return '';
+    return execSync(`tail -${Math.max(1, Math.min(lines, 5000))} "${filePath}"`, { encoding: 'utf8', timeout: timeoutMs });
   } catch {
     return '';
   }
+}
+
+function resolveGatewayLogFileForStreaming() {
+  if (fs.existsSync(GATEWAY_RUNTIME_LOG_FILE)) return GATEWAY_RUNTIME_LOG_FILE;
+  return GATEWAY_LEGACY_LOG_FILE;
+}
+
+function readOpenClawGatewayLogs(lines = 200, { includeWatchdog = false } = {}) {
+  const chunks = [];
+  const sanitizeBlock = (text) => String(text || '')
+    .split('\n')
+    .map(sanitizeLogLine)
+    .join('\n')
+    .trim();
+  const runtimeLog = tailFile(GATEWAY_RUNTIME_LOG_FILE, lines, 2500);
+  const legacyLog = tailFile(GATEWAY_LEGACY_LOG_FILE, lines, 2500);
+
+  if (runtimeLog.trim()) chunks.push(sanitizeBlock(runtimeLog));
+  if (legacyLog.trim() && legacyLog.trim() !== runtimeLog.trim()) chunks.push(sanitizeBlock(legacyLog));
+
+  if (includeWatchdog) {
+    const watchdogLog = tailFile(GATEWAY_WATCHDOG_LOG, lines, 2500);
+    if (watchdogLog.trim()) chunks.push(sanitizeBlock(watchdogLog));
+  }
+
+  return chunks.join('\n');
+}
+
+function readGatewayLogTail(lines = 200) {
+  return readOpenClawGatewayLogs(lines);
 }
 
 function detectInvalidConfigKeysFromText(text) {
@@ -305,7 +336,6 @@ function writeDockerConfig(cfg) {
 }
 
 const GATEWAY_WATCHDOG_SCRIPT = '/usr/local/bin/openclaw-gateway-watchdog.sh';
-const GATEWAY_WATCHDOG_LOG = '/root/.openclaw/logs/gateway-watchdog.log';
 
 function ensureGatewayWatchdog(callback) {
   const cmd = [
@@ -2389,23 +2419,38 @@ app.post('/api/openclaw/update', async (req, res) => {
 
 app.post('/api/openclaw/start', (req, res) => {
   if (gatewayRestartRunning) {
-    return res.json({ success: true, message: 'Gateway 重启任务已在进行中，请稍候' });
+    return res.json({
+      success: true,
+      message: 'Gateway 重启任务已在进行中，请稍候',
+      logs: readOpenClawGatewayLogs(120, { includeWatchdog: true })
+    });
   }
   gatewayRestartRunning = true;
   restartGatewayForeground((err, stdout, stderr) => {
     gatewayRestartRunning = false;
+    const startupLogs = readOpenClawGatewayLogs(160, { includeWatchdog: true });
     if (!err) {
-      return res.json({ success: true, message: 'Gateway 进程已终止，watchdog 将自动拉起' });
+      return res.json({ success: true, message: 'Gateway 进程已终止，watchdog 将自动拉起', logs: startupLogs });
     }
     const detail = compactOutput(stderr || stdout || err.message || '');
     if (String(detail || '').includes('exit 21')) {
-      return res.json({ success: false, error: 'watchdog 脚本不存在，无法自动拉起 Gateway' });
+      return res.json({ success: false, error: 'watchdog 脚本不存在，无法自动拉起 Gateway', logs: startupLogs });
     }
     if (/Unrecognized key|Invalid config/i.test(String(detail || ''))) {
-      return res.json({ success: false, error: `${detail || 'Gateway 配置无效'}；请点击“配置恢复”（内部会执行 openclaw doctor --fix）后重试` });
+      return res.json({ success: false, error: `${detail || 'Gateway 配置无效'}；请点击“配置恢复”（内部会执行 openclaw doctor --fix）后重试`, logs: startupLogs });
     }
-    res.json({ success: false, error: detail || 'Gateway 重启失败，请查看 watchdog 日志' });
+    res.json({ success: false, error: detail || 'Gateway 重启失败，请查看 watchdog 日志', logs: startupLogs });
   });
+});
+
+app.get('/api/openclaw/gateway/logs', (req, res) => {
+  try {
+    const lines = Math.max(20, Math.min(parseInt(req.query.lines || '200', 10) || 200, 1200));
+    const logs = readOpenClawGatewayLogs(lines, { includeWatchdog: true });
+    res.json({ success: true, logs });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e?.message || '读取 Gateway 日志失败' });
+  }
 });
 
 // ============================================================
@@ -2423,8 +2468,9 @@ function sanitizeLogLine(line) {
 }
 
 function tailLogLines(lines = 200) {
-  if (!fs.existsSync(LOG_FILE)) return [];
-  const output = execSync(`tail -${Math.max(1, Math.min(lines, 5000))} "${LOG_FILE}"`, { encoding: 'utf8', timeout: 2500 });
+  const logFile = resolveGatewayLogFileForStreaming();
+  if (!fs.existsSync(logFile)) return [];
+  const output = execSync(`tail -${Math.max(1, Math.min(lines, 5000))} "${logFile}"`, { encoding: 'utf8', timeout: 2500 });
   return output
     .split('\n')
     .filter(Boolean)
@@ -2434,8 +2480,9 @@ function tailLogLines(lines = 200) {
 app.get('/api/logs', (req, res) => {
   const lines = parseInt(req.query.lines, 10) || 100;
   try {
-    if (!fs.existsSync(LOG_FILE)) return res.json({ logs: 'No log file found' });
-    const output = execSync(`tail -${Math.max(1, Math.min(lines, 5000))} "${LOG_FILE}"`, { encoding: 'utf8', timeout: 2500 });
+    const logFile = resolveGatewayLogFileForStreaming();
+    if (!fs.existsSync(logFile)) return res.json({ logs: 'No log file found' });
+    const output = execSync(`tail -${Math.max(1, Math.min(lines, 5000))} "${logFile}"`, { encoding: 'utf8', timeout: 2500 });
     const sanitized = output
       .split('\n')
       .map(sanitizeLogLine)
@@ -2637,9 +2684,11 @@ if (WebSocketServer) {
       ws.send(JSON.stringify({ type: 'lines', lines }));
     } catch {}
 
+    const logFile = resolveGatewayLogFileForStreaming();
+
     // Track file offset for incremental reads
     let lastSize = 0;
-    try { lastSize = fs.statSync(LOG_FILE).size; } catch {}
+    try { lastSize = fs.statSync(logFile).size; } catch {}
 
     let watcher = null;
     let debounceTimer = null;
@@ -2647,13 +2696,13 @@ if (WebSocketServer) {
     const sendNewLines = () => {
       if (ws.readyState !== 1) return;
       try {
-        const stat = fs.statSync(LOG_FILE);
+        const stat = fs.statSync(logFile);
         if (stat.size === lastSize) return;
         if (stat.size < lastSize) {
           // File was truncated/rotated — re-read from start
           lastSize = 0;
         }
-        const fd = fs.openSync(LOG_FILE, 'r');
+        const fd = fs.openSync(logFile, 'r');
         const buf = Buffer.alloc(stat.size - lastSize);
         fs.readSync(fd, buf, 0, buf.length, lastSize);
         fs.closeSync(fd);
@@ -2666,7 +2715,7 @@ if (WebSocketServer) {
     };
 
     try {
-      watcher = fs.watch(LOG_FILE, () => {
+      watcher = fs.watch(logFile, () => {
         if (debounceTimer) clearTimeout(debounceTimer);
         debounceTimer = setTimeout(sendNewLines, 300);
       });

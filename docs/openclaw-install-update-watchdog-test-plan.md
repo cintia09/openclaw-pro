@@ -21,6 +21,7 @@
 - `web/server.js`（安装/更新/重启/备份恢复 API）
 - `web/public/app.js`（按钮态、状态刷新、恢复交互）
 - `scripts/openclaw-gateway-watchdog.sh`（健康检查、自愈、备份、回滚）
+- `start-services.sh`（SSH 用户与公钥同步、服务入口）
 - 容器内 OpenClaw 源码构建流程（下载、构建、替换）
 
 ### 2.2 范围外
@@ -128,6 +129,7 @@ docker exec openclaw-pro bash -lc 'rm -f /root/.openclaw/config-backups/openclaw
 | F-10 | 按钮禁用联动 | 任一任务运行中 | 观察安装/更新/重启/恢复按钮 | 全部禁用，任务结束后恢复 |
 | F-11 | 状态接口一致性 | 服务运行中 | 轮询 `/api/openclaw` 与 `/api/status` | UI 状态与进程/日志一致 |
 | F-12 | 任务日志完整性 | 触发安装/更新任务 | 轮询 task API | 可增量读取日志，状态终态正确 |
+| F-13 | 安装/更新/Gateway 启动日志正确显示 | 已启用 OpenClaw 引擎页 | 执行安装/更新并触发重启，检查 `oc-log` 与 `/api/openclaw/gateway/logs` | UI 显示包含任务日志 + Gateway/Watchdog 启动日志快照，日志源正确 |
 
 ## 6.2 安全测试集（S）
 
@@ -143,6 +145,7 @@ docker exec openclaw-pro bash -lc 'rm -f /root/.openclaw/config-backups/openclaw
 | S-08 | 备份目录权限 | 检查备份目录/文件权限 | 目录 700，文件 600（或符合安全基线） |
 | S-09 | 安装来源可审计 | 执行安装后查看 source metadata | 包含 repo/tag/tarballUrl/installedAt |
 | S-10 | API 输入校验 | 传入非法 repo/tag 参数 | 后端拒绝并返回明确错误 |
+| S-11 | SSH 公钥登录一致性 | `HOST_USER` 模式下检查 `AllowUsers` 与用户 `authorized_keys` | 非 root 用户可密钥登录，避免 `Permission denied (publickey)` |
 
 ## 6.3 端到端测试集（E2E）
 
@@ -156,6 +159,7 @@ docker exec openclaw-pro bash -lc 'rm -f /root/.openclaw/config-backups/openclaw
 | E2E-06 | 任务进行中 UI 禁用与后端互斥 | 无并发冲突，无重复执行 |
 | E2E-07 | watchdog 失效恢复 | watchdog 异常后被拉起并继续守护 |
 | E2E-08 | 安全回归链路 | 鉴权、输入校验、审计日志均通过 |
+| E2E-09 | SSH 登录链路（HOST_USER） | 非 root 用户（如 `wm_20`）可使用宿主机公钥登录 |
 
 ---
 
@@ -232,6 +236,20 @@ docker exec openclaw-pro bash -lc 'rm -f /root/.openclaw/config-backups/openclaw
 3. 检查日志脱敏。
 4. 检查安装来源元数据可追溯。
 
+## 7.9 E2E-09：SSH 登录链路（HOST_USER）
+
+1. 在容器内确认 ssh 配置：
+   - `sshd -T | grep -E 'allowusers|permitrootlogin|passwordauthentication|pubkeyauthentication'`
+2. 确认用户与公钥：
+   - `id <host_user>`
+   - `ls -la /home/<host_user>/.ssh`
+   - `tail -n 5 /home/<host_user>/.ssh/authorized_keys`
+3. 从宿主机执行：
+   - `ssh -p <ssh_port> <host_user>@<host_ip>`
+4. 断言：
+   - 非 root 用户公钥登录成功。
+   - 不出现 `Permission denied (publickey)`。
+
 ---
 
 ## 8. 推荐执行命令清单
@@ -283,4 +301,3 @@ docker exec openclaw-pro bash -lc 'tail -n 120 /workspace/tmp/openclaw-gateway.l
 - 实际结果（通过/失败）
 - 关键日志片段
 - 缺陷单号（如有）
-

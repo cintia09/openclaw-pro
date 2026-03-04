@@ -276,6 +276,35 @@ if [ -z "$SSH_USER" ] && [ -f "$USERS_PERSIST_DIR/ssh_user" ]; then
     fi
 fi
 
+sync_root_authorized_keys_to_ssh_user() {
+    local username="$1"
+    [ -n "$username" ] || return 0
+    [ "$username" = "root" ] && return 0
+    id -u "$username" >/dev/null 2>&1 || return 0
+
+    local root_keys="/root/.ssh/authorized_keys"
+    [ -s "$root_keys" ] || return 0
+
+    local user_home user_ssh user_keys
+    user_home=$(getent passwd "$username" | cut -d: -f6)
+    [ -n "$user_home" ] || user_home="/home/$username"
+    user_ssh="$user_home/.ssh"
+    user_keys="$user_ssh/authorized_keys"
+
+    mkdir -p "$user_ssh" 2>/dev/null || return 0
+    chmod 700 "$user_ssh" 2>/dev/null || true
+    touch "$user_keys" 2>/dev/null || return 0
+    cat "$root_keys" >> "$user_keys" 2>/dev/null || true
+    sort -u -o "$user_keys" "$user_keys" 2>/dev/null || true
+    chmod 600 "$user_keys" 2>/dev/null || true
+    chown -R "$username:$username" "$user_ssh" 2>/dev/null || true
+}
+
+# 兼容安装器先向 root 注入公钥、再由普通用户登录的场景
+if [ -n "$SSH_USER" ]; then
+    sync_root_authorized_keys_to_ssh_user "$SSH_USER"
+fi
+
 # ── SSH 持久化：host keys 和 sshd_config 保存到 /root/.openclaw/ssh/ ──
 SSH_PERSIST_DIR="/root/.openclaw/ssh"
 mkdir -p "$SSH_PERSIST_DIR"
@@ -657,6 +686,7 @@ while true; do
     sleep 10
 
     refresh_openclaw_availability
+    sync_root_authorized_keys_to_ssh_user "$SSH_USER"
 
     # 检查 Gateway watchdog（始终保持 watchdog 进程在线）
     dedupe_gateway_watchdogs

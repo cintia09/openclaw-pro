@@ -709,6 +709,26 @@ function appendOcLogLine(line){
   appendColored(logEl, `${line}\n`, 6000, shouldAutoScroll(logEl));
 }
 
+function appendOcLogBlock(text){
+  const logEl = $('oc-log');
+  if (!logEl) return;
+  const chunk = String(text || '').trim();
+  if (!chunk) return;
+  appendColored(logEl, `${chunk}\n`, 6000, shouldAutoScroll(logEl));
+}
+
+async function loadGatewayStartupLogs(lines = 160){
+  try {
+    const r = await api(`/api/openclaw/gateway/logs?lines=${Math.max(20, Math.min(lines, 1200))}`, { timeoutMs: 12000 });
+    if (r?.success && r.logs) {
+      appendOcLogLine('[gateway] 最近启动日志快照：');
+      appendOcLogBlock(r.logs);
+    }
+  } catch (e) {
+    appendOcLogLine(`[gateway] 读取启动日志失败: ${e?.message || e}`);
+  }
+}
+
 async function refreshOpenClaw(opts = {}){
   const retries = Math.max(0, Number(opts.retries ?? 1));
   let d = null;
@@ -842,8 +862,11 @@ async function pollTask(taskId){
           const rr = await api('/api/openclaw/start', { method:'POST' });
           if (rr.success) {
             appendOcLogLine(`[gateway] ${rr.message || '重启请求已提交，watchdog 将自动拉起'}`);
+            if (rr.logs) appendOcLogBlock(rr.logs);
+            setTimeout(() => loadGatewayStartupLogs(200), 1800);
           } else {
             appendOcLogLine(`[gateway] 自动重启失败: ${rr.error || '请查看日志'}`);
+            if (rr.logs) appendOcLogBlock(rr.logs);
           }
         } catch (e) {
           appendOcLogLine(`[gateway] 自动重启请求失败: ${e.message || e}`);
@@ -1100,9 +1123,12 @@ $('btn-oc-start').addEventListener('click', async ()=>{
     if (r.success) {
       appendOcLogLine(`[gateway] ${r.message || '重启请求已提交'}`);
       appendOcLogLine('[gateway] 请稍候 2-5 秒，状态将自动刷新。');
+      if (r.logs) appendOcLogBlock(r.logs);
+      setTimeout(() => loadGatewayStartupLogs(200), 1800);
       toast('已触发重启', r.message || 'Gateway 正在重启，请稍候');
     } else {
       appendOcLogLine(`[gateway] 重启失败: ${r.error || '请查看日志'}`);
+      if (r.logs) appendOcLogBlock(r.logs);
       if (/Unrecognized key|Invalid config|配置无效/i.test(String(r.error || ''))) {
         appendOcLogLine('[gateway] 检测到配置无效，请点击“配置恢复”按钮后重试。');
       }
