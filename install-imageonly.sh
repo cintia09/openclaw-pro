@@ -527,6 +527,23 @@ chown -R '$host_user:$host_user' '/home/$host_user/.ssh'
   docker exec "$CONTAINER_NAME" bash -lc "id '$host_user' >/dev/null 2>&1"
 }
 
+generate_host_pubkey_if_missing(){
+  local key_path="$HOME/.ssh/id_ed25519"
+  local pub_path="${key_path}.pub"
+  [ -f "$pub_path" ] && { printf '%s' "$pub_path"; return 0; }
+
+  mkdir -p "$HOME/.ssh" >/dev/null 2>&1 || return 1
+  chmod 700 "$HOME/.ssh" >/dev/null 2>&1 || true
+  command -v ssh-keygen >/dev/null 2>&1 || return 1
+  [ -f "$key_path" ] && return 1
+
+  if ssh-keygen -q -t ed25519 -N "" -f "$key_path" >/dev/null 2>&1 && [ -f "$pub_path" ]; then
+    printf '%s' "$pub_path"
+    return 0
+  fi
+  return 1
+}
+
 harden_container_sshd(){
   local ssh_user="$1"
   docker exec -e OPENCLAW_SSH_USER="$ssh_user" "$CONTAINER_NAME" bash -lc '
@@ -548,6 +565,7 @@ if [ -n "$OPENCLAW_SSH_USER" ] && [ "$OPENCLAW_SSH_USER" != "root" ] && id "$OPE
   echo "AllowUsers $OPENCLAW_SSH_USER" >> "$cfg"
 else
   set_or_append "PermitRootLogin" "prohibit-password"
+  sed -i "/^[#[:space:]]*AllowUsers[[:space:]]/d" "$cfg" 2>/dev/null || true
 fi
 
 set_or_append "PasswordAuthentication" "no"
@@ -813,7 +831,10 @@ handle_existing_installation(){
     esac
   fi
 
-  [ -n "$running" ] && info "已停止并替换运行中的容器：$CONTAINER_NAME"
+  if [ -n "$running" ]; then
+    info "已停止并替换运行中的容器：$CONTAINER_NAME"
+  fi
+  return 0
 }
 
 # ─── firewall & fail2ban ─────────────────────────────────────
@@ -1003,6 +1024,21 @@ create_and_start(){
       break
     fi
   done
+
+  if [ "$key_injected" != "true" ]; then
+    local auto_pub=""
+    auto_pub="$(generate_host_pubkey_if_missing || true)"
+    if [ -n "$auto_pub" ]; then
+      info "未检测到宿主机公钥，已自动生成 $(basename "$auto_pub")"
+      if docker exec "$CONTAINER_NAME" bash -lc "chmod 700 /root 2>/dev/null || true; mkdir -p /root/.ssh && chmod 700 /root/.ssh" >/dev/null 2>&1 \
+        && docker cp "$auto_pub" "$CONTAINER_NAME:/root/.ssh/authorized_keys.tmp" >/dev/null 2>&1 \
+        && docker exec "$CONTAINER_NAME" bash -lc "cat /root/.ssh/authorized_keys.tmp >> /root/.ssh/authorized_keys && sort -u -o /root/.ssh/authorized_keys /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && test -s /root/.ssh/authorized_keys && rm -f /root/.ssh/authorized_keys.tmp" >/dev/null 2>&1; then
+        key_injected="true"
+        ssh_login_user="root"
+        warn "未发现宿主机公钥，已自动生成并回退 root 密钥登录"
+      fi
+    fi
+  fi
 
   if harden_container_sshd "$ssh_login_user"; then
     ssh_hardened="true"
