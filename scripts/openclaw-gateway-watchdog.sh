@@ -215,7 +215,19 @@ start_once() {
     return 2
   fi
 
-  : > "$GATEWAY_LOG"
+  local gateway_log_dir fallback_log
+  gateway_log_dir="$(dirname "$GATEWAY_LOG")"
+  if ! mkdir -p "$gateway_log_dir" 2>/dev/null; then
+    fallback_log="$LOG_DIR/gateway.log"
+    mkdir -p "$(dirname "$fallback_log")" 2>/dev/null || true
+    log "WARN: cannot create runtime log dir ($gateway_log_dir), fallback to $fallback_log"
+    GATEWAY_LOG="$fallback_log"
+  fi
+
+  if ! : > "$GATEWAY_LOG"; then
+    log "ERROR: cannot write gateway log file: $GATEWAY_LOG"
+    return 3
+  fi
   nohup $GATEWAY_CMD > "$GATEWAY_LOG" 2>&1 &
   LAST_PID=$!
   log "Gateway process launched (PID $LAST_PID), polling every ${POLL_INTERVAL}s (timeout ${STARTUP_TIMEOUT}s)..."

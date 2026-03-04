@@ -230,7 +230,12 @@ function tailFile(filePath, lines = 200, timeoutMs = 2500) {
 }
 
 function resolveGatewayLogFileForStreaming() {
-  if (fs.existsSync(GATEWAY_RUNTIME_LOG_FILE)) return GATEWAY_RUNTIME_LOG_FILE;
+  try {
+    if (fs.existsSync(GATEWAY_RUNTIME_LOG_FILE) && fs.statSync(GATEWAY_RUNTIME_LOG_FILE).size > 0) {
+      return GATEWAY_RUNTIME_LOG_FILE;
+    }
+  } catch {}
+  if (fs.existsSync(GATEWAY_LEGACY_LOG_FILE)) return GATEWAY_LEGACY_LOG_FILE;
   return GATEWAY_LEGACY_LOG_FILE;
 }
 
@@ -241,15 +246,23 @@ function readOpenClawGatewayLogs(lines = 200, { includeWatchdog = false } = {}) 
     .map(sanitizeLogLine)
     .join('\n')
     .trim();
+  const pushLabeledChunk = (label, text) => {
+    const body = sanitizeBlock(text);
+    if (!body) return;
+    chunks.push(`[${label}]`);
+    chunks.push(body);
+  };
   const runtimeLog = tailFile(GATEWAY_RUNTIME_LOG_FILE, lines, 2500);
-  const legacyLog = tailFile(GATEWAY_LEGACY_LOG_FILE, lines, 2500);
-
-  if (runtimeLog.trim()) chunks.push(sanitizeBlock(runtimeLog));
-  if (legacyLog.trim() && legacyLog.trim() !== runtimeLog.trim()) chunks.push(sanitizeBlock(legacyLog));
+  if (runtimeLog.trim()) {
+    pushLabeledChunk('gateway-runtime', runtimeLog);
+  } else {
+    const legacyLog = tailFile(GATEWAY_LEGACY_LOG_FILE, lines, 2500);
+    if (legacyLog.trim()) pushLabeledChunk('gateway-legacy', legacyLog);
+  }
 
   if (includeWatchdog) {
     const watchdogLog = tailFile(GATEWAY_WATCHDOG_LOG, lines, 2500);
-    if (watchdogLog.trim()) chunks.push(sanitizeBlock(watchdogLog));
+    if (watchdogLog.trim()) pushLabeledChunk('watchdog', watchdogLog);
   }
 
   return chunks.join('\n');

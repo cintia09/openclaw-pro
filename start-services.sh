@@ -133,7 +133,7 @@ fi
 
 CONFIG_FILE="/root/.openclaw/docker-config.json"
 LOG_DIR="/root/.openclaw/logs"
-mkdir -p "$LOG_DIR" /root/.openclaw
+mkdir -p "$LOG_DIR" /root/.openclaw /workspace/tmp
 
 # ── 恢复 OpenClaw 源码安装目录（持久化在 /root 下）──
 PERSIST_OPENCLAW_SRC="/root/.openclaw/openclaw-source"

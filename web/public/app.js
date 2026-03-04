@@ -683,6 +683,7 @@ let ocInstalled = false;
 let ocInstallTaskRunningRemote = false;
 let ocRepairTaskRunningRemote = false;
 let ocGatewayRestartRunningRemote = false;
+let ocLastGatewaySnapshot = '';
 
 function syncOpenClawButtons(){
   const installBtn = $('btn-oc-install');
@@ -720,13 +721,21 @@ function appendOcLogBlock(text){
 async function loadGatewayStartupLogs(lines = 160){
   try {
     const r = await api(`/api/openclaw/gateway/logs?lines=${Math.max(20, Math.min(lines, 1200))}`, { timeoutMs: 12000 });
-    if (r?.success && r.logs) {
+    const snapshot = String(r?.logs || '').trim();
+    if (r?.success && snapshot && snapshot !== ocLastGatewaySnapshot) {
       appendOcLogLine('[gateway] 最近启动日志快照：');
-      appendOcLogBlock(r.logs);
+      appendOcLogBlock(snapshot);
+      ocLastGatewaySnapshot = snapshot;
     }
   } catch (e) {
     appendOcLogLine(`[gateway] 读取启动日志失败: ${e?.message || e}`);
   }
+}
+
+function scheduleGatewayStartupLogPulls(lines = 200){
+  [1800, 4200, 8000].forEach((delay) => {
+    setTimeout(() => loadGatewayStartupLogs(lines), delay);
+  });
 }
 
 async function refreshOpenClaw(opts = {}){
@@ -858,15 +867,22 @@ async function pollTask(taskId){
       toast(st.status === 'success' ? '完成' : '失败', st.status === 'success' ? 'OpenClaw 已就绪' : (st.log || '请查看日志'));
       if (st.status === 'success') {
         appendOcLogLine('[gateway] 安装/更新成功，正在自动重启 Gateway...');
+        ocLastGatewaySnapshot = '';
         try {
           const rr = await api('/api/openclaw/start', { method:'POST' });
           if (rr.success) {
             appendOcLogLine(`[gateway] ${rr.message || '重启请求已提交，watchdog 将自动拉起'}`);
-            if (rr.logs) appendOcLogBlock(rr.logs);
-            setTimeout(() => loadGatewayStartupLogs(200), 1800);
+            if (rr.logs) {
+              appendOcLogBlock(rr.logs);
+              ocLastGatewaySnapshot = String(rr.logs || '').trim() || ocLastGatewaySnapshot;
+            }
+            scheduleGatewayStartupLogPulls(220);
           } else {
             appendOcLogLine(`[gateway] 自动重启失败: ${rr.error || '请查看日志'}`);
-            if (rr.logs) appendOcLogBlock(rr.logs);
+            if (rr.logs) {
+              appendOcLogBlock(rr.logs);
+              ocLastGatewaySnapshot = String(rr.logs || '').trim() || ocLastGatewaySnapshot;
+            }
           }
         } catch (e) {
           appendOcLogLine(`[gateway] 自动重启请求失败: ${e.message || e}`);
@@ -1118,17 +1134,24 @@ $('btn-oc-start').addEventListener('click', async ()=>{
   ocStartRunning = true;
   syncOpenClawButtons();
   appendOcLogLine('[gateway] 正在提交重启请求...');
+  ocLastGatewaySnapshot = '';
   try {
     const r = await api('/api/openclaw/start', { method:'POST' });
     if (r.success) {
       appendOcLogLine(`[gateway] ${r.message || '重启请求已提交'}`);
       appendOcLogLine('[gateway] 请稍候 2-5 秒，状态将自动刷新。');
-      if (r.logs) appendOcLogBlock(r.logs);
-      setTimeout(() => loadGatewayStartupLogs(200), 1800);
+      if (r.logs) {
+        appendOcLogBlock(r.logs);
+        ocLastGatewaySnapshot = String(r.logs || '').trim() || ocLastGatewaySnapshot;
+      }
+      scheduleGatewayStartupLogPulls(220);
       toast('已触发重启', r.message || 'Gateway 正在重启，请稍候');
     } else {
       appendOcLogLine(`[gateway] 重启失败: ${r.error || '请查看日志'}`);
-      if (r.logs) appendOcLogBlock(r.logs);
+      if (r.logs) {
+        appendOcLogBlock(r.logs);
+        ocLastGatewaySnapshot = String(r.logs || '').trim() || ocLastGatewaySnapshot;
+      }
       if (/Unrecognized key|Invalid config|配置无效/i.test(String(r.error || ''))) {
         appendOcLogLine('[gateway] 检测到配置无效，请点击“配置恢复”按钮后重试。');
       }

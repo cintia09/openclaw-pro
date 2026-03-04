@@ -130,6 +130,7 @@ docker exec openclaw-pro bash -lc 'rm -f /root/.openclaw/config-backups/openclaw
 | F-11 | 状态接口一致性 | 服务运行中 | 轮询 `/api/openclaw` 与 `/api/status` | UI 状态与进程/日志一致 |
 | F-12 | 任务日志完整性 | 触发安装/更新任务 | 轮询 task API | 可增量读取日志，状态终态正确 |
 | F-13 | 安装/更新/Gateway 启动日志正确显示 | 已启用 OpenClaw 引擎页 | 执行安装/更新并触发重启，检查 `oc-log` 与 `/api/openclaw/gateway/logs` | UI 显示包含任务日志 + Gateway/Watchdog 启动日志快照，日志源正确 |
+| F-14 | Gateway 运行日志路径自愈 | 删除 `/workspace/tmp` 后触发重启 | 检查 watchdog 与 gateway 日志 | 不出现 `No such file or directory`；运行日志可写入 runtime 或 legacy 兜底路径 |
 
 ## 6.2 安全测试集（S）
 
@@ -146,6 +147,7 @@ docker exec openclaw-pro bash -lc 'rm -f /root/.openclaw/config-backups/openclaw
 | S-09 | 安装来源可审计 | 执行安装后查看 source metadata | 包含 repo/tag/tarballUrl/installedAt |
 | S-10 | API 输入校验 | 传入非法 repo/tag 参数 | 后端拒绝并返回明确错误 |
 | S-11 | SSH 公钥登录一致性 | `HOST_USER` 模式下检查 `AllowUsers` 与用户 `authorized_keys` | 非 root 用户可密钥登录，避免 `Permission denied (publickey)` |
+| S-12 | 日志源优先级与标记 | 同时存在 runtime/legacy 日志 | 调用 `/api/openclaw/gateway/logs` | 仅返回一个 Gateway 主日志源（runtime 优先），并带 `[gateway-runtime]/[gateway-legacy]/[watchdog]` 标记 |
 
 ## 6.3 端到端测试集（E2E）
 
@@ -160,6 +162,7 @@ docker exec openclaw-pro bash -lc 'rm -f /root/.openclaw/config-backups/openclaw
 | E2E-07 | watchdog 失效恢复 | watchdog 异常后被拉起并继续守护 |
 | E2E-08 | 安全回归链路 | 鉴权、输入校验、审计日志均通过 |
 | E2E-09 | SSH 登录链路（HOST_USER） | 非 root 用户（如 `wm_20`）可使用宿主机公钥登录 |
+| E2E-10 | Gateway 启动日志链路自愈 | `/workspace/tmp` 缺失后仍能恢复并输出正确启动日志 |
 
 ---
 
@@ -249,6 +252,21 @@ docker exec openclaw-pro bash -lc 'rm -f /root/.openclaw/config-backups/openclaw
 4. 断言：
    - 非 root 用户公钥登录成功。
    - 不出现 `Permission denied (publickey)`。
+
+## 7.10 E2E-10：Gateway 启动日志链路自愈
+
+1. 在容器内模拟 runtime 日志目录缺失：
+   - `rm -rf /workspace/tmp`
+2. 触发 Gateway 重启（Web 按钮或 `POST /api/openclaw/start`）。
+3. 检查 watchdog 日志与 gateway 日志：
+   - `tail -n 120 /root/.openclaw/logs/gateway-watchdog.log`
+   - `ls -ld /workspace/tmp /workspace/tmp/openclaw-gateway.log 2>/dev/null`
+   - `tail -n 80 /workspace/tmp/openclaw-gateway.log 2>/dev/null || tail -n 80 /root/.openclaw/logs/gateway.log`
+4. 调用日志接口（已登录会话）：
+   - `GET /api/openclaw/gateway/logs?lines=200`
+5. 断言：
+   - 不出现 `.../openclaw-gateway.log: No such file or directory`。
+   - 返回内容包含来源标记并可读（gateway + watchdog）。
 
 ---
 
