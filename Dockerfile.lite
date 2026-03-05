@@ -31,7 +31,10 @@ RUN echo 'Defaults env_keep += "http_proxy https_proxy HTTP_PROXY HTTPS_PROXY no
 
 # Node.js 22（Web 管理面板必需）
 RUN curl -fsSL --retry 3 --retry-delay 3 https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y nodejs && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y nodejs npm \
+    && command -v node && command -v npm \
+    && node -v && npm -v \
+    && rm -rf /var/lib/apt/lists/*
 
 # 预装源码构建工具（避免运行时网络抖动）
 RUN npm install -g pnpm@10.23.0 rolldown@1.0.0-rc.6 --no-audit --no-fund \
