@@ -18,6 +18,28 @@ const { execSync, exec, spawn } = require('child_process');
 const crypto = require('crypto');
 const dns = require('dns');
 
+const baseConsole = {
+  log: console.log.bind(console),
+  info: console.info.bind(console),
+  warn: console.warn.bind(console),
+  error: console.error.bind(console),
+  debug: (console.debug || console.log).bind(console)
+};
+
+function logTimestamp() {
+  return new Date().toISOString();
+}
+
+function wrapConsole(method) {
+  return (...args) => baseConsole[method](`[${logTimestamp()}]`, ...args);
+}
+
+console.log = wrapConsole('log');
+console.info = wrapConsole('info');
+console.warn = wrapConsole('warn');
+console.error = wrapConsole('error');
+console.debug = wrapConsole('debug');
+
 // ── 关键修复：让 Node.js 的 fetch() 使用 dns.lookup（读 /etc/hosts），
 //    而非 dns.resolve（只走 DNS 服务器，无法读 /etc/hosts）──
 // Node.js 22 内置 fetch 基于 undici，但 undici 模块不直接暴露给 require。
