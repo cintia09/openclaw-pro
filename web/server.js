@@ -617,8 +617,8 @@ function getInstalledOpenClawVersion() {
     runCommandText('openclaw --version 2>&1 || true', 1800),
     runCommandText('bash --noprofile --norc -lc "openclaw --version 2>&1 || true"', 2000),
     runCommandText("node -e 'try{const p=require(\"/root/.npm-global/lib/node_modules/openclaw/package.json\"); console.log(p.version||\"\")}catch(e){}'", 1800),
-    runCommandText('npm list -g openclaw --depth=0 2>/dev/null | sed -n "s/.*openclaw@\\([^[:space:]]*\\).*/\\1/p" | head -1', 2200),
-    runCommandText('npm root -g 2>/dev/null | xargs -I{} sh -c "test -f \"{}/openclaw/package.json\" && sed -n \"s/.*\\\"version\\\": *\\\"\\([^\\\"]*\\\)\\\".*/\\1/p\" \"{}/openclaw/package.json\" | head -1"', 2200)
+    runCommandText("node -e 'try{const cp=require(\"child_process\");const out=cp.execSync(\"npm list -g openclaw --depth=0 --json\",{stdio:[\"ignore\",\"pipe\",\"ignore\"]}).toString();const j=JSON.parse(out||\"{}\");const v=j&&j.dependencies&&j.dependencies.openclaw&&j.dependencies.openclaw.version; if(v) console.log(v);}catch(e){}'", 2400),
+    runCommandText("node -e 'try{const cp=require(\"child_process\");const root=cp.execSync(\"npm root -g\",{stdio:[\"ignore\",\"pipe\",\"ignore\"]}).toString().trim();if(!root) process.exit(0);const p=require(root+\"/openclaw/package.json\"); if(p&&p.version) console.log(p.version);}catch(e){}'", 2400)
   ];
 
   for (const output of candidates) {
@@ -778,11 +778,53 @@ function createTerminalShell() {
     return { shell: null, mode: 'unavailable', reason: 'bash not found' };
   }
 
+  const terminalRcPath = '/tmp/openclaw-terminal.bashrc';
+  try {
+    const rcContent = [
+      'export TERM=xterm-256color',
+      'export COLORTERM=truecolor',
+      'export CLICOLOR=1',
+      'export CLICOLOR_FORCE=1',
+      'if command -v dircolors >/dev/null 2>&1; then',
+      '  eval "$(dircolors -b 2>/dev/null)" || true',
+      'fi',
+      'if ls --color=always -d . >/dev/null 2>&1; then',
+      "  alias ls='ls --color=always'",
+      'elif ls -G -d . >/dev/null 2>&1; then',
+      "  alias ls='ls -G'",
+      'fi',
+      'if grep --color=always "" </dev/null >/dev/null 2>&1; then',
+      "  alias grep='grep --color=always'",
+      "  alias egrep='egrep --color=always'",
+      "  alias fgrep='fgrep --color=always'",
+      'fi',
+      "PS1='\\[\\e[1;32m\\]\\u@\\h\\[\\e[0m\\]:\\[\\e[1;34m\\]\\w\\[\\e[0m\\]\\$ '",
+      'export PS1'
+    ].join('\n');
+    const old = fs.existsSync(terminalRcPath) ? fs.readFileSync(terminalRcPath, 'utf8') : '';
+    if (old !== rcContent) {
+      fs.writeFileSync(terminalRcPath, rcContent, { mode: 0o600 });
+    }
+  } catch {}
+
+  const shellEnv = {
+    ...process.env,
+    TERM: 'xterm-256color',
+    COLUMNS: '220',
+    LINES: '60',
+    SHELL: '/bin/bash',
+    HOME: '/root',
+    BASH_ENV: '',
+    ENV: ''
+  };
+
+  const startupCmd = `stty cols 220 rows 60 >/dev/null 2>&1 || true; exec bash --noprofile --rcfile ${terminalRcPath} -i`;
+
   const useScriptPty = runCommandOk('command -v script >/dev/null 2>&1', 800);
   if (useScriptPty) {
     return {
-      shell: spawn('script', ['-qf', '-c', 'bash -li', '/dev/null'], {
-        env: { ...process.env, TERM: 'xterm-256color', SHELL: '/bin/bash' },
+      shell: spawn('script', ['-qf', '-c', startupCmd, '/dev/null'], {
+        env: shellEnv,
         cwd: '/root'
       }),
       mode: 'pty',
@@ -791,13 +833,48 @@ function createTerminalShell() {
   }
 
   return {
-    shell: spawn('bash', ['-li'], {
-      env: { ...process.env, TERM: 'xterm-256color', SHELL: '/bin/bash' },
+    shell: spawn('bash', ['--noprofile', '--norc', '-ic', startupCmd], {
+      env: shellEnv,
       cwd: '/root'
     }),
     mode: 'fallback',
     reason: 'script not found; using bash fallback'
   };
+}
+
+function tryResizePtyShell(shell, cols, rows) {
+  const c = Math.max(40, Number(cols) || 80);
+  const r = Math.max(12, Number(rows) || 24);
+  try {
+    const shellPid = Number(shell?.pid || 0);
+    if (!shellPid) return false;
+    let ttyPath = '';
+    try {
+      const fdDir = `/proc/${shellPid}/fd`;
+      const entries = fs.readdirSync(fdDir);
+      for (const fd of entries) {
+        try {
+          const target = fs.readlinkSync(`${fdDir}/${fd}`);
+          if (target && target.startsWith('/dev/pts/')) {
+            ttyPath = target;
+            break;
+          }
+        } catch {}
+      }
+    } catch {}
+    if (!ttyPath) return false;
+    try {
+      execFileSync('stty', ['cols', String(c), 'rows', String(r), '-F', ttyPath], {
+        stdio: 'ignore',
+        timeout: 1200
+      });
+    } catch {
+      execSync(`stty cols ${c} rows ${r} < "${ttyPath}" >/dev/null 2>&1 || true`, { stdio: 'ignore', timeout: 1200 });
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ============================================================
@@ -1031,11 +1108,12 @@ function proxyGatewayRequest(req, res) {
   const cfg = readDockerConfig();
   const gatewayPort = Number(cfg.port || 18789) || 18789;
   const upstreamPath = gatewayProxyPathFromOriginalUrl(req.originalUrl || req.url);
+  const externalHost = String(req.headers['x-forwarded-host'] || req.headers.host || `127.0.0.1:${gatewayPort}`).split(',')[0].trim() || `127.0.0.1:${gatewayPort}`;
 
   const headers = { ...req.headers };
   delete headers.connection;
   delete headers['content-length'];
-  headers.host = `127.0.0.1:${gatewayPort}`;
+  headers.host = externalHost;
 
   const proxyReq = http.request({
     hostname: '127.0.0.1',
@@ -1088,6 +1166,7 @@ function isGatewayProxyUpgradePath(url) {
 
 function buildUpgradeRequestText(req, upstreamPath, gatewayPort) {
   let requestText = `${req.method} ${upstreamPath} HTTP/${req.httpVersion}\r\n`;
+  const externalHost = String(req.headers['x-forwarded-host'] || req.headers.host || `127.0.0.1:${gatewayPort}`).split(',')[0].trim() || `127.0.0.1:${gatewayPort}`;
   const skipped = new Set(['host', 'connection', 'upgrade', 'proxy-connection']);
   for (let i = 0; i < req.rawHeaders.length; i += 2) {
     const key = req.rawHeaders[i];
@@ -1096,7 +1175,7 @@ function buildUpgradeRequestText(req, upstreamPath, gatewayPort) {
     if (skipped.has(String(key).toLowerCase())) continue;
     requestText += `${key}: ${value}\r\n`;
   }
-  requestText += `Host: 127.0.0.1:${gatewayPort}\r\n`;
+  requestText += `Host: ${externalHost}\r\n`;
   requestText += 'Connection: Upgrade\r\n';
   requestText += 'Upgrade: websocket\r\n\r\n';
   return requestText;
@@ -1587,8 +1666,11 @@ app.post('/api/update/hotpatch', async (req, res) => {
 app.get('/api/status', (req, res) => {
   const statusStart = Date.now();
   const status = { gateway: false, web: true, caddy: false, uptime: 0, memory: {}, version: getCurrentVersion() };
+  const ocSnapshot = getOpenClawInstallationSnapshot();
+  status.openclawInstalled = !!ocSnapshot?.installed;
+  status.openclawVersion = String(ocSnapshot?.version || '').trim();
 
-  status.gateway = runCommandOk('curl -sS --connect-timeout 1 --max-time 2 http://127.0.0.1:18789/health >/dev/null 2>&1', 2500)
+  status.gateway = runCommandOk('curl -s --connect-timeout 1 --max-time 2 http://127.0.0.1:18789/health >/dev/null 2>&1', 2500)
     || runCommandOk('ss -ltn 2>/dev/null | grep -q "[:.]18789[[:space:]]" || netstat -ltn 2>/dev/null | grep -q "[:.]18789[[:space:]]"', 1200);
   if (!status.gateway) {
     const e = new Error('gateway not detected');
@@ -2484,7 +2566,14 @@ app.get('/api/openclaw', async (req, res) => {
     const forceCheck = String(req.query.force || '') === '1';
     const detected = getOpenClawInstallationSnapshot(forceCheck);
     const installed = detected.installed;
-    const version = detected.version;
+    let version = String(detected.version || '').trim();
+    if (version.toLowerCase() === 'dev' || version.toLowerCase() === 'unknown') {
+      version = '';
+    }
+    if (!version && installed) {
+      const fallbackVersion = String(getInstalledOpenClawVersion() || '').trim();
+      if (fallbackVersion) version = fallbackVersion;
+    }
 
     let latestVersion = '';
     let updateCheckError = '';
@@ -2498,19 +2587,29 @@ app.get('/api/openclaw', async (req, res) => {
 
     const hasUpdate = !!(installed && version && latestVersion && compareSemver(latestVersion, version) > 0);
 
-    const invalidConfigKeys = detectInvalidConfigKeysFromText(readGatewayLogTail(300));
+    const gatewayLogTail = readGatewayLogTail(300);
+    const invalidConfigKeys = detectInvalidConfigKeysFromText(gatewayLogTail);
+    const gatewayPairingRequired = /pairing\s+required/i.test(String(gatewayLogTail || ''));
 
-    const gatewayHealthCodeText = runCommandText('curl -sS -o /dev/null -w "%{http_code}" --connect-timeout 1 --max-time 2 http://127.0.0.1:18789/health || true', 3000);
+    const gatewayHealthCodeText = runCommandText('curl -s -o /dev/null -w "%{http_code}" --connect-timeout 1 --max-time 2 http://127.0.0.1:18789/health 2>/dev/null || true', 3000);
     const gatewayHealthCode = Number.parseInt(String(gatewayHealthCodeText || '').trim(), 10) || 0;
     const gatewayRunning = gatewayHealthCode === 200;
     const gatewayProcessRunning = runCommandOk('pgrep -f "[o]penclaw.*gateway" >/dev/null 2>&1', 1200)
       || runCommandOk('ss -ltn 2>/dev/null | grep -q "[:.]18789[[:space:]]" || netstat -ltn 2>/dev/null | grep -q "[:.]18789[[:space:]]"', 1200);
     const gatewayWatchdogRunning = runCommandOk('pgrep -f "[o]penclaw-gateway-watchdog.sh" >/dev/null 2>&1', 1200);
+    const gatewayProcessUptimeSec = Number.parseInt(String(runCommandText('pgrep -f "[o]penclaw.*gateway" | head -1 | xargs -I{} ps -o etimes= -p {} 2>/dev/null || true', 1200) || '').trim(), 10) || 0;
 
     const installTaskRunning = isTaskRunning(installLogs, activeInstallTaskId);
     const repairTaskRunning = isTaskRunning(repairLogs, activeRepairTaskId) || isRepairLockActive();
     const operationState = getOpenClawOperationState();
     const operationProgress = buildOpenClawOperationProgress(operationState);
+    const gatewayStarting = !!(
+      !gatewayRunning
+      && gatewayProcessRunning
+      && (
+        gatewayProcessUptimeSec > 0 && gatewayProcessUptimeSec <= 300
+      )
+    ) || operationState?.type === 'restarting_gateway';
     const lastBackupAt = getLastBackupAt();
     const lastRollbackAt = getLastRollbackAtFromWatchdog();
 
@@ -2522,8 +2621,11 @@ app.get('/api/openclaw', async (req, res) => {
       updateCheckError,
       gatewayRunning,
       gatewayProcessRunning,
+      gatewayStarting,
+      gatewayProcessUptimeSec,
       gatewayHealthCode,
       gatewayWatchdogRunning,
+      gatewayPairingRequired,
       invalidConfigKeys,
       installSource: detected.source,
       installTaskRunning,
@@ -2547,16 +2649,19 @@ app.get('/api/openclaw/gateway-link', (req, res) => {
     const authMode = String(cfg?.gateway?.auth?.mode || 'none').trim() || 'none';
     const rawToken = String(cfg?.gateway?.auth?.token || '').trim();
     const hostHeader = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+    const protoHeader = String(req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim().toLowerCase();
     const hostname = (hostHeader.split(':')[0] || '127.0.0.1').trim();
+    const externalProto = (protoHeader === 'https' ? 'https' : 'http');
 
-    const directBase = `http://${hostname}:18789/`;
+    const gatewayPort = Number(cfg?.port || 18789) || 18789;
+    const directBase = `http://${hostname}:${gatewayPort}/`;
     const tokenHash = rawToken ? `#token=${encodeURIComponent(rawToken)}` : '';
     const directUrl = `${directBase}${tokenHash}`;
-    const proxyUrl = '/gateway-proxy/';
+    const proxyUrl = `/${'gateway-proxy/'}`;
+    const externalProxyUrl = `${externalProto}://${hostHeader || hostname}${proxyUrl}${tokenHash}`;
+    const externalGatewayUrl = `${externalProto}://${hostHeader || hostname}/gateway${tokenHash}`;
 
-    const preferredUrl = (authMode === 'token' && rawToken)
-      ? directUrl
-      : (authMode === 'none' ? directBase : proxyUrl);
+    const preferredUrl = externalGatewayUrl;
 
     let hint = '';
     if (authMode === 'token' && !rawToken) {
@@ -2570,6 +2675,8 @@ app.get('/api/openclaw/gateway-link', (req, res) => {
       authMode,
       hasToken: !!rawToken,
       preferredUrl,
+      externalGatewayUrl,
+      externalProxyUrl,
       directUrl,
       proxyUrl,
       hint
@@ -3239,15 +3346,15 @@ if (WebSocketServer) {
       } catch {}
     };
 
-    if (mode === 'pty') {
-      sendOutput('OpenClaw Terminal connected (PTY). 输入命令并回车执行。\n');
-    } else {
+    if (mode !== 'pty') {
       sendOutput('OpenClaw Terminal connected (fallback shell). 输入命令并回车执行。\n');
       sendOutput('[terminal] 当前环境未检测到 script，已使用兼容模式。\n');
     }
 
     shell.stdout.on('data', (chunk) => sendOutput(chunk.toString('utf8')));
-    shell.stderr.on('data', (chunk) => sendOutput(chunk.toString('utf8')));
+    if (mode !== 'pty') {
+      shell.stderr.on('data', (chunk) => sendOutput(chunk.toString('utf8')));
+    }
 
     shell.on('close', (code) => {
       console.log(`[terminal-ws] shell closed code=${code ?? 0} mode=${mode}`);
@@ -3271,9 +3378,9 @@ if (WebSocketServer) {
         if (msg.type === 'input' && typeof msg.data === 'string') {
           shell.stdin.write(msg.data);
         } else if (msg.type === 'resize') {
-          const cols = Math.max(20, Math.min(500, Number(msg.cols) || 80));
-          const rows = Math.max(8, Math.min(200, Number(msg.rows) || 24));
-          shell.stdin.write(`stty cols ${cols} rows ${rows}\n`);
+          if (mode === 'pty') {
+            tryResizePtyShell(shell, msg.cols, msg.rows);
+          }
         }
       } catch {
         // ignore invalid payload

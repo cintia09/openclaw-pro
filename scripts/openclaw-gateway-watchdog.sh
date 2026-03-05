@@ -25,6 +25,7 @@ export DISPLAY=:99
 SOURCE_ROOT="/root/.openclaw/openclaw-source"
 GATEWAY_CMD="node --experimental-sqlite /root/.openclaw/openclaw-source/openclaw.mjs gateway run --force --allow-unconfigured"
 GATEWAY_LOG="/root/.openclaw/logs/openclaw-gateway.log"
+OPENCLAW_RUNTIME_VERSION="${OPENCLAW_VERSION:-}"
 
 LOCK_DIR="/root/.openclaw/locks/gateway-watchdog.lock"
 LOCK_PID_FILE="$LOCK_DIR/pid"
@@ -52,6 +53,23 @@ log_event() {
   else
     log "[wd][$event]"
   fi
+}
+
+detect_runtime_version() {
+  [ -n "$OPENCLAW_RUNTIME_VERSION" ] && return 0
+  local candidates file ver
+  candidates="$SOURCE_ROOT/package.json /root/.npm-global/lib/node_modules/openclaw/package.json /usr/local/lib/node_modules/openclaw/package.json /usr/lib/node_modules/openclaw/package.json"
+  for file in $candidates; do
+    [ -f "$file" ] || continue
+    ver=$(grep -m1 '"version"' "$file" 2>/dev/null | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' | tr -d '\r\n ')
+    if [ -n "$ver" ] && [ "$ver" != "dev" ] && [ "$ver" != "unknown" ]; then
+      OPENCLAW_RUNTIME_VERSION="$ver"
+      export OPENCLAW_VERSION="$ver"
+      export OPENCLAW_SERVICE_VERSION="$ver"
+      return 0
+    fi
+  done
+  return 1
 }
 
 config_hash() {
@@ -225,6 +243,7 @@ wait_for_ready() {
 }
 
 start_once() {
+  detect_runtime_version >/dev/null 2>&1 || true
   if [ ! -f "$SOURCE_ROOT/openclaw.mjs" ]; then
     log "Cannot start gateway: source entry not found at $SOURCE_ROOT/openclaw.mjs"
     return 2
@@ -242,6 +261,9 @@ start_once() {
   if ! : > "$GATEWAY_LOG"; then
     log "ERROR: cannot write gateway log file: $GATEWAY_LOG"
     return 3
+  fi
+  if [ -n "$OPENCLAW_RUNTIME_VERSION" ]; then
+    log "Gateway runtime version: $OPENCLAW_RUNTIME_VERSION"
   fi
   nohup $GATEWAY_CMD > "$GATEWAY_LOG" 2>&1 &
   LAST_PID=$!
