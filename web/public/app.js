@@ -294,6 +294,43 @@ document.addEventListener('visibilitychange', () => {
   terminalConnect();
 });
 
+const SIDEBAR_PREF_KEY = 'ocSidebarHidden';
+
+function isMobileViewport(){
+  return window.matchMedia('(max-width: 920px)').matches;
+}
+
+function getSavedSidebarHidden(){
+  try {
+    return localStorage.getItem(SIDEBAR_PREF_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function setDesktopSidebarHidden(hidden, { persist = true } = {}){
+  const nextHidden = !!hidden;
+  document.body.classList.toggle('sidebar-hidden', nextHidden);
+  const btn = $('btn-hamburger');
+  if (btn) {
+    btn.textContent = nextHidden ? '☰' : '◧';
+    btn.title = nextHidden ? '显示侧边栏' : '隐藏侧边栏';
+    btn.setAttribute('aria-label', btn.title);
+  }
+  if (!persist) return;
+  try {
+    localStorage.setItem(SIDEBAR_PREF_KEY, nextHidden ? '1' : '0');
+  } catch {}
+}
+
+function applySidebarPreference(){
+  if (isMobileViewport()) {
+    setDesktopSidebarHidden(false, { persist: false });
+    return;
+  }
+  setDesktopSidebarHidden(getSavedSidebarHidden(), { persist: false });
+}
+
 $('btn-gateway-console')?.addEventListener('click', (e) => {
   e.preventDefault();
   const popup = window.open('', '_blank');
@@ -318,7 +355,13 @@ $('btn-gateway-console')?.addEventListener('click', (e) => {
 });
 
 // mobile sidebar
-$('btn-hamburger').addEventListener('click', ()=> $('sidebar').classList.toggle('open'));
+$('btn-hamburger').addEventListener('click', ()=> {
+  if (isMobileViewport()) {
+    $('sidebar').classList.toggle('open');
+    return;
+  }
+  setDesktopSidebarHidden(!document.body.classList.contains('sidebar-hidden'));
+});
 document.addEventListener('click', (e)=>{
   const sidebar = $('sidebar');
   if (!sidebar.classList.contains('open')) return;
@@ -326,6 +369,8 @@ document.addEventListener('click', (e)=>{
   if (sidebar.contains(e.target) || btn.contains(e.target)) return;
   sidebar.classList.remove('open');
 });
+window.addEventListener('resize', applySidebarPreference);
+applySidebarPreference();
 
 // ------------------------
 // Tabs (messaging + plugins)
