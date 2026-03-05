@@ -2026,6 +2026,10 @@ async function terminalConnect(){
         clearInterval(termFallbackTimer);
         termFallbackTimer = null;
       }
+      try { setActiveRoute('terminal'); } catch {}
+      if (getRouteFromHash() !== 'terminal') {
+        location.hash = 'terminal';
+      }
       $('term-state').textContent = '已连接';
       if (termEmulator) {
         try { termEmulator.clear(); } catch {}
