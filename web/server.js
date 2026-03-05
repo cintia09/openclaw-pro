@@ -184,6 +184,7 @@ const GATEWAY_RUNTIME_LOG_FILE = '/root/.openclaw/logs/openclaw-gateway.log';
 const GATEWAY_LEGACY_LOG_FILE = '/root/.openclaw/logs/gateway.log';
 const GATEWAY_WATCHDOG_LOG = '/root/.openclaw/logs/gateway-watchdog.log';
 const WEB_PANEL_LOG_FILE = '/root/.openclaw/logs/web-panel.log';
+const OPENCLAW_INSTALL_LOG_FILE = '/root/.openclaw/logs/openclaw-install.log';
 const OPENCLAW_STATE_ROOT = '/root/.openclaw';
 const OPENCLAW_LOCK_DIR = `${OPENCLAW_STATE_ROOT}/locks`;
 
@@ -2082,6 +2083,12 @@ function isTaskRunning(taskMap, taskId) {
 function appendInstallLog(task, chunk) {
   const text = String(chunk || '');
   if (!text) return;
+  if (task.logFile) {
+    try {
+      fs.mkdirSync(path.dirname(task.logFile), { recursive: true });
+      fs.appendFileSync(task.logFile, text);
+    } catch {}
+  }
   task.log += text;
   task.seq = (task.seq || 0) + 1;
   task.chunks = task.chunks || [];
@@ -2222,15 +2229,18 @@ function runOpenClawRepairTask() {
 function runOpenClawTask(command, title, operationType = 'installing') {
   if (isOpenClawOperationBusy()) return null;
   const taskId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const taskLogFile = OPENCLAW_INSTALL_LOG_FILE;
   installLogs[taskId] = {
     status: 'running',
     log: '',
     startedAt: Date.now(),
     seq: 0,
-    chunks: []
+    chunks: [],
+    logFile: taskLogFile
   };
 
   const task = installLogs[taskId];
+  appendInstallLog(task, `\n===== [${new Date().toISOString()}] task ${taskId} (${operationType}) begin =====\n`);
   activeInstallTaskId = taskId;
   setOpenClawOperationState(operationType, taskId);
   appendInstallLog(task, `[openclaw] ${title}\n`);
@@ -2255,6 +2265,7 @@ function runOpenClawTask(command, title, operationType = 'installing') {
     }
     task.status = code === 0 ? 'success' : 'failed';
     task.exitCode = code;
+    appendInstallLog(task, `\n===== [${new Date().toISOString()}] task ${taskId} end status=${task.status} exitCode=${code ?? 'null'} signal=${signal || 'none'} =====\n`);
     if (activeInstallTaskId === taskId) activeInstallTaskId = '';
     clearOpenClawOperationState(operationType);
     const keys = Object.keys(installLogs).sort();
@@ -3024,12 +3035,12 @@ app.post('/api/openclaw/config/restore', (req, res) => {
 app.post('/api/openclaw/install', async (req, res) => {
   try {
     if (isTaskRunning(installLogs, activeInstallTaskId)) {
-      return res.json({ success: true, taskId: activeInstallTaskId, reused: true });
+      return res.json({ success: true, taskId: activeInstallTaskId, reused: true, logFile: installLogs[activeInstallTaskId]?.logFile || OPENCLAW_INSTALL_LOG_FILE });
     }
     const opState = getOpenClawOperationState();
     if (opState.type !== 'idle') {
       if ((opState.type === 'installing' || opState.type === 'updating') && isTaskRunning(installLogs, activeInstallTaskId)) {
-        return res.json({ success: true, taskId: activeInstallTaskId, reused: true, operationState: opState });
+        return res.json({ success: true, taskId: activeInstallTaskId, reused: true, operationState: opState, logFile: installLogs[activeInstallTaskId]?.logFile || OPENCLAW_INSTALL_LOG_FILE });
       }
       return res.status(409).json({ success: false, error: `操作进行中: ${opState.type}`, operationState: opState });
     }
@@ -3041,7 +3052,7 @@ app.post('/api/openclaw/install', async (req, res) => {
     if (!taskId) {
       return res.status(409).json({ success: false, error: '任务创建失败：存在并发操作占用', operationState: getOpenClawOperationState() });
     }
-    res.json({ success: true, taskId, release: { repo: release.repo, tag: release.tag } });
+    res.json({ success: true, taskId, release: { repo: release.repo, tag: release.tag }, logFile: installLogs[taskId]?.logFile || OPENCLAW_INSTALL_LOG_FILE });
   } catch (e) {
     res.status(500).json({ success: false, error: e?.message || '安装任务创建失败' });
   }
@@ -3182,12 +3193,12 @@ function buildOpenClawNpmInstallCommand() {
 app.post('/api/openclaw/update', async (req, res) => {
   try {
     if (isTaskRunning(installLogs, activeInstallTaskId)) {
-      return res.json({ success: true, taskId: activeInstallTaskId, reused: true });
+      return res.json({ success: true, taskId: activeInstallTaskId, reused: true, logFile: installLogs[activeInstallTaskId]?.logFile || OPENCLAW_INSTALL_LOG_FILE });
     }
     const opState = getOpenClawOperationState();
     if (opState.type !== 'idle') {
       if ((opState.type === 'installing' || opState.type === 'updating') && isTaskRunning(installLogs, activeInstallTaskId)) {
-        return res.json({ success: true, taskId: activeInstallTaskId, reused: true, operationState: opState });
+        return res.json({ success: true, taskId: activeInstallTaskId, reused: true, operationState: opState, logFile: installLogs[activeInstallTaskId]?.logFile || OPENCLAW_INSTALL_LOG_FILE });
       }
       return res.status(409).json({ success: false, error: `操作进行中: ${opState.type}`, operationState: opState });
     }
@@ -3199,7 +3210,7 @@ app.post('/api/openclaw/update', async (req, res) => {
     if (!taskId) {
       return res.status(409).json({ success: false, error: '任务创建失败：存在并发操作占用', operationState: getOpenClawOperationState() });
     }
-    res.json({ success: true, taskId, release: { repo: release.repo, tag: release.tag } });
+    res.json({ success: true, taskId, release: { repo: release.repo, tag: release.tag }, logFile: installLogs[taskId]?.logFile || OPENCLAW_INSTALL_LOG_FILE });
   } catch (e) {
     res.status(500).json({ success: false, error: e?.message || '更新任务创建失败' });
   }
