@@ -2,6 +2,7 @@
 .install-state.json
 install-log.txt
 node_modules/
+test/logs/
 
 # OS
 .DS_Store

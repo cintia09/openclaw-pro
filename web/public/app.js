@@ -527,10 +527,10 @@ async function checkForUpdate(force = false) {
     if (installNote) installNote.style.display = u.requiresFullUpdate ? '' : 'none';
     if (!u.requiresFullUpdate && fullHint) {
       fullHint.style.display = '';
-      fullHint.style.color = '#4ade80';
+      fullHint.style.color = '#30d158';
       fullHint.innerHTML = '⚡ <b>可热更新</b>：建议先点击“热更新”，无需重装容器';
     } else if (fullHint) {
-      fullHint.style.color = '#f59e0b';
+      fullHint.style.color = '#ff9f0a';
     }
   } else if (banner) {
     banner.style.display = 'none';
@@ -548,9 +548,9 @@ async function checkForUpdate(force = false) {
     const linkEl = $('settings-release-link');
     if (u.hasUpdate) {
       if (u.requiresFullUpdate) {
-        statusEl.innerHTML = '<span style="color:#f59e0b">📦 需要完整更新</span>';
+        statusEl.innerHTML = '<span style="color:#ff9f0a">📦 需要完整更新</span>';
       } else {
-        statusEl.innerHTML = '<span style="color:#4ade80">⚡ 可热更新</span>';
+        statusEl.innerHTML = '<span style="color:#30d158">⚡ 可热更新</span>';
       }
       if (linkEl && u.releaseUrl) { linkEl.href = u.releaseUrl; linkEl.style.display = ''; }
       // Show/hide hot update & full update hints on settings page
@@ -559,7 +559,7 @@ async function checkForUpdate(force = false) {
       if (hpBtn) hpBtn.style.display = u.requiresFullUpdate ? 'none' : '';
       if (fullNote) fullNote.style.display = u.requiresFullUpdate ? '' : 'none';
     } else if (u.latestVersion) {
-      statusEl.innerHTML = '<span style="color:#888">✅ 已是最新</span>';
+      statusEl.innerHTML = '<span style="color:#f5f5f7">✅ 已是最新</span>';
       if (linkEl) linkEl.style.display = 'none';
       // Hide hot update button and full update note when already up to date
       const hpBtn = $('btn-hotpatch');
@@ -572,7 +572,7 @@ async function checkForUpdate(force = false) {
       if (errMsg.includes('curl fallback failed') || errMsg.includes('fetch')) {
         errMsg = '⚠️ 无法连接 GitHub（网络不可达）';
       }
-      statusEl.innerHTML = `<span style="color:#f87171">${errMsg}</span>`;
+      statusEl.innerHTML = `<span style="color:#ff6b6b">${errMsg}</span>`;
       if (linkEl) linkEl.style.display = 'none';
       const hpBtn = $('btn-hotpatch');
       if (hpBtn) hpBtn.style.display = 'none';
@@ -1366,7 +1366,7 @@ $('btn-oc-install').addEventListener('click', async ()=>{
   }
 });
 
-$('btn-oc-start').addEventListener('click', async ()=>{
+$('btn-oc-start').addEventListener('click', async (event)=>{
   if (ocInstallRunning) {
     toast('任务进行中', '安装/更新执行中，暂不可重启 Gateway');
     return;
@@ -1374,6 +1374,14 @@ $('btn-oc-start').addEventListener('click', async ()=>{
   if (ocStartRunning) {
     toast('任务进行中', '网关重启正在执行，请稍候');
     return;
+  }
+  const skipConfirm = !!(event && event.shiftKey);
+  if (!skipConfirm) {
+    const ok = window.confirm('确认重启 Gateway？\n重启期间连接会短暂中断。');
+    if (!ok) {
+      toast('已取消', '未执行 Gateway 重启');
+      return;
+    }
   }
   ocStartRunning = true;
   ocGatewayRestartRunningRemote = true;
@@ -1828,8 +1836,8 @@ function initTerminalEmulator(){
       fontSize: 13,
       theme: {
         background: '#05070f',
-        foreground: '#e5e7eb',
-        cursor: '#93c5fd'
+        foreground: '#f5f5f7',
+        cursor: '#d1d1d6'
       }
     });
 

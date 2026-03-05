@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>OpenClaw 管理面板</title>
-  <link rel="stylesheet" href="/style.css?v=1.1.93" />
+  <link rel="stylesheet" href="/style.css?v=1.1.97" />
   <link rel="stylesheet" href="/vendor/xterm/xterm.css" />
 </head>
 <body>
@@ -34,7 +34,7 @@
         <div class="nav-group-label">运维与系统</div>
         <a href="#terminal" data-route="terminal"><span class="ico">⌘</span><span>终端</span></a>
         <a href="#browser" data-route="browser"><span class="ico">◍</span><span>浏览器</span></a>
-        <a href="#settings" data-route="settings"><span class="ico">⛭</span><span>系统设置</span><span id="update-dot" style="display:none;color:#f43f5e;font-size:20px;line-height:1;margin-left:4px">●</span></a>
+        <a href="#settings" data-route="settings"><span class="ico">⛭</span><span>系统设置</span><span id="update-dot" style="display:none;color:#ff453a;font-size:20px;line-height:1;margin-left:4px">●</span></a>
         <a href="#logs" data-route="logs"><span class="ico">≣</span><span>日志</span></a>
       </nav>
 
@@ -62,7 +62,7 @@
       <!-- Dashboard -->
       <section class="page active" id="page-dashboard" data-title="仪表盘">
         <!-- Update notification -->
-        <div id="update-banner" class="card" style="grid-column:span 12;background:#1a3a2a;border:1px solid #2d6b45;display:none">
+        <div id="update-banner" class="card" style="grid-column:span 12;background:#1f1f22;border:1px solid #4a4a4f;display:none">
           <div class="row" style="justify-content:space-between">
             <div>
               <span style="font-weight:900">🆕 发现新版本：<span id="update-latest"></span></span>
@@ -70,20 +70,20 @@
             </div>
             <div class="row">
               <button class="btn btn-warning" id="btn-hotpatch-banner" onclick="doHotPatch()" title="无需下载镜像，直接更新文件">⚡ 热更新</button>
-              <span id="update-full-hint" style="display:none;color:#f59e0b;font-weight:bold;font-size:13px">📦 此版本需要完整更新（下载新镜像）</span>
+              <span id="update-full-hint" style="display:none;color:#ff9f0a;font-weight:bold;font-size:13px">📦 此版本需要完整更新（下载新镜像）</span>
               <a class="btn btn-primary" id="update-link" href="#" target="_blank" rel="noopener">查看更新</a>
               <button class="btn btn-secondary" onclick="this.closest('#update-banner').style.display='none'">关闭</button>
             </div>
           </div>
           <div id="update-install-note" class="muted small" style="margin-top:8px;display:none">
-            <div style="margin-bottom:6px;color:#f59e0b;font-weight:700">需要完整更新时，请重新执行一键安装脚本：</div>
+            <div style="margin-bottom:6px;color:#ff9f0a;font-weight:700">需要完整更新时，请重新执行一键安装脚本：</div>
             <div style="margin:4px 0">
-              <span style="color:#6ee7b7">Linux：</span>
-              <code style="background:#223;padding:3px 8px;border-radius:4px;user-select:all">curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.sh | bash</code>
+              <span style="color:#f5f5f7">Linux：</span>
+              <code style="background:#1a1a1d;padding:3px 8px;border-radius:4px;user-select:all">curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.sh | bash</code>
             </div>
             <div style="margin:4px 0">
-              <span style="color:#93c5fd">Windows：</span>
-              <code style="background:#223;padding:3px 8px;border-radius:4px;user-select:all">irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1 | iex</code>
+              <span style="color:#f5f5f7">Windows：</span>
+              <code style="background:#1a1a1d;padding:3px 8px;border-radius:4px;user-select:all">irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1 | iex</code>
             </div>
           </div>
         </div>
@@ -185,7 +185,7 @@
                 <div class="row">
                   <button class="btn btn-primary" id="btn-oc-install">安装</button>
                   <button class="btn" id="btn-oc-repair-config">配置恢复</button>
-                  <button class="btn" id="btn-oc-start">重启 Gateway</button>
+                  <button class="btn" id="btn-oc-start" title="重启前会二次确认，按住 Shift 点击可跳过">重启 Gateway</button>
                 </div>
                 <div class="muted small" id="oc-update-status" style="margin-top:10px">更新状态：自动检查中</div>
                 <div class="muted small" style="margin-top:4px">当前：<span id="oc-current-ver">—</span> · 最新：<span id="oc-latest-ver">—</span></div>
@@ -452,7 +452,7 @@
               <button class="btn" onclick="window.open('/browser/vnc.html?autoconnect=true&resize=scale','_blank')">↗ 新窗口</button>
             </div>
           </div>
-          <iframe id="browser-frame" src="about:blank" data-vnc-src="/browser/vnc.html?autoconnect=true&resize=scale&reconnect=true&reconnect_delay=2000" style="width:100%;height:calc(100vh - 160px);border:1px solid #333;border-radius:8px;background:#1a1a2e"></iframe>
+          <iframe id="browser-frame" src="about:blank" data-vnc-src="/browser/vnc.html?autoconnect=true&resize=scale&reconnect=true&reconnect_delay=2000" style="width:100%;height:calc(100vh - 160px);border:1px solid #3e3e42;border-radius:8px;background:#131315"></iframe>
         </div>
       </section>
 
@@ -502,8 +502,8 @@
             <div class="row" style="margin-top:12px">
               <button class="btn btn-primary" id="btn-check-update">检查更新</button>
               <button class="btn btn-warning" id="btn-hotpatch" style="display:none">⚡ 热更新（不重启容器）</button>
-              <div id="settings-full-update-note" class="card" style="display:none;background:#3a2a1a;border:1px solid #6b5a2d;padding:10px 14px;margin:0">
-                <b style="color:#f59e0b">📦 此版本涉及系统底层更改，热更新不适用</b><br>
+              <div id="settings-full-update-note" class="card" style="display:none;background:#232326;border:1px solid #4a4a4f;padding:10px 14px;margin:0">
+                <b style="color:#ff9f0a">📦 此版本涉及系统底层更改，热更新不适用</b><br>
                 <span class="muted small">请重新执行一键安装脚本，安装器会自动检测并升级到新版本。</span>
               </div>
               <a class="btn" id="settings-release-link" href="#" target="_blank" rel="noopener" style="display:none">查看 Release 页面</a>
@@ -515,8 +515,8 @@
               <b>热更新</b>：直接从 GitHub 拉取最新的 Web 前端、配置模板等文件，无需下载镜像/重建容器。<br/>
               <b>完整更新</b>：如需更新系统包、Node.js 等底层依赖，请在宿主机重新执行一键安装脚本：<br/>
               <div style="margin-top:4px">
-                <span style="color:#6ee7b7">Linux：</span><code style="background:#223;padding:4px 8px;border-radius:4px;user-select:all">curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.sh | bash</code><br/>
-                <span style="color:#93c5fd">Windows：</span><code style="background:#223;padding:4px 8px;border-radius:4px;display:inline-block;margin-top:4px;user-select:all">irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1 | iex</code>
+                <span style="color:#f5f5f7">Linux：</span><code style="background:#1a1a1d;padding:4px 8px;border-radius:4px;user-select:all">curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.sh | bash</code><br/>
+                <span style="color:#f5f5f7">Windows：</span><code style="background:#1a1a1d;padding:4px 8px;border-radius:4px;display:inline-block;margin-top:4px;user-select:all">irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1 | iex</code>
               </div>
             </div>
           </div>
@@ -568,6 +568,6 @@
 
   <script src="/vendor/xterm/xterm.js"></script>
   <script src="/vendor/xterm/addon-fit.js"></script>
-  <script src="/app.js?v=1.1.93"></script>
+  <script src="/app.js?v=1.1.97"></script>
 </body>
 </html>
