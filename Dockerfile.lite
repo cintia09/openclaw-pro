@@ -29,9 +29,8 @@ RUN sed -i 's/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/
 RUN echo 'Defaults env_keep += "http_proxy https_proxy HTTP_PROXY HTTPS_PROXY no_proxy NO_PROXY"' > /etc/sudoers.d/keep-proxy \
     && chmod 0440 /etc/sudoers.d/keep-proxy
 
-# Node.js 22（Web 管理面板必需）
-RUN curl -fsSL --retry 3 --retry-delay 3 https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y nodejs npm \
+# Node.js + npm（Web 管理面板必需）
+RUN apt-get update && apt-get install -y nodejs npm \
     && command -v node && command -v npm \
     && node -v && npm -v \
     && rm -rf /var/lib/apt/lists/*
