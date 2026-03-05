@@ -234,10 +234,12 @@ button, input, select, textarea{font-family:inherit}
   color:var(--muted);
   font-size:12px;
   display:flex;
-  justify-content:space-between;
+  justify-content:flex-start;
   align-items:center;
-  gap:12px;
+  gap:8px;
+  flex-wrap:wrap;
 }
+.sidebar-footer .dim{white-space:normal}
 
 .topbar{
   position:fixed;
@@ -407,7 +409,22 @@ button, input, select, textarea{font-family:inherit}
   white-space:normal;
 }
 #terminal .xterm{padding:14px}
-#terminal .xterm-viewport{overflow-y:auto !important}
+#terminal .xterm-viewport{
+  overflow-y:scroll !important;
+  scrollbar-gutter: stable;
+}
+#terminal .xterm-viewport::-webkit-scrollbar{width:10px}
+#terminal .xterm-viewport::-webkit-scrollbar-thumb{background:rgba(226,232,240,.72);border-radius:8px}
+#terminal .xterm-viewport::-webkit-scrollbar-track{background:rgba(71,85,105,.58)}
+#log-viewer{
+  overflow-y:scroll !important;
+  overflow-x:auto;
+  scrollbar-color: rgba(226,232,240,.78) rgba(71,85,105,.62);
+  scrollbar-width: auto;
+}
+#log-viewer::-webkit-scrollbar{width:10px;height:10px}
+#log-viewer::-webkit-scrollbar-thumb{background:rgba(226,232,240,.78);border-radius:8px}
+#log-viewer::-webkit-scrollbar-track{background:rgba(71,85,105,.62)}
 .term-line{display:block}
 .term-date{color:rgba(148,163,184,.70)}
 .term-warn{color:#fbbf24}

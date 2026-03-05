@@ -96,6 +96,19 @@ function normalizeTerminalChunk(text){
   return out;
 }
 
+function formatVersionLabel(rawVersion){
+  const v = String(rawVersion || '').trim();
+  if (!v) return '';
+  const lower = v.toLowerCase();
+  if (lower === 'dev') {
+    return '开发版（dev）';
+  }
+  if (lower === 'unknown' || /^v?0\.0\.0(?:[-+].*)?$/i.test(v)) {
+    return '未标注版本';
+  }
+  return v;
+}
+
 // ------------------------
 // Toast
 // ------------------------
@@ -216,7 +229,11 @@ function setActiveRoute(route){
   if (route === 'trading') refreshTrading();
   if (route === 'plugins') refreshPlugins();
   if (route === 'terminal') {
+    bindTerminalInteraction();
     terminalConnect();
+    ensureTerminalViewportFitted();
+    setTimeout(() => ensureTerminalViewportFitted(), 120);
+    setTimeout(() => ensureTerminalViewportFitted(), 600);
     focusTerminalInput();
   }
   if (route === 'browser') loadBrowserFrame();
@@ -272,6 +289,7 @@ qa('[data-oc-switch]').forEach((btn) => {
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
   if (getRouteFromHash() !== 'terminal') return;
+  ensureTerminalViewportFitted();
   if (termWs && termWs.readyState === WebSocket.OPEN) return;
   terminalConnect();
 });
@@ -362,9 +380,11 @@ async function refreshStatus(){
       return;
     }
 
-  $('kpi-gateway').innerHTML = s.gateway
-    ? `<span class="pulse online"></span>在线`
-    : `<span class="pulse offline"></span>离线`;
+  if ($('kpi-gateway')) {
+    $('kpi-gateway').innerHTML = s.gateway
+      ? `<span class="pulse online"></span>在线`
+      : `<span class="pulse offline"></span>离线`;
+  }
   const gatewayParts = [s.gateway ? '进程检测正常' : '未检测到进程'];
   if (s.gatewayWatchdog === false) {
     gatewayParts.push('watchdog未运行');
@@ -398,21 +418,34 @@ async function refreshStatus(){
       terminalDetail.textContent = s.terminal?.reason || '终端后端未就绪';
     }
   }
-  $('kpi-gateway-sub').textContent = gatewayParts.join(' · ');
+  if ($('kpi-gateway-sub')) $('kpi-gateway-sub').textContent = gatewayParts.join(' · ');
 
-  $('kpi-caddy').innerHTML = s.caddy
-    ? `<span class="pulse online"></span>在线`
-    : `<span class="pulse offline"></span>离线/未启用`;
-  $('kpi-domain').textContent = s.domain ? `域名：${s.domain}` : '未配置域名';
+  if ($('kpi-caddy')) {
+    $('kpi-caddy').innerHTML = s.caddy
+      ? `<span class="pulse online"></span>在线`
+      : `<span class="pulse offline"></span>离线/未启用`;
+  }
+  if ($('kpi-domain')) $('kpi-domain').textContent = s.domain ? `域名：${s.domain}` : '未配置域名';
 
-  $('kpi-memory').textContent = s.memory?.total ? `${s.memory.used}/${s.memory.total}MB (${s.memory.percent}%)` : '—';
-  $('kpi-uptime').textContent = s.uptime ? `运行：${formatUptime(s.uptime)}` : '—';
+  if ($('kpi-memory')) $('kpi-memory').textContent = s.memory?.total ? `${s.memory.used}/${s.memory.total}MB (${s.memory.percent}%)` : '—';
+  if ($('kpi-uptime')) $('kpi-uptime').textContent = s.uptime ? `运行：${formatUptime(s.uptime)}` : '—';
 
   $('sidebar-status').textContent = s.gateway ? '● ONLINE' : '● OFFLINE';
 
   // Update sidebar version
-    if (s.version && s.version !== 'unknown') {
-      $('sidebar-version').textContent = s.version;
+    const panelVer = formatVersionLabel(s.version) || '-';
+    const ocVer = formatVersionLabel(s.openclawVersion) || '-';
+    const combinedVerText = `面板 ${panelVer} · OpenClaw ${ocVer}`;
+    const footer = q('.sidebar-footer');
+    if ($('sidebar-version')) {
+      $('sidebar-version').textContent = combinedVerText;
+    }
+    if ($('sidebar-oc-version')) {
+      $('sidebar-oc-version').style.display = 'none';
+    } else if ($('sidebar-version')) {
+      $('sidebar-version').textContent = combinedVerText;
+    } else if (footer) {
+      footer.innerHTML = `<span class="dim" id="sidebar-version">${combinedVerText}</span><span class="dim" id="sidebar-status">${s.gateway ? '● ONLINE' : '● OFFLINE'}</span>`;
     }
     const elapsed = ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt;
     dlog('refreshStatus ok', 'elapsedMs=', Math.round(elapsed), 'gateway=', !!s.gateway, 'caddy=', !!s.caddy);
@@ -432,7 +465,7 @@ async function checkForUpdate(force = false) {
   const banner = $('update-banner');
   if (banner && u.hasUpdate) {
     $('update-latest').textContent = u.latestVersion;
-    $('update-current').textContent = u.currentVersion;
+    $('update-current').textContent = formatVersionLabel(u.currentVersion);
     $('update-link').href = u.releaseUrl || '#';
     banner.style.display = '';
     // Show/hide hot update button based on update type
@@ -464,7 +497,7 @@ async function checkForUpdate(force = false) {
 
   // Settings page
   if ($('settings-current-ver')) {
-    $('settings-current-ver').textContent = u.currentVersion || '—';
+    $('settings-current-ver').textContent = formatVersionLabel(u.currentVersion) || '—';
     $('settings-latest-ver').textContent = u.latestVersion || '—';
     const statusEl = $('settings-update-status');
     const linkEl = $('settings-release-link');
@@ -887,10 +920,11 @@ async function refreshOpenClaw(opts = {}){
       : `<span class="pulse offline"></span>未安装`;
   }
   if (d.installed) {
+    const versionLabel = formatVersionLabel(d.version);
     if (d.version && d.latestVersion && d.hasUpdate) {
-      $('oc-version').textContent = `版本：${d.version}（可更新到 ${d.latestVersion}）`;
+      $('oc-version').textContent = `版本：${versionLabel}（可更新到 ${d.latestVersion}）`;
     } else if (d.version) {
-      $('oc-version').textContent = `版本：${d.version}`;
+      $('oc-version').textContent = `版本：${versionLabel}`;
     } else {
       $('oc-version').textContent = '版本：未解析（已安装）';
     }
@@ -899,8 +933,12 @@ async function refreshOpenClaw(opts = {}){
   }
   if (restartBusyNow) {
     $('oc-gateway').innerHTML = `<span class="pulse offline"></span>启动中`;
+  } else if (!d.gatewayRunning && d.gatewayStarting) {
+    $('oc-gateway').innerHTML = `<span class="pulse offline"></span>启动中`;
+  } else if (!d.gatewayRunning && d.gatewayPairingRequired) {
+    $('oc-gateway').innerHTML = `<span class="pulse offline"></span>待配对（控制台鉴权）`;
   } else if (!d.gatewayRunning && d.gatewayProcessRunning) {
-    $('oc-gateway').innerHTML = `<span class="pulse offline"></span>已启动（健康异常）`;
+    $('oc-gateway').innerHTML = `<span class="pulse offline"></span>运行中（未就绪）`;
   } else {
     $('oc-gateway').innerHTML = d.gatewayRunning
       ? `<span class="pulse online"></span>运行中`
@@ -925,7 +963,10 @@ async function refreshOpenClaw(opts = {}){
     else actionBtn.textContent = d.installed ? '更新' : '安装';
   }
 
-  if ($('oc-current-ver')) $('oc-current-ver').textContent = d.version || '—';
+  if ($('oc-current-ver')) {
+    const currentVer = formatVersionLabel(d.version) || '—';
+    $('oc-current-ver').textContent = currentVer;
+  }
   if ($('oc-latest-ver')) {
     if (displayLatestVersion) {
       $('oc-latest-ver').textContent = displayLatestVersion;
@@ -948,8 +989,12 @@ async function refreshOpenClaw(opts = {}){
     setOpenClawStatusLine(`配置状态：检测到无效 key（${invalidKeys.join(', ')}），请点击“配置恢复”`, null);
   } else if (!d.installed) {
     setOpenClawStatusLine('更新状态：未安装，可执行安装', null);
+  } else if (!d.gatewayRunning && d.gatewayStarting) {
+    setOpenClawStatusLine('Gateway 状态：启动中（正在等待健康检查）', null);
+  } else if (!d.gatewayRunning && d.gatewayPairingRequired) {
+    setOpenClawStatusLine('Gateway 状态：等待控制台配对。请先在网关页面完成配对授权', null);
   } else if (!d.gatewayRunning && d.gatewayProcessRunning) {
-    setOpenClawStatusLine('Gateway 状态：已启动（健康异常），请查看下方日志', null);
+    setOpenClawStatusLine('Gateway 状态：进程已启动但尚未就绪（可能在重试或恢复）', null);
   } else if (d.updateCheckError) {
     setOpenClawStatusLine(`更新状态：检查失败（${d.updateCheckError}）`, null);
   } else if (d.hasUpdate) {
@@ -1240,12 +1285,12 @@ $('btn-oc-install').addEventListener('click', async ()=>{
     }
 
     if (!current.hasUpdate) {
-      appendOcLogLine(`[openclaw] 当前已是最新版本（${current.version}），无需更新。`);
-      toast('无需更新', `当前已是最新版本：${current.version}`);
+      appendOcLogLine(`[openclaw] 当前已是最新版本（${formatVersionLabel(current.version)}），无需更新。`);
+      toast('无需更新', `当前已是最新版本：${formatVersionLabel(current.version)}`);
       return;
     }
 
-    appendOcLogLine(`[openclaw] 检测到新版本：${current.version} -> ${current.latestVersion}，开始更新...`);
+    appendOcLogLine(`[openclaw] 检测到新版本：${formatVersionLabel(current.version)} -> ${current.latestVersion}，开始更新...`);
     const r = await api('/api/openclaw/update', { method:'POST' });
     if (!r.taskId){
       const isEmptyResponse = r && typeof r === 'object' && Object.keys(r).length === 0;
@@ -1641,6 +1686,76 @@ let termFailureCount = 0;
 let termConnectTimeoutTimer = null;
 let termEmulator = null;
 let termFitAddon = null;
+const TERM_CACHE_KEY = 'oc_terminal_cache_v2';
+const TERM_CACHE_MAX = 800000;
+let termOutputCache = '';
+
+function stripTerminalBootstrapNoise(text){
+  const src = String(text ?? '');
+  if (!src) return src;
+  const lines = src.split('\n');
+  const cleaned = lines.filter((line) => {
+    const s = String(line || '').trim();
+    if (!s) return true;
+    if (s === 'export TERM=xterm-256color CLICOLOR=1 CLICOLOR_FORCE=1') return false;
+    if (s === 'alias ls="ls --color=auto" 2>/dev/null || true') return false;
+    if (s === 'alias grep="grep --color=auto" 2>/dev/null || true') return false;
+    if (/^bash-[0-9.]+#\s+export\s+TERM=xterm-256color\s+CLICOLOR=1\s+CLICOLOR_FORCE=1$/i.test(s)) return false;
+    if (/^bash-[0-9.]+#\s+alias\s+ls="ls --color=auto"\s+2>\/dev\/null\s+\|\|\s+true$/i.test(s)) return false;
+    if (/^bash-[0-9.]+#\s+alias\s+grep="grep --color=auto"\s+2>\/dev\/null\s+\|\|\s+true$/i.test(s)) return false;
+    if (s === '[terminal] 已连接（PTY）。直接在此区域输入命令并按回车执行。') return false;
+    if (s === 'OpenClaw Terminal connected (PTY). 输入命令并回车执行。') return false;
+    return true;
+  });
+  return cleaned.join('\n');
+}
+
+function loadTerminalCache(){
+  try {
+    const raw = localStorage.getItem(TERM_CACHE_KEY);
+    termOutputCache = raw ? stripTerminalBootstrapNoise(String(raw)) : '';
+    if (termOutputCache.length > TERM_CACHE_MAX) {
+      termOutputCache = termOutputCache.slice(-TERM_CACHE_MAX);
+    }
+    const firstNl = termOutputCache.indexOf('\n');
+    if (firstNl > 0 && !termOutputCache.startsWith('\n')) {
+      termOutputCache = termOutputCache.slice(firstNl + 1);
+    }
+  } catch {
+    termOutputCache = '';
+  }
+}
+
+function saveTerminalCache(){
+  try {
+    localStorage.setItem(TERM_CACHE_KEY, termOutputCache);
+  } catch {}
+}
+
+function appendTerminalCache(text){
+  const chunk = String(text ?? '');
+  if (!chunk) return;
+  termOutputCache += stripTerminalBootstrapNoise(chunk);
+  if (termOutputCache.length > TERM_CACHE_MAX) {
+    termOutputCache = termOutputCache.slice(-TERM_CACHE_MAX);
+    const firstNl = termOutputCache.indexOf('\n');
+    if (firstNl > 0) termOutputCache = termOutputCache.slice(firstNl + 1);
+  }
+  saveTerminalCache();
+}
+
+function ensureTerminalViewportFitted(retries = 6){
+  if (getRouteFromHash() !== 'terminal') return;
+  if (!termEmulator || !termFitAddon) return;
+  const container = $('terminal');
+  if (!container) return;
+  if ((container.clientWidth || 0) < 120 || (container.clientHeight || 0) < 80) {
+    if (retries > 0) setTimeout(() => ensureTerminalViewportFitted(retries - 1), 120);
+    return;
+  }
+  try { termFitAddon.fit(); } catch {}
+  sendTerminalResize();
+}
 
 function focusTerminalInput(){
   if (termEmulator) {
@@ -1661,7 +1776,7 @@ function initTerminalEmulator(){
       cursorBlink: true,
       cursorInactiveStyle: 'none',
       convertEol: true,
-      scrollback: 5000,
+      scrollback: 20000,
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
       fontSize: 13,
       theme: {
@@ -1680,6 +1795,9 @@ function initTerminalEmulator(){
     termEmulator.open(terminalContainer);
     if (termFitAddon) termFitAddon.fit();
 
+    termOutputCache = '';
+    saveTerminalCache();
+
     termEmulator.onData((data) => {
       if (termWs && termWs.readyState === WebSocket.OPEN) {
         sendTerminalData(data);
@@ -1696,7 +1814,9 @@ function initTerminalEmulator(){
 }
 
 function termAppendText(text){
-  const chunkRaw = String(text ?? '');
+  const chunkRaw = stripTerminalBootstrapNoise(String(text ?? ''));
+  if (!chunkRaw) return;
+  appendTerminalCache(chunkRaw);
   if (termEmulator) {
     const chunk = stripOsc(chunkRaw);
     if (!chunk) return;
@@ -1708,14 +1828,7 @@ function termAppendText(text){
   if (!el) return;
   const chunk = normalizeTerminalChunk(chunkRaw);
   if (!chunk) return;
-  el.textContent += chunk;
-  const maxChars = 180000;
-  if (el.textContent.length > maxChars) {
-    el.textContent = el.textContent.slice(-maxChars);
-  }
-  if ($('term-autoscroll')?.checked) {
-    el.scrollTop = el.scrollHeight;
-  }
+  appendColored(el, chunk, 8000, !!$('term-autoscroll')?.checked);
 }
 
 function terminalDisconnect(){
@@ -1798,6 +1911,10 @@ function bindTerminalInteraction(){
     return;
   }
 
+  if (termOutputCache) {
+    appendColored(terminalEl, normalizeTerminalChunk(termOutputCache), 8000, !!$('term-autoscroll')?.checked);
+  }
+
   terminalEl.addEventListener('keydown', (e) => {
     if (!termWs || termWs.readyState !== WebSocket.OPEN) {
       if (e.key.length === 1 || e.key === 'Enter' || e.key === 'Backspace') {
@@ -1854,6 +1971,7 @@ async function ensureTerminalWsToken(force = false){
 
 async function terminalConnect(){
   if (!$('page-terminal').classList.contains('active')) return;
+  ensureTerminalViewportFitted();
   if (termWs && (termWs.readyState === WebSocket.OPEN || termWs.readyState === WebSocket.CONNECTING)) return;
 
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -1904,9 +2022,20 @@ async function terminalConnect(){
         termFallbackTimer = null;
       }
       $('term-state').textContent = '已连接';
-      termAppendText('[terminal] 已连接（PTY）。直接在此区域输入命令并按回车执行。\n');
+      if (termEmulator) {
+        try { termEmulator.clear(); } catch {}
+      } else if ($('terminal')) {
+        $('terminal').innerHTML = '';
+      }
+      termOutputCache = '';
+      saveTerminalCache();
       focusTerminalInput();
+      ensureTerminalViewportFitted();
       sendTerminalResize();
+      setTimeout(() => sendTerminalResize(), 200);
+      setTimeout(() => sendTerminalResize(), 1200);
+      setTimeout(() => sendTerminalResize(), 2600);
+      setTimeout(() => sendTerminalResize(), 4200);
     };
 
     termWs.onclose = (ev)=> {
@@ -1985,10 +2114,15 @@ async function terminalConnect(){
 $('btn-term-clear').addEventListener('click', ()=>{
   if (termEmulator) {
     termEmulator.clear();
+    termOutputCache = '';
+    saveTerminalCache();
     return;
   }
-  $('terminal').textContent='';
+  $('terminal').innerHTML='';
+  termOutputCache = '';
+  saveTerminalCache();
 });
+loadTerminalCache();
 bindTerminalInteraction();
 
 // ------------------------

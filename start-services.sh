@@ -446,6 +446,7 @@ GATEWAY_WATCHDOG_SCRIPT="/usr/local/bin/openclaw-gateway-watchdog.sh"
 OPENCLAW_STATE_ROOT="/root/.openclaw"
 OPENCLAW_SOURCE_DIR="$OPENCLAW_STATE_ROOT/openclaw-source"
 OPENCLAW_RUNTIME_JS="$OPENCLAW_SOURCE_DIR/openclaw.mjs"
+OPENCLAW_RUNTIME_VERSION=""
 
 ensure_openclaw_source_from_global_package() {
     mkdir -p "$OPENCLAW_STATE_ROOT" "$OPENCLAW_STATE_ROOT/logs" "$OPENCLAW_STATE_ROOT/cache/openclaw" "$OPENCLAW_STATE_ROOT/locks" "$OPENCLAW_STATE_ROOT/home"
@@ -479,27 +480,98 @@ refresh_openclaw_availability() {
     fi
 }
 
+detect_openclaw_runtime_version() {
+    local candidates=""
+    candidates="$OPENCLAW_SOURCE_DIR/package.json /root/.npm-global/lib/node_modules/openclaw/package.json /usr/local/lib/node_modules/openclaw/package.json /usr/lib/node_modules/openclaw/package.json"
+    local f v
+    for f in $candidates; do
+        [ -f "$f" ] || continue
+        v=$(grep -m1 '"version"' "$f" 2>/dev/null | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' | tr -d '\r\n ')
+        if [ -n "$v" ] && [ "$v" != "dev" ] && [ "$v" != "unknown" ]; then
+            OPENCLAW_RUNTIME_VERSION="$v"
+            export OPENCLAW_VERSION="$OPENCLAW_RUNTIME_VERSION"
+            export OPENCLAW_SERVICE_VERSION="$OPENCLAW_RUNTIME_VERSION"
+            return 0
+        fi
+    done
+    return 1
+}
+
+ensure_gateway_proxy_compat_config() {
+    local cfg_file="/root/.openclaw/openclaw.json"
+    [ -f "$cfg_file" ] || return 0
+    command -v jq >/dev/null 2>&1 || return 0
+
+    local domain=""
+    if [ -f "$CONFIG_FILE" ]; then
+        domain=$(jq -r '.domain // empty' "$CONFIG_FILE" 2>/dev/null || true)
+    fi
+
+    local host_candidates="localhost 127.0.0.1"
+    if [ -n "$domain" ]; then
+        host_candidates="$host_candidates $domain"
+    fi
+
+    local local_ip
+    local_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
+    if [ -n "$local_ip" ]; then
+        host_candidates="$host_candidates $local_ip"
+    fi
+
+    local allowed_json
+    allowed_json=$(for h in $host_candidates; do
+        [ -n "$h" ] || continue
+        printf '"https://%s"\n"http://%s"\n' "$h" "$h"
+    done | awk '!seen[$0]++' | jq -s '.')
+
+    local trusted_json='["127.0.0.1","::1","172.17.0.1","172.17.0.0/16"]'
+    local tmp_file
+    tmp_file=$(mktemp)
+
+    if jq --argjson allowed "$allowed_json" --argjson trusted "$trusted_json" '
+      .gateway = (.gateway // {})
+      | .gateway.controlUi = (.gateway.controlUi // {})
+      | .gateway.trustedProxies = ((.gateway.trustedProxies // []) + $trusted | unique)
+      | .gateway.controlUi.allowedOrigins = ((.gateway.controlUi.allowedOrigins // []) + $allowed | unique)
+            | .gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback = true
+            | .gateway.controlUi.dangerouslyDisableDeviceAuth = true
+    ' "$cfg_file" > "$tmp_file" 2>/dev/null; then
+        if ! cmp -s "$cfg_file" "$tmp_file"; then
+            cp "$cfg_file" "$cfg_file.before-proxy-compat.$(date +%Y%m%d-%H%M%S).bak" 2>/dev/null || true
+            mv "$tmp_file" "$cfg_file"
+            echo "[start-services] Updated openclaw.json: added gateway.trustedProxies + gateway.controlUi.allowedOrigins"
+        else
+            rm -f "$tmp_file"
+        fi
+    else
+        rm -f "$tmp_file"
+    fi
+}
+
 HAS_OPENCLAW="false"
 refresh_openclaw_availability
 
 start_gateway() {
     ensure_openclaw_source_from_global_package
     refresh_openclaw_availability
+    detect_openclaw_runtime_version >/dev/null 2>&1 || true
     if [ "$HAS_OPENCLAW" != "true" ]; then
         echo "[start-services] openclaw CLI not installed, skipping Gateway"
         return 0
     fi
     echo "[start-services] Starting OpenClaw Gateway (foreground mode)..."
+    [ -n "$OPENCLAW_RUNTIME_VERSION" ] && echo "[start-services] OpenClaw runtime version: $OPENCLAW_RUNTIME_VERSION"
     if command -v node >/dev/null 2>&1 && [ -f "$OPENCLAW_RUNTIME_JS" ]; then
-        nohup env HOME="$OPENCLAW_STATE_ROOT/home" node "$OPENCLAW_RUNTIME_JS" gateway run --allow-unconfigured --force >> "$LOG_DIR/openclaw-gateway.log" 2>&1 &
+        nohup env HOME="$OPENCLAW_STATE_ROOT/home" OPENCLAW_VERSION="$OPENCLAW_RUNTIME_VERSION" OPENCLAW_SERVICE_VERSION="$OPENCLAW_RUNTIME_VERSION" node "$OPENCLAW_RUNTIME_JS" gateway run --allow-unconfigured --force >> "$LOG_DIR/openclaw-gateway.log" 2>&1 &
     else
-        nohup env HOME="$OPENCLAW_STATE_ROOT/home" openclaw gateway run --allow-unconfigured --force >> "$LOG_DIR/openclaw-gateway.log" 2>&1 &
+        nohup env HOME="$OPENCLAW_STATE_ROOT/home" OPENCLAW_VERSION="$OPENCLAW_RUNTIME_VERSION" OPENCLAW_SERVICE_VERSION="$OPENCLAW_RUNTIME_VERSION" openclaw gateway run --allow-unconfigured --force >> "$LOG_DIR/openclaw-gateway.log" 2>&1 &
     fi
     GATEWAY_PID=$!
 }
 
 start_gateway_watchdog() {
     ensure_openclaw_source_from_global_package
+    detect_openclaw_runtime_version >/dev/null 2>&1 || true
     if [ ! -x "$GATEWAY_WATCHDOG_SCRIPT" ]; then
         echo "[start-services] watchdog script missing ($GATEWAY_WATCHDOG_SCRIPT), fallback to direct gateway start"
         start_gateway
@@ -512,7 +584,7 @@ start_gateway_watchdog() {
     fi
 
     echo "[start-services] Starting Gateway watchdog..."
-    nohup bash "$GATEWAY_WATCHDOG_SCRIPT" >> "$LOG_DIR/gateway-watchdog.log" 2>&1 &
+    nohup env OPENCLAW_VERSION="$OPENCLAW_RUNTIME_VERSION" OPENCLAW_SERVICE_VERSION="$OPENCLAW_RUNTIME_VERSION" bash "$GATEWAY_WATCHDOG_SCRIPT" >> "$LOG_DIR/gateway-watchdog.log" 2>&1 &
     GATEWAY_WATCHDOG_PID=$!
     echo "[start-services] Gateway watchdog PID: $GATEWAY_WATCHDOG_PID"
 }
@@ -620,6 +692,8 @@ if [ -f "$CONFIG_FILE" ]; then
 fi
 
 echo "[start-services] Starting OpenClaw services..."
+
+ensure_gateway_proxy_compat_config
 
 # --- 1. 启动 Gateway Watchdog（由 watchdog 管理 Gateway 生命周期） ---
 start_gateway_watchdog
