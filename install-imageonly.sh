@@ -505,10 +505,6 @@ pull_from_ghcr(){
 }
 
 tag_loaded_image_if_needed(){
-  if docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
-    return 0
-  fi
-
   local loaded_ref=""
   if docker image inspect "openclaw-pro:lite" >/dev/null 2>&1; then
     loaded_ref="openclaw-pro:lite"
