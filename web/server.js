@@ -1672,6 +1672,13 @@ function getClientIp(req) {
   return ip || 'unknown';
 }
 
+const STATUS_LOG_SLOW_THRESHOLD_MS = 5000;
+const STATUS_LOG_SLOW_THROTTLE_MS = 5 * 60 * 1000;
+const statusLogState = {
+  lastSnapshot: '',
+  lastSlowLogAt: 0
+};
+
 // ============================================================
 // Login rate limiting (per IP)
 // ============================================================
@@ -2390,8 +2397,31 @@ app.get('/api/status', (req, res) => {
   };
 
   const statusElapsed = Date.now() - statusStart;
-  if (statusElapsed > 1200 || req.query.debug === '1') {
-    console.log(`[status] elapsed=${statusElapsed}ms gateway=${status.gateway} caddy=${status.caddy} browser=${status.browser} version=${status.version}`);
+  const debugMode = req.query.debug === '1';
+  const snapshot = [
+    Number(status.gateway),
+    Number(status.caddy),
+    Number(status.browser),
+    Number(status.browserEnabled),
+    Number(status.gatewayWatchdog),
+    status.version || '',
+    status.openclawVersion || '',
+    status.terminal?.mode || '',
+    Number(status.terminal?.ready)
+  ].join('|');
+  const changed = snapshot !== statusLogState.lastSnapshot;
+  if (changed) {
+    statusLogState.lastSnapshot = snapshot;
+  }
+  const now = Date.now();
+  const isSlow = statusElapsed > STATUS_LOG_SLOW_THRESHOLD_MS;
+  const slowLogDue = !statusLogState.lastSlowLogAt || (now - statusLogState.lastSlowLogAt) >= STATUS_LOG_SLOW_THROTTLE_MS;
+  if (debugMode || changed || (isSlow && slowLogDue)) {
+    const reason = debugMode ? 'debug' : (changed ? 'changed' : 'slow-throttled');
+    console.log(`[status] reason=${reason} elapsed=${statusElapsed}ms gateway=${status.gateway} caddy=${status.caddy} browser=${status.browser} version=${status.version}`);
+  }
+  if (isSlow && (debugMode || changed || slowLogDue)) {
+    statusLogState.lastSlowLogAt = now;
   }
 
   res.json(status);
