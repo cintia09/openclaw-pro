@@ -2583,10 +2583,14 @@ app.get('/api/status', (req, res) => {
     && status.gatewayProcessUptimeSec <= 300
   );
   const gatewayRestartingByOp = !!(
+    status.openclawInstalled
+    &&
     opState?.type === 'restarting_gateway'
-    && (status.openclawInstalled || gatewayRestartRunning || status.gatewayProcessRunning || status.gateway)
+    && (gatewayRestartRunning || status.gatewayProcessRunning || status.gateway)
   );
   const gatewayWarmupByWatchdog = !!(
+    status.openclawInstalled
+    &&
     !status.gateway
     && status.gatewayWatchdog
     && isGatewayWatchdogStartupInProgress(900)
@@ -4197,10 +4201,14 @@ app.get('/api/openclaw', async (req, res) => {
       && gatewayProcessUptimeSec <= 300
     );
     const gatewayRestartingByOp = !!(
+      installed
+      &&
       operationState?.type === 'restarting_gateway'
-      && (installed || gatewayRestartRunning || gatewayProcessRunning || gatewayRunning)
+      && (gatewayRestartRunning || gatewayProcessRunning || gatewayRunning)
     );
     const gatewayWarmupByWatchdog = !!(
+      installed
+      &&
       !gatewayRunning
       && gatewayWatchdogRunning
       && isGatewayWatchdogStartupInProgress(900)

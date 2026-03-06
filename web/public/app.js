@@ -504,27 +504,32 @@ async function refreshStatus(){
       return;
     }
 
-  const gatewayPending = !s.gateway && (s.gatewayStarting || s.gatewayProcessRunning);
-  const gatewayPairing = !s.gateway && !!s.gatewayPairingRequired;
+  const openclawMissing = s.openclawInstalled === false;
+  const gatewayPending = !openclawMissing && !s.gateway && (s.gatewayStarting || s.gatewayProcessRunning);
+  const gatewayPairing = !openclawMissing && !s.gateway && !!s.gatewayPairingRequired;
   if ($('kpi-gateway')) {
     $('kpi-gateway').innerHTML = s.gateway
       ? `<span class="pulse online"></span>在线`
-      : (gatewayPairing
-          ? `<span class="pulse offline"></span>待配对`
-          : (gatewayPending
-              ? `<span class="pulse pending"></span>启动中`
-              : `<span class="pulse offline"></span>离线`));
+      : (openclawMissing
+          ? `<span class="pulse offline"></span>离线`
+          : (gatewayPairing
+              ? `<span class="pulse offline"></span>待配对`
+              : (gatewayPending
+                  ? `<span class="pulse pending"></span>启动中`
+                  : `<span class="pulse offline"></span>离线`)));
   }
   const gatewayParts = [
     s.gateway
       ? '健康检查正常'
-      : (gatewayPairing
-          ? '等待控制台配对'
-          : (gatewayPending
-              ? '进程已拉起，等待健康检查'
-              : '未检测到运行中的 Gateway'))
+      : (openclawMissing
+          ? 'OpenClaw 已卸载'
+          : (gatewayPairing
+              ? '等待控制台配对'
+              : (gatewayPending
+                  ? '进程已拉起，等待健康检查'
+                  : '未检测到运行中的 Gateway')))
   ];
-  if (!s.gateway && s.gatewayProcessRunning && Number(s.gatewayProcessUptimeSec || 0) > 0) {
+  if (!openclawMissing && !s.gateway && s.gatewayProcessRunning && Number(s.gatewayProcessUptimeSec || 0) > 0) {
     gatewayParts.push(`运行 ${formatUptime(s.gatewayProcessUptimeSec)}`);
   }
   if (s.gatewayWatchdog === false) {
