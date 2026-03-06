@@ -1572,6 +1572,43 @@ $('btn-oc-install').addEventListener('click', async ()=>{
   syncOpenClawButtons();
   let taskStarted = false;
   try{
+    if (!ocInstalled) {
+      ocInstallPhase = 'install';
+      appendOcLogLine('[state] operation=installing status=begin source=ui');
+      appendOcLogLine('[openclaw] 未安装，正在提交安装任务...');
+      const i = await api('/api/openclaw/install', { method:'POST' });
+      if (!i.taskId && Number(i?.status || 0) === 409) {
+        const existingTaskId = String(i?.operationState?.taskId || '').trim();
+        const existingType = String(i?.operationState?.type || '').trim();
+        if (existingTaskId && (existingType === 'installing' || existingType === 'updating')) {
+          appendOcLogLine(`[openclaw] 检测到已有任务进行中，接管日志轮询: ${existingTaskId}`);
+          toast('任务进行中', '已存在安装/更新任务，正在接管进度显示');
+          taskStarted = true;
+          pollTask(existingTaskId);
+          return;
+        }
+      }
+      if (!i.taskId){
+        const isEmptyResponse = i && typeof i === 'object' && Object.keys(i).length === 0;
+        const detail = i.error || (isEmptyResponse
+          ? '接口返回空响应（可能会话失效或页面缓存未更新，请刷新后重试）'
+          : `接口返回异常（${JSON.stringify(i || {}) || 'empty'}）`);
+        appendOcLogLine(`[openclaw] 安装启动失败: ${detail}`);
+        if (/空响应|缓存未更新|会话失效/.test(detail)) {
+          appendOcLogLine('[openclaw] 提示: 请强制刷新页面后重试（macOS: Command+Shift+R）。');
+        }
+        toast('安装失败', detail);
+        return;
+      }
+      toast('开始安装', '正在执行 OpenClaw 安装...');
+      appendOcLogLine(`[openclaw] 安装任务已启动: ${i.taskId}`);
+      if (i?.release?.tag) appendOcLogLine(`[openclaw] 目标版本: ${i.release.tag}`);
+      if (i?.logFile) appendOcLogLine(`[openclaw] 日志文件: ${i.logFile}`);
+      taskStarted = true;
+      pollTask(i.taskId);
+      return;
+    }
+
     let current = await refreshOpenClaw({ retries: 2 });
     if (!current || current.error) {
       const detail = current?.error || '无法获取当前 OpenClaw 状态';
