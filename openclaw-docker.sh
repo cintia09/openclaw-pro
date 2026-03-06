@@ -183,8 +183,8 @@ log_msg() {
 # GitHub Release 配置
 GITHUB_REPO="cintia09/openclaw-pro"
 GHCR_IMAGE="ghcr.io/${GITHUB_REPO}"
-IMAGE_TARBALL="openclaw-pro-image.tar.gz"
-IMAGE_EDITION="full"  # 默认完整版，用户可在首次安装时选择
+IMAGE_TARBALL="openclaw-pro-image-lite.tar.gz"
+IMAGE_EDITION="lite"  # 强制使用 lite 版本
 
 # 代理镜像列表（对齐 Windows Download-Robust，国内直连 github.com 通常很慢）
 # 先尝试直连，再逐个尝试代理；每个源快速探测可达性后再下载
@@ -351,10 +351,10 @@ ensure_image() {
     warn "GHCR 拉取失败..."
 
     # 方式4: 本地构建（最后手段）
-    warn "预构建镜像获取失败，将从 Dockerfile 本地构建（需要较长时间）..."
+    warn "预构建镜像获取失败，将从 Dockerfile.lite 本地构建（需要较长时间）..."
     info "构建 Docker 镜像..."
     log_msg "Falling back to docker build"
-    docker build -t "$IMAGE_NAME" "$SCRIPT_DIR"
+    docker build -f "$SCRIPT_DIR/Dockerfile.lite" -t "$IMAGE_NAME" "$SCRIPT_DIR"
     success "镜像构建完成"
 }
 
@@ -1013,24 +1013,12 @@ F2B
       fi  # do_firewall
     fi
 
-    # 镜像版本选择（对齐 Windows 安装器的 lite/full 选择）
+    # 镜像版本：强制 lite
     echo ""
-    echo -e "${BOLD}━━━ 镜像版本选择 ━━━${NC}"
-    echo -e "  ${CYAN}[1]${NC} 精简版（推荐，~250MB，约5分钟下载）"
-    echo -e "      包含: Ubuntu + Node.js + Caddy + Web面板 + Python3"
-    echo -e "      Chrome/noVNC/LightGBM 等可后期通过 Web 面板安装"
-    echo -e "  ${CYAN}[2]${NC} 完整版（~1.6GB，约30分钟下载）"
-    echo -e "      包含全部组件: Chrome、noVNC、LightGBM、openclaw 等"
-    local edition_choice=""
-    read -t 15 -p "请选择 [1/2，默认1，15秒超时自动选择1]: " edition_choice || true
-    echo ""
-    if [ "$edition_choice" = "2" ]; then
-        IMAGE_EDITION="full"
-        info "已选择完整版镜像"
-    else
-        IMAGE_EDITION="lite"
-        info "已选择精简版镜像"
-    fi
+    echo -e "${BOLD}━━━ 镜像版本 ━━━${NC}"
+    echo -e "  ${CYAN}Lite（唯一）${NC}：强制使用精简版镜像"
+    IMAGE_EDITION="lite"
+    info "已固定为 lite 镜像"
     log_msg "Image edition: $IMAGE_EDITION"
 
     # 获取镜像（配置完成后再下载，与 Windows 安装器流程对齐）
