@@ -1590,6 +1590,17 @@ $('btn-oc-install').addEventListener('click', async ()=>{
       appendOcLogLine('[state] operation=installing status=begin source=ui');
       appendOcLogLine('[openclaw] 未安装，正在提交安装任务...');
       const i = await api('/api/openclaw/install', { method:'POST' });
+      if (!i.taskId && Number(i?.status || 0) === 409) {
+        const existingTaskId = String(i?.operationState?.taskId || '').trim();
+        const existingType = String(i?.operationState?.type || '').trim();
+        if (existingTaskId && (existingType === 'installing' || existingType === 'updating')) {
+          appendOcLogLine(`[openclaw] 检测到已有任务进行中，接管日志轮询: ${existingTaskId}`);
+          toast('任务进行中', '已存在安装/更新任务，正在接管进度显示');
+          taskStarted = true;
+          pollTask(existingTaskId);
+          return;
+        }
+      }
       if (!i.taskId){
         const isEmptyResponse = i && typeof i === 'object' && Object.keys(i).length === 0;
         const detail = i.error || (isEmptyResponse
@@ -1633,6 +1644,17 @@ $('btn-oc-install').addEventListener('click', async ()=>{
     appendOcLogLine(`[openclaw] 检测到新版本：${formatVersionLabel(current.version)} -> ${current.latestVersion}，开始更新...`);
     ocInstallPhase = 'update';
     const r = await api('/api/openclaw/update', { method:'POST' });
+    if (!r.taskId && Number(r?.status || 0) === 409) {
+      const existingTaskId = String(r?.operationState?.taskId || '').trim();
+      const existingType = String(r?.operationState?.type || '').trim();
+      if (existingTaskId && (existingType === 'installing' || existingType === 'updating')) {
+        appendOcLogLine(`[openclaw] 检测到已有任务进行中，接管日志轮询: ${existingTaskId}`);
+        toast('任务进行中', '已存在安装/更新任务，正在接管进度显示');
+        taskStarted = true;
+        pollTask(existingTaskId);
+        return;
+      }
+    }
     if (!r.taskId){
       const isEmptyResponse = r && typeof r === 'object' && Object.keys(r).length === 0;
       const detail = r.error || (isEmptyResponse
