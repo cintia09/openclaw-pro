@@ -906,11 +906,10 @@ function syncOpenClawButtons(){
   const repairBtn = $('btn-oc-repair-config');
   const startBtn = $('btn-oc-start');
   const statusDetecting = !!ocStatusLoading && !ocStatusLoadedOnce;
-  const installBusyRemote = !!ocInstallTaskRunningRemote && (
+  const installBusyRemote = (
     ocOperationType === 'installing'
     || ocOperationType === 'updating'
     || ocOperationType === 'uninstalling'
-    || !ocInstalled
   );
   const installBusy = !!ocInstallRunning || !!ocUninstallRunning || !!installBusyRemote;
   const repairBusy = !!ocRepairRunning || !!ocRepairTaskRunningRemote;
@@ -1161,7 +1160,8 @@ async function refreshOpenClaw(opts = {}){
     const detail = lastErr || '状态读取失败';
     setOpenClawStatusLine(`更新状态：读取失败（${detail}）`, null);
     if (initialLoading) {
-      ocStatusLoading = true;
+      ocStatusLoadedOnce = true;
+      ocStatusLoading = false;
       syncOpenClawButtons();
     }
     return { error: detail };
@@ -1177,12 +1177,10 @@ async function refreshOpenClaw(opts = {}){
     startedAt: Number(opProgressRaw.startedAt || d?.operationState?.startedAt || Date.now()),
     totalSec: Number(opProgressRaw.totalSec || 0)
   } : null;
-  const installTaskLikelyStale = !!d.installTaskRunning && opType === 'idle' && !!d.installed && !!d.version;
-  const installBusyRemoteNow = !!d.installTaskRunning && (
+  const installBusyRemoteNow = (
     opType === 'installing'
     || opType === 'updating'
     || opType === 'uninstalling'
-    || (!installTaskLikelyStale && !d.installed)
   );
   const installBusyNow = !!ocInstallRunning || !!ocUninstallRunning || !!installBusyRemoteNow || opType === 'installing' || opType === 'updating' || opType === 'uninstalling';
   const installPhaseNow = resolveInstallPhase({
