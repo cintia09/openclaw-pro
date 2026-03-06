@@ -32,7 +32,8 @@ RUN curl -fsSL --retry 3 --retry-delay 3 https://deb.nodesource.com/setup_22.x |
 
 # 预装源码构建工具（避免运行时网络抖动）
 RUN npm install -g pnpm@10.23.0 rolldown@1.0.0-rc.6 --no-audit --no-fund \
-    && corepack disable >/dev/null 2>&1 || true
+    && corepack disable >/dev/null 2>&1 \
+    && pnpm -v >/dev/null 2>&1
 
 # Caddy
 RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
