@@ -31,6 +31,30 @@ const UI_TERMINAL_FALLBACK_FETCH_LINES = 400;
 const UI_XTERM_SCROLLBACK = 50000;
 
 // ------------------------
+// Log deduplication for WebSocket connection logs
+// ------------------------
+// 使用 Set 存储已经显示过的日志标识（connId + state）
+const shownWsLogIds = new Set();
+let lastWsLogState = null; // 最后显示的状态
+
+function getWsLogId(line) {
+  // 提取 connId 和状态作为唯一标识
+  const match = line.match(/\[ws\]\s+webchat\s+(connected|disconnected)\s+conn=([a-f0-9-]+)/i);
+  if (!match) return null;
+  return `${match[2]}:${match[1].toLowerCase()}`; // connId:state
+}
+
+function parseWsLogLine(line) {
+  // 匹配 [gateway-runtime] [2026-03-07 16:32:01] [ws] webchat connected conn=xxx remote=...
+  const match = line.match(/\[ws\]\s+webchat\s+(connected|disconnected)\s+conn=([a-f0-9-]+)/i);
+  if (!match) return null;
+  return {
+    state: match[1].toLowerCase(), // 'connected' or 'disconnected'
+    connId: match[2]
+  };
+}
+
+// ------------------------
 // API helper
 // ------------------------
 async function api(url, opts={}){
@@ -163,7 +187,16 @@ function highlightLogKeywords(rawLine, safeLine){
     .replace(/\bstatus=(begin)\b/gi, '<span class="term-state-begin">status=$1</span>')
     .replace(/\bstatus=(running)\b/gi, '<span class="term-state-running">status=$1</span>')
     .replace(/\bstatus=(success)\b/gi, '<span class="term-state-success">status=$1</span>')
-    .replace(/\bstatus=(failed|error)\b/gi, '<span class="term-state-failed">status=$1</span>');
+    .replace(/\bstatus=(failed|error)\b/gi, '<span class="term-state-failed">status=$1</span>')
+    // WebSocket 连接/断开高亮
+    .replace(/\b(connected)\b/gi, '<span class="term-state-success">$1</span>')
+    .replace(/\b(disconnected)\b/gi, '<span class="term-state-failed">$1</span>')
+    .replace(/\b(conn=[a-f0-9-]+)\b/gi, '<span class="term-conn-id">$1</span>')
+    .replace(/\b(code=\d+)\b/gi, '<span class="term-code">$1</span>')
+    .replace(/\b(reason=\w+)\b/gi, '<span class="term-reason">$1</span>')
+    // 合并计数和持续时间
+    .replace(/(\(×\d+\))/g, '<span class="term-count">$1</span>')
+    .replace(/(\[持续 [^\]]+\])/g, '<span class="term-duration">$1</span>');
 
   if (/^\s*\[[^\]]+\]\s*$/.test(line.trim())) {
     out = `<span class="term-section-line">${out}</span>`;
@@ -173,6 +206,12 @@ function highlightLogKeywords(rawLine, safeLine){
 
 function colorizeLine(rawLine){
   const line = stripAnsi(String(rawLine ?? ''));
+
+  // 处理 WebSocket 跳过提示行
+  if (/^\s*\.\.\.\s*跳过/.test(line)) {
+    return `<span class="term-line"><span class="term-skip-hint">${escapeHtml(line)}</span></span>`;
+  }
+
   const dateLike = /^\s*(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)/;
   let safe = highlightLogKeywords(line, escapeHtml(line));
 
@@ -182,7 +221,8 @@ function colorizeLine(rawLine){
     safe = `<span class="term-error">${safe}</span>`;
   } else if (/\b(WARN|Warning|timeout|超时|占用|冲突)\b/i.test(line)) {
     safe = `<span class="term-warn">${safe}</span>`;
-  } else if (/\b(INFO|started|listening|connected|完成|成功|已启动)\b/i.test(line)) {
+  } else if (/\b(INFO|started|listening|完成|成功|已启动)\b/i.test(line)) {
+    // 排除 connected/disconnected，因为它们在 highlightLogKeywords 中有专门处理
     safe = `<span class="term-info">${safe}</span>`;
   }
 
@@ -205,12 +245,61 @@ function appendColored(el, text, maxLines = UI_MAX_LINES_DEFAULT, autoscroll = t
     ? lines.filter((line) => String(line || '').trim() !== '')
     : lines;
   while (renderLines.length > 0 && renderLines[renderLines.length - 1] === '') renderLines.pop();
-  const html = renderLines.map(colorizeLine).join('');
+
+  // 处理每一行，支持 WebSocket 连接日志去重（基于唯一标识）
+  const processedLines = [];
+  let skippedCount = 0;
+
+  for (const line of renderLines) {
+    const wsLogId = getWsLogId(line);
+
+    if (!wsLogId) {
+      // 非 WebSocket 日志，直接处理
+      processedLines.push(line);
+      continue;
+    }
+
+    // 检查这条日志是否已经显示过
+    if (shownWsLogIds.has(wsLogId)) {
+      // 已经显示过，跳过
+      skippedCount++;
+      continue;
+    }
+
+    // 新的日志，标记为已显示
+    shownWsLogIds.add(wsLogId);
+
+    // 检查状态
+    const wsInfo = parseWsLogLine(line);
+    const state = wsInfo ? wsInfo.state : null;
+
+    // 如果有跳过的日志，添加提示
+    if (skippedCount > 0) {
+      const skipHint = `    ... 跳过 ${skippedCount} 条重复/已显示的日志`;
+      processedLines.push(skipHint);
+      skippedCount = 0;
+    }
+
+    // 添加这条日志
+    processedLines.push(line);
+    lastWsLogState = state;
+  }
+
+  if (processedLines.length === 0) {
+    if (autoscroll) el.scrollTop = el.scrollHeight;
+    return;
+  }
+
+  const html = processedLines.map(colorizeLine).join('');
   if (!html) return;
+
   el.insertAdjacentHTML('beforeend', html);
+
   const nodes = el.querySelectorAll('.term-line');
   if (nodes.length > maxLines) {
-    for (let i = 0; i < nodes.length - maxLines; i++) nodes[i].remove();
+    for (let i = 0; i < nodes.length - maxLines; i++) {
+      nodes[i].remove();
+    }
   }
   if (autoscroll) el.scrollTop = el.scrollHeight;
 }
@@ -218,6 +307,7 @@ function appendColored(el, text, maxLines = UI_MAX_LINES_DEFAULT, autoscroll = t
 function setColored(el, text, maxLines = UI_MAX_LINES_DEFAULT, autoscroll = true){
   if (!el) return;
   el.innerHTML = '';
+  // 注意：不在此处重置 shownWsLogIds，以支持跨刷新周期的去重
   appendColored(el, text, maxLines, autoscroll);
 }
 
@@ -300,7 +390,12 @@ function setActiveRoute(route){
   }
   if (route === 'browser') loadBrowserFrame();
   if (route === 'settings') { loadBrowserSettings(); renderDetectedTimezone(); checkForUpdate(); }
-  if (route === 'logs') refreshLogs();
+  if (route === 'logs') {
+    // 重置 WebSocket 日志去重状态
+    shownWsLogIds.clear();
+    lastWsLogState = null;
+    refreshLogs();
+  }
 }
 
 function renderDetectedTimezone(){
@@ -1856,9 +1951,94 @@ $('btn-oc-uninstall')?.addEventListener('click', async ()=>{
 });
 
 // ------------------------
-// AI config
-// ------------------------
+// AI config - Refactored
 let aiAuthTaskTimer = null;
+let aiAvailableModels = [];
+
+// Provider 配置信息
+const AI_PROVIDERS = {
+  anthropic: {
+    name: 'Anthropic (Claude)',
+    apiKeyLabel: 'Anthropic API Key',
+    apiKeyPlaceholder: 'sk-ant-api03-...',
+    authType: 'apikey',
+    baseUrl: 'https://api.anthropic.com/v1',
+    needsBaseUrl: false,
+    models: ['claude-sonnet-4-20250514', 'claude-opus-4-20250514', 'claude-3-5-sonnet-20241022']
+  },
+  openai: {
+    name: 'OpenAI (GPT)',
+    apiKeyLabel: 'OpenAI API Key',
+    apiKeyPlaceholder: 'sk-...',
+    authType: 'apikey',
+    baseUrl: 'https://api.openai.com/v1',
+    needsBaseUrl: false,
+    models: ['gpt-4o', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo', 'o1', 'o1-mini']
+  },
+  'github-copilot': {
+    name: 'GitHub Copilot',
+    apiKeyLabel: 'OAuth Token',
+    apiKeyPlaceholder: '使用设备授权登录',
+    authType: 'oauth',
+    oauthType: 'device',
+    baseUrl: 'https://api.githubcopilot.com',
+    needsBaseUrl: false,
+    models: ['copilot/gpt-4o', 'copilot/gpt-4', 'copilot/claude-3.5-sonnet', 'copilot/o1'],
+    oauthGuide: `<div style="color:#98989d;line-height:1.6">
+      <p style="margin:4px 0"><b>GitHub Copilot 设备授权流程：</b></p>
+      <p style="margin:4px 0">1. 确保你有 GitHub Copilot 订阅（个人版或企业版）</p>
+      <p style="margin:4px 0">2. 点击"启动设备授权"按钮</p>
+      <p style="margin:4px 0">3. 在弹出页面中登录 GitHub 并授权设备</p>
+      <p style="margin:4px 0">4. 输入显示的设备码完成授权</p>
+      <p style="margin:8px 0;color:#ff9f0a">注意：模型名称需要以 copilot/ 开头</p>
+    </div>`
+  },
+  gemini: {
+    name: 'Google Gemini',
+    apiKeyLabel: 'Google AI API Key',
+    apiKeyPlaceholder: 'AIza...',
+    authType: 'apikey',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    needsBaseUrl: false,
+    models: ['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash']
+  },
+  openrouter: {
+    name: 'OpenRouter',
+    apiKeyLabel: 'OpenRouter API Key',
+    apiKeyPlaceholder: 'sk-or-...',
+    authType: 'apikey',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    needsBaseUrl: false,
+    models: ['anthropic/claude-sonnet-4', 'openai/gpt-4o', 'google/gemini-pro-1.5']
+  },
+  deepseek: {
+    name: 'DeepSeek',
+    apiKeyLabel: 'DeepSeek API Key',
+    apiKeyPlaceholder: 'sk-...',
+    authType: 'apikey',
+    baseUrl: 'https://api.deepseek.com/v1',
+    needsBaseUrl: false,
+    models: ['deepseek-chat', 'deepseek-coder', 'deepseek-reasoner']
+  },
+  bailian: {
+    name: '阿里云百炼 (Bailian)',
+    apiKeyLabel: 'DashScope API Key',
+    apiKeyPlaceholder: 'sk-...',
+    authType: 'apikey',
+    baseUrl: 'https://coding.dashscope.aliyuncs.com/v1',
+    needsBaseUrl: false,
+    models: ['qwen3.5-plus', 'qwen3-max-2026-01-23', 'qwen3-coder-next', 'qwen3-coder-plus', 'MiniMax-M2.5', 'glm-5', 'glm-4.7', 'kimi-k2.5']
+  },
+  custom: {
+    name: '自定义端点',
+    apiKeyLabel: 'API Key',
+    apiKeyPlaceholder: 'your-api-key',
+    authType: 'apikey',
+    baseUrl: '',
+    needsBaseUrl: true,
+    models: []
+  }
+};
 
 function providerFromModel(modelId = '') {
   const text = String(modelId || '').trim();
@@ -1866,45 +2046,260 @@ function providerFromModel(modelId = '') {
   return text.split('/')[0];
 }
 
-function normalizeProviderIdForAuth(provider) {
-  const p = String(provider || '').trim();
-  if (p === 'github-copilot') return 'copilot-proxy';
-  return p;
+function appendAiAuthLog(line, type = 'info'){
+  const logEl = $('ai-auth-log');
+  if (!logEl) return;
+  const timestamp = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  appendColored(logEl, `[${timestamp}] ${line}\n`, 5000, true);
 }
 
 function updateAiProviderUI() {
-  const provider = $('ai-provider').value;
-  $('ai-custom-url-wrap').hidden = provider !== 'custom';
-  if ($('btn-ai-copilot-login')) {
-    $('btn-ai-copilot-login').hidden = provider !== 'github-copilot';
+  const provider = $('ai-provider')?.value || 'anthropic';
+  const config = AI_PROVIDERS[provider] || AI_PROVIDERS.anthropic;
+
+  // API Key 字段
+  const apikeyWrap = $('ai-apikey-wrap');
+  if (apikeyWrap) {
+    if (config.authType === 'oauth') {
+      apikeyWrap.hidden = true;
+    } else {
+      apikeyWrap.hidden = false;
+      const apikeyLabel = $('ai-apikey-label');
+      const apikeyInput = $('ai-apikey');
+      if (apikeyLabel) apikeyLabel.textContent = config.apiKeyLabel || 'API Key';
+      if (apikeyInput) apikeyInput.placeholder = config.apiKeyPlaceholder || 'sk-...';
+    }
   }
+
+  // OAuth 区域
+  const oauthWrap = $('ai-oauth-wrap');
+  if (oauthWrap) {
+    if (config.authType === 'oauth') {
+      oauthWrap.hidden = false;
+      const guideEl = $('ai-oauth-guide');
+      if (guideEl && config.oauthGuide) {
+        guideEl.innerHTML = config.oauthGuide;
+      }
+    } else {
+      oauthWrap.hidden = true;
+    }
+  }
+
+  // Base URL 字段（仅自定义端点显示）
+  const baseurlWrap = $('ai-baseurl-wrap');
+  if (baseurlWrap) {
+    baseurlWrap.hidden = !config.needsBaseUrl;
+    if (config.needsBaseUrl) {
+      const baseurlInput = $('ai-baseurl');
+      if (baseurlInput) baseurlInput.value = config.baseUrl || '';
+    }
+  }
+
+  // 预填充默认 baseUrl 到隐藏字段（用于保存）
+  if (!config.needsBaseUrl && config.baseUrl) {
+    const baseurlInput = $('ai-baseurl');
+    if (baseurlInput) baseurlInput.value = config.baseUrl;
+  }
+
+  updateFetchModelsButton();
 }
 
-function appendAiAuthLog(line){
-  const logEl = $('ai-auth-log');
-  if (!logEl) return;
-  appendColored(logEl, `${line}\n`, 3000, true);
-}
+function updateFetchModelsButton() {
+  const btn = $('btn-ai-fetch-models');
+  const hint = $('ai-fetch-hint');
+  const provider = $('ai-provider')?.value || '';
+  const apiKey = $('ai-apikey')?.value?.trim() || '';
+  const config = AI_PROVIDERS[provider] || {};
 
-async function loadAIConfig(){
-  const d = await api('/api/ai/status');
-  if (d.error) {
-    $('ai-status').textContent = `状态：读取失败（${d.error}）`;
+  if (!btn) return;
+
+  // OAuth 类型不需要 API Key
+  if (config.authType === 'oauth') {
+    btn.disabled = false;
+    if (hint) hint.textContent = '点击获取可用模型列表';
     return;
   }
 
-  const defaultModel = d.defaultModel || d.resolvedDefault || '';
-  const provider = providerFromModel(defaultModel) || 'anthropic';
-  if ($('ai-provider')) $('ai-provider').value = provider;
-  if ($('ai-model')) $('ai-model').value = defaultModel;
-  if ($('ai-apikey')) $('ai-apikey').value = '';
-  updateAiProviderUI();
-
-  if (d.success) {
-    const providers = (d.configuredProviders || []).join(', ') || '无';
-    $('ai-status').textContent = `状态：已读取（默认模型：${defaultModel || '未设置'}；认证来源：${providers}）`;
+  if (!apiKey) {
+    btn.disabled = true;
+    if (hint) hint.textContent = '请输入 API Key 后可获取模型列表';
   } else {
-    $('ai-status').textContent = `状态：读取失败（${d.raw || 'openclaw models status --json 执行失败'}）`;
+    btn.disabled = false;
+    if (hint) hint.textContent = '点击获取可用模型列表';
+  }
+}
+
+async function fetchAvailableModels() {
+  const provider = $('ai-provider')?.value || '';
+  const apiKey = $('ai-apikey')?.value?.trim() || '';
+  const baseUrl = $('ai-baseurl')?.value?.trim() || '';
+  const config = AI_PROVIDERS[provider] || {};
+
+  appendAiAuthLog(`[fetch] 正在获取 ${config.name} 的模型列表...`);
+
+  try {
+    // 内置模型列表
+    if (config.models && config.models.length > 0) {
+      aiAvailableModels = config.models.map(m => ({
+        id: m.includes('/') ? m : `${provider}/${m}`,
+        name: m
+      }));
+      renderModelsList();
+      appendAiAuthLog(`[fetch] 成功获取 ${aiAvailableModels.length} 个模型`, 'success');
+      return;
+    }
+
+    // API 获取
+    const res = await api('/api/ai/models', {
+      method: 'POST',
+      body: { provider, apiKey, baseUrl }
+    });
+
+    if (res.error) {
+      appendAiAuthLog(`[fetch] 获取失败: ${res.error}`, 'error');
+      return;
+    }
+
+    aiAvailableModels = res.models || [];
+    renderModelsList();
+    appendAiAuthLog(`[fetch] 成功获取 ${aiAvailableModels.length} 个模型`, 'success');
+  } catch (e) {
+    appendAiAuthLog(`[fetch] 错误: ${e.message}`, 'error');
+  }
+}
+
+function renderModelsList() {
+  const wrap = $('ai-models-list-wrap');
+  const list = $('ai-models-list');
+  if (!wrap || !list) return;
+
+  if (aiAvailableModels.length === 0) {
+    wrap.hidden = true;
+    return;
+  }
+
+  wrap.hidden = false;
+  list.innerHTML = aiAvailableModels.map(m => {
+    const id = m.id || m;
+    const name = m.name || m.id || m;
+    return `<div class="model-item" data-model="${id}" style="padding:8px 12px;margin:4px 0;background:#232326;border-radius:6px;cursor:pointer" onmouseover="this.style.background='#3a3a3e'" onmouseout="this.style.background='#232326'">
+      <div style="font-weight:600;font-size:14px">${name}</div>
+      <div style="font-size:12px;color:#86868b;font-family:var(--mono)">${id}</div>
+    </div>`;
+  }).join('');
+
+  list.querySelectorAll('.model-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const modelId = item.dataset.model;
+      const primaryInput = $('ai-model-primary');
+      if (primaryInput) {
+        primaryInput.value = modelId;
+        appendAiAuthLog(`[select] 已选择模型: ${modelId}`);
+      }
+    });
+  });
+}
+
+async function loadAIConfig(){
+  appendAiAuthLog('[load] 正在读取配置...');
+
+  try {
+    const d = await api('/api/ai/config');
+
+    if (d.error) {
+      $('ai-status').textContent = `状态：读取失败（${d.error}）`;
+      appendAiAuthLog(`[load] 读取失败: ${d.error}`, 'error');
+      return;
+    }
+
+    const provider = d.provider || 'anthropic';
+    if ($('ai-provider')) $('ai-provider').value = provider;
+
+    const primaryModel = d.defaultModel || '';
+    if ($('ai-model-primary')) $('ai-model-primary').value = primaryModel;
+
+    if (d.fallbacks?.primary && $('ai-model-primary-fallback')) {
+      $('ai-model-primary-fallback').value = d.fallbacks.primary.join(', ');
+    }
+
+    if (d.subModel && $('ai-model-sub')) {
+      $('ai-model-sub').value = d.subModel;
+    }
+
+    if (d.fallbacks?.sub && $('ai-model-sub-fallback')) {
+      $('ai-model-sub-fallback').value = d.fallbacks.sub.join(', ');
+    }
+
+    if (d.baseUrl && $('ai-baseurl')) {
+      $('ai-baseurl').value = d.baseUrl;
+    }
+
+    if ($('ai-apikey')) $('ai-apikey').value = '';
+
+    updateAiProviderUI();
+
+    const providers = (d.configuredProviders || []).join(', ') || provider;
+    $('ai-status').textContent = `状态：已读取（主模型：${primaryModel || '未设置'}；提供商：${providers}）`;
+    appendAiAuthLog(`[load] 配置读取成功`, 'success');
+
+  } catch (e) {
+    $('ai-status').textContent = `状态：读取失败（${e.message}）`;
+    appendAiAuthLog(`[load] 错误: ${e.message}`, 'error');
+  }
+}
+
+async function saveAIConfig() {
+  const provider = $('ai-provider')?.value || '';
+  const primaryModel = $('ai-model-primary')?.value?.trim() || '';
+  const primaryFallback = $('ai-model-primary-fallback')?.value?.trim() || '';
+  const subModel = $('ai-model-sub')?.value?.trim() || '';
+  const subFallback = $('ai-model-sub-fallback')?.value?.trim() || '';
+  const apiKey = $('ai-apikey')?.value?.trim() || '';
+  const baseUrl = $('ai-baseurl')?.value?.trim() || '';
+
+  if (!primaryModel) {
+    toast('参数错误', '请设置主代理模型');
+    appendAiAuthLog('[save] 错误: 主代理模型未设置', 'error');
+    return;
+  }
+
+  appendAiAuthLog('[save] 开始保存配置...');
+
+  try {
+    const config = {
+      provider,
+      primaryModel,
+      fallbacks: {
+        primary: primaryFallback ? primaryFallback.split(',').map(s => s.trim()).filter(Boolean) : [],
+        sub: subFallback ? subFallback.split(',').map(s => s.trim()).filter(Boolean) : []
+      },
+      subModel: subModel || null,
+      baseUrl: baseUrl || null,
+      apiKey: apiKey || null
+    };
+
+    appendAiAuthLog(`[save] 主模型: ${primaryModel}`);
+    if (config.fallbacks.primary.length) appendAiAuthLog(`[save] 主代理 Fallbacks: ${config.fallbacks.primary.join(', ')}`);
+    if (subModel) appendAiAuthLog(`[save] 子代理模型: ${subModel}`);
+    if (config.fallbacks.sub.length) appendAiAuthLog(`[save] 子代理 Fallbacks: ${config.fallbacks.sub.join(', ')}`);
+
+    const res = await api('/api/ai/config', { method:'POST', body: config });
+
+    if (res.error) {
+      toast('保存失败', res.error);
+      appendAiAuthLog(`[save] 保存失败: ${res.error}`, 'error');
+      return;
+    }
+
+    toast('保存成功', 'AI 模型配置已保存');
+    appendAiAuthLog('[save] 配置保存成功', 'success');
+
+    if ($('ai-apikey')) $('ai-apikey').value = '';
+    await loadAIConfig();
+
+  } catch (e) {
+    toast('保存失败', e.message);
+    appendAiAuthLog(`[save] 错误: ${e.message}`, 'error');
   }
 }
 
@@ -1919,7 +2314,9 @@ async function pollAiAuthTask(taskId){
     if (st.status && st.status !== 'running') {
       if (aiAuthTaskTimer) clearInterval(aiAuthTaskTimer);
       aiAuthTaskTimer = null;
-      toast(st.status === 'success' ? 'Copilot 登录完成' : 'Copilot 登录失败', st.status === 'success' ? '认证信息已写入 OpenClaw' : '请查看认证日志');
+      const success = st.status === 'success';
+      toast(success ? '认证完成' : '认证失败', success ? '认证信息已写入' : '请查看日志');
+      appendAiAuthLog(`[auth] OAuth 认证${success ? '成功' : '失败'}`, success ? 'success' : 'error');
       await loadAIConfig();
     }
   };
@@ -1927,68 +2324,34 @@ async function pollAiAuthTask(taskId){
   aiAuthTaskTimer = setInterval(tick, 1000);
 }
 
-$('ai-provider').addEventListener('change', updateAiProviderUI);
+async function startOAuthLogin() {
+  const provider = $('ai-provider')?.value || '';
+  appendAiAuthLog(`[auth] 启动 ${provider} OAuth 登录...`);
 
-$('btn-ai-load').addEventListener('click', loadAIConfig);
-
-$('btn-ai-copilot-login')?.addEventListener('click', async ()=>{
-  appendAiAuthLog('[ai] 正在启动 GitHub Copilot 登录流程...');
-  const r = await api('/api/ai/auth/copilot/login', { method:'POST' });
-  if (!r.success || !r.taskId) {
-    toast('启动失败', r.error || '无法启动 Copilot 登录流程');
-    appendAiAuthLog(`[ai] 启动失败: ${r.error || '接口未返回 taskId'}`);
-    return;
+  try {
+    const r = await api('/api/ai/auth/oauth/login', { method:'POST', body: { provider } });
+    if (!r.success || !r.taskId) {
+      toast('启动失败', r.error || '无法启动 OAuth 登录');
+      appendAiAuthLog(`[auth] 启动失败: ${r.error || '未返回 taskId'}`, 'error');
+      return;
+    }
+    appendAiAuthLog(`[auth] OAuth 任务已启动: ${r.taskId}`);
+    pollAiAuthTask(r.taskId);
+  } catch (e) {
+    appendAiAuthLog(`[auth] 错误: ${e.message}`, 'error');
   }
-  appendAiAuthLog(`[ai] 认证任务已启动: ${r.taskId}`);
-  pollAiAuthTask(r.taskId);
-});
+}
 
-$('btn-ai-save').addEventListener('click', async ()=>{
-  const provider = $('ai-provider').value;
-  const model = $('ai-model').value.trim();
-  const apiKey = $('ai-apikey').value.trim();
+// 事件监听
+$('ai-provider')?.addEventListener('change', updateAiProviderUI);
+$('ai-apikey')?.addEventListener('input', updateFetchModelsButton);
+$('btn-ai-load')?.addEventListener('click', loadAIConfig);
+$('btn-ai-fetch-models')?.addEventListener('click', fetchAvailableModels);
+$('btn-ai-oauth-login')?.addEventListener('click', startOAuthLogin);
+$('btn-ai-save')?.addEventListener('click', saveAIConfig);
 
-  if (!model) {
-    toast('参数错误', '请先填写模型');
-    return;
-  }
-
-  const modelRes = await api('/api/ai/model', { method:'POST', body:{ model } });
-  if (!modelRes.success) {
-    toast('保存失败', modelRes.error || '设置模型失败');
-    appendAiAuthLog(`[ai] 设置模型失败: ${modelRes.error || ''}`);
-    return;
-  }
-  appendAiAuthLog(`[ai] 已设置默认模型: ${model}`);
-
-  if (provider === 'github-copilot') {
-    toast('模型已保存', 'Copilot 请点击“GitHub Copilot 登录”完成认证');
-    await loadAIConfig();
-    return;
-  }
-
-  if (!apiKey) {
-    toast('保存成功', '模型已保存（未更新 API Key）');
-    await loadAIConfig();
-    return;
-  }
-
-  const authProvider = normalizeProviderIdForAuth(provider);
-  appendAiAuthLog(`[ai] 正在写入 ${authProvider} 认证信息...`);
-  const authRes = await api('/api/ai/auth/token', { method:'POST', body:{ provider: authProvider, token: apiKey } });
-  if (!authRes.success) {
-    toast('保存部分成功', `模型已保存；认证写入失败：${authRes.error || ''}`);
-    appendAiAuthLog(`[ai] 认证写入失败: ${authRes.error || ''}`);
-  } else {
-    toast('保存成功', '模型与认证信息已写入 OpenClaw');
-    if (authRes.output) appendAiAuthLog(`[ai] ${authRes.output}`);
-  }
-  if ($('ai-apikey')) $('ai-apikey').value = '';
-  await loadAIConfig();
-});
-
-// ------------------------
-// Messaging config
+// 初始化
+updateAiProviderUI();
 // ------------------------
 async function loadMessagingConfig(){
   const cfg = await api('/api/config');

@@ -1044,8 +1044,6 @@ F2B
         --cap-add KILL \
         --cap-add DAC_OVERRIDE \
         --cap-add FOWNER \
-        --cap-add SYS_CHROOT \
-        --cap-add AUDIT_WRITE \
         -v "$ROOT_HOME_DIR:/root" \
         ${USER_MOUNT_ARGS[@]} \
         $PORT_ARGS \

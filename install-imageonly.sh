@@ -1015,7 +1015,7 @@ create_and_start(){
     --hostname openclaw \
     --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID \
     --cap-add NET_BIND_SERVICE --cap-add KILL --cap-add DAC_OVERRIDE \
-    --cap-add FOWNER --cap-add SYS_CHROOT --cap-add AUDIT_WRITE \
+    --cap-add FOWNER \
     "${vol_args[@]}" \
     "${port_args[@]}" \
     "${env_args[@]}" \

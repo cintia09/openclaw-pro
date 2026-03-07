@@ -2741,8 +2741,21 @@ app.get('/api/ai/config', async (req, res) => {
     // 解析 aliases（反向查找）
     const aliases = config?.models?.aliases || {};
 
-    // 解析 fallbacks
-    const fallbacks = config?.agents?.defaults?.fallbacks || [];
+    // 解析 fallbacks（支持新格式 {primary, sub} 和旧格式数组）
+    let fallbacks = config?.agents?.defaults?.fallbacks || [];
+    let fallbackObj = { primary: [], sub: [] };
+
+    if (Array.isArray(fallbacks)) {
+      // 旧格式：数组中的模型作为主代理 fallback
+      fallbackObj.primary = fallbacks;
+    } else if (typeof fallbacks === 'object') {
+      // 新格式：{primary, sub}
+      fallbackObj.primary = fallbacks.primary || [];
+      fallbackObj.sub = fallbacks.sub || [];
+    }
+
+    // 解析 sub model
+    const subModel = config?.agents?.defaults?.subModel || null;
 
     // 解析 image model
     const imageModel = config?.agents?.defaults?.imageModel || null;
@@ -2753,7 +2766,8 @@ app.get('/api/ai/config', async (req, res) => {
       defaultModel: primaryModel,
       baseUrl,
       aliases,
-      fallbacks,
+      fallbacks: fallbackObj,
+      subModel,
       imageModel,
       configuredProviders: providers,
       rawConfig: config
@@ -2767,7 +2781,7 @@ app.get('/api/ai/config', async (req, res) => {
 // 保存 AI 配置
 app.post('/api/ai/config', async (req, res) => {
   try {
-    const { provider, primaryModel, aliases, fallbacks, imageModel, baseUrl, apiKey } = req.body || {};
+    const { provider, primaryModel, aliases, fallbacks, imageModel, baseUrl, apiKey, subModel } = req.body || {};
 
     if (!primaryModel) {
       return res.status(400).json({ error: '主模型不能为空' });
@@ -2816,9 +2830,29 @@ app.post('/api/ai/config', async (req, res) => {
     config.agents.defaults.model.primary = primaryModel;
     config.agents.defaults.models[primaryModel] = {};
 
-    // 更新 fallbacks
-    if (fallbacks && Array.isArray(fallbacks) && fallbacks.length > 0) {
-      config.agents.defaults.fallbacks = fallbacks;
+    // 更新 fallbacks（支持新的对象格式 {primary, sub}）
+    if (fallbacks) {
+      if (typeof fallbacks === 'object' && !Array.isArray(fallbacks)) {
+        // 新格式：{primary, sub}
+        const newFallbacks = {};
+        if (fallbacks.primary && Array.isArray(fallbacks.primary) && fallbacks.primary.length > 0) {
+          newFallbacks.primary = fallbacks.primary;
+        }
+        if (fallbacks.sub && Array.isArray(fallbacks.sub) && fallbacks.sub.length > 0) {
+          newFallbacks.sub = fallbacks.sub;
+        }
+        if (Object.keys(newFallbacks).length > 0) {
+          config.agents.defaults.fallbacks = newFallbacks;
+        }
+      } else if (Array.isArray(fallbacks) && fallbacks.length > 0) {
+        // 旧格式：数组，作为主代理 fallback
+        config.agents.defaults.fallbacks = { primary: fallbacks };
+      }
+    }
+
+    // 更新 sub model
+    if (subModel !== undefined) {
+      config.agents.defaults.subModel = subModel || null;
     }
 
     // 更新 image model
@@ -3024,8 +3058,6 @@ app.post('/api/restart', (req, res) => {
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
-  }
-});
   }
 });
 
@@ -4834,13 +4866,6 @@ app.post('/api/openclaw/start', (req, res) => {
     success: true,
     message: '重启请求已提交，watchdog 将在 10 秒内执行',
     operationState: getOpenClawOperationState()
-  });
-});
-    }
-    if (/Unrecognized key|Invalid config/i.test(String(detail || ''))) {
-      return res.json({ success: false, error: `${detail || 'Gateway 配置无效'}；请点击“配置恢复”（内部会执行 openclaw doctor --fix）后重试`, logs: startupLogs });
-    }
-    res.json({ success: false, error: detail || 'Gateway 重启失败，请查看 watchdog 日志', logs: startupLogs });
   });
 });
 
