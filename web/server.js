@@ -879,146 +879,21 @@ function ensureOpenClawSourceEntryCompat() {
   }
 }
 
-function restartGatewayForeground(callback) {
-  repairOpenClawConfigProviders();
-  const compat = ensureOpenClawSourceEntryCompat();
-  if (compat?.repaired) {
-    console.log(`[openclaw][start] repaired dist/${compat.target} -> ${compat.source}`);
-  }
-  console.log('[openclaw][start] trying fast restart via direct `gateway run --force --allow-unconfigured`');
-  const fastRestartCmd = [
-    `SOURCE_ENTRY=${JSON.stringify(OPENCLAW_SOURCE_ENTRY)}`,
-    `RUNTIME_LOG=${JSON.stringify(GATEWAY_RUNTIME_LOG_FILE)}`,
-    'collect_gateway_pids() {',
-    '  {',
-    '    pgrep -x openclaw-gateway 2>/dev/null || true',
-    '    pgrep -x openclaw 2>/dev/null || true',
-    '    pgrep -f "[o]penclaw\\.mjs gateway" 2>/dev/null || true',
-    '    pgrep -f "[o]penclaw[^\\n]*gateway run" 2>/dev/null || true',
-    '  } | sed "/^$/d" | sort -u | tr "\\n" " "',
-    '}',
-    'pid_in_list() {',
-    '  target="$1"',
-    '  shift',
-    '  for item in "$@"; do',
-    '    if [ "$item" = "$target" ]; then return 0; fi',
-    '  done',
-    '  return 1',
-    '}',
-    'OPENCLAW_BIN="$(command -v openclaw 2>/dev/null || true)"',
-    'if [ -z "$OPENCLAW_BIN" ] && [ -x /root/.npm-global/bin/openclaw ]; then OPENCLAW_BIN=/root/.npm-global/bin/openclaw; fi',
-    'if [ -z "$OPENCLAW_BIN" ] && [ -x /usr/local/bin/openclaw ]; then OPENCLAW_BIN=/usr/local/bin/openclaw; fi',
-    'LAUNCH_CMD=""',
-    'if [ -f "$SOURCE_ENTRY" ]; then',
-    '  LAUNCH_CMD="node --experimental-sqlite $SOURCE_ENTRY gateway run --force --allow-unconfigured"',
-    'elif [ -n "$OPENCLAW_BIN" ]; then',
-    '  LAUNCH_CMD="$OPENCLAW_BIN gateway run --force --allow-unconfigured"',
-    'fi',
-    'if [ -z "$LAUNCH_CMD" ]; then exit 19; fi',
-    'OLD_PIDS="$(collect_gateway_pids)"',
-    'pkill -TERM -x openclaw-gateway >/dev/null 2>&1 || true',
-    'pkill -TERM -x openclaw >/dev/null 2>&1 || true',
-    'pgrep -x openclaw-gatewa 2>/dev/null | xargs -r kill -TERM >/dev/null 2>&1 || true',
-    'pgrep -f "[o]penclaw\\.mjs gateway" 2>/dev/null | xargs -r kill -TERM >/dev/null 2>&1 || true',
-    'pgrep -f "[o]penclaw[^\\n]*gateway run" 2>/dev/null | xargs -r kill -TERM >/dev/null 2>&1 || true',
-    'for i in 1 2 3 4 5 6 7 8; do',
-    '  still_old=0',
-    '  for pid in $OLD_PIDS; do',
-    '    if kill -0 "$pid" 2>/dev/null; then still_old=1; break; fi',
-    '  done',
-    '  if [ "$still_old" -eq 0 ]; then',
-    '    code="$(curl --noproxy "*" -sS --connect-timeout 1 --max-time 2 -o /dev/null -w "%{http_code}" http://127.0.0.1:18789/health 2>/dev/null || true)"',
-    '    if [ "$code" != "200" ] && [ "$code" != "401" ] && [ "$code" != "403" ]; then break; fi',
-    '  fi',
-    '  sleep 1',
-    'done',
-    'for pid in $OLD_PIDS; do kill -9 "$pid" >/dev/null 2>&1 || true; done',
+function ensureGatewayWatchdog(callback) {
+  const cmd = [
+    'pgrep -f "[o]penclaw-gateway-watchdog.sh" >/dev/null 2>&1 && exit 0',
+    `[ -x "${GATEWAY_WATCHDOG_SCRIPT}" ] || exit 21`,
+    'nohup "' + GATEWAY_WATCHDOG_SCRIPT + '" >> /var/log/openclaw-watchdog.log 2>&1 &',
     'sleep 1',
-    'nohup bash --noprofile --norc -lc "$LAUNCH_CMD" >> "$RUNTIME_LOG" 2>&1 &',
-    'sleep 1',
-    'NEW_PIDS="$(collect_gateway_pids)"',
-    'for pid in $NEW_PIDS; do',
-    '  if ! pid_in_list "$pid" $OLD_PIDS; then exit 0; fi',
-    'done',
-    'for i in 1 2 3 4 5 6 7 8 9 10; do',
-    '  code="$(curl --noproxy \"*\" -sS --connect-timeout 1 --max-time 2 -o /dev/null -w \"%{http_code}\" http://127.0.0.1:18789/health 2>/dev/null || true)"',
-    '  case "$code" in 200|401|403) exit 0 ;; esac',
-    '  NEW_PIDS="$(collect_gateway_pids)"',
-    '  for pid in $NEW_PIDS; do',
-    '    if ! pid_in_list "$pid" $OLD_PIDS; then exit 0; fi',
-    '  done',
-    '  sleep 1',
-    'done',
-    'exit 18'
+    'pgrep -f "[o]penclaw-gateway-watchdog.sh" >/dev/null 2>&1'
   ].join('\n');
-  exec(`bash --noprofile --norc -lc '${fastRestartCmd}'`, { env: { ...process.env, TERM: 'dumb' } }, (fastErr, fastStdout, fastStderr) => {
-    if (!fastErr) {
-      console.log('[openclaw][start] gateway restart handled by direct gateway run (process launched or health ready)');
-      return callback(null, 'gateway restart via direct run', '');
+  exec(`bash --noprofile --norc -lc '${cmd}'`, { env: { ...process.env, TERM: 'dumb' } }, (err, stdout, stderr) => {
+    if (err) {
+      return callback(err, stdout, stderr);
     }
-    const fastDetail = compactOutput(fastStderr || fastStdout || fastErr?.message || '');
-    console.log(`[openclaw][start] fast restart unavailable, fallback to watchdog path: ${fastDetail || 'exit != 0'}`);
-  const killCmd = [
-    'pkill -TERM -x openclaw-gateway >/dev/null 2>&1 || true',
-    'pkill -TERM -x openclaw >/dev/null 2>&1 || true',
-    'pgrep -x openclaw-gatewa 2>/dev/null | xargs -r kill -TERM >/dev/null 2>&1 || true',
-    'pgrep -f "[o]penclaw\\.mjs gateway" 2>/dev/null | xargs -r kill -TERM >/dev/null 2>&1 || true',
-    'pgrep -f "[o]penclaw[^\\n]*gateway run" 2>/dev/null | xargs -r kill -TERM >/dev/null 2>&1 || true',
-    'sleep 1'
-  ].join('\n');
-  exec(`bash --noprofile --norc -lc '${killCmd}'`, { env: { ...process.env, TERM: 'dumb' } }, (killErr, killStdout, killStderr) => {
-    if (killErr) return callback(killErr, killStdout, killStderr);
-    ensureGatewayWatchdog(callback);
+    console.log('[watchdog] Watchdog started or already running');
+    callback(null, 'watchdog started', '');
   });
-  });
-}
-
-let gatewayRestartSettleTimer = null;
-
-function clearGatewayRestartSettleTimer() {
-  if (gatewayRestartSettleTimer) {
-    clearTimeout(gatewayRestartSettleTimer);
-    gatewayRestartSettleTimer = null;
-  }
-}
-
-function scheduleGatewayRestartSettle({ timeoutMs = 480000, intervalMs = 3000 } = {}) {
-  clearGatewayRestartSettleTimer();
-  const startedAt = Date.now();
-  const tick = () => {
-    const opState = getOpenClawOperationState();
-    if (opState?.type !== 'restarting_gateway') {
-      clearGatewayRestartSettleTimer();
-      return;
-    }
-    const gatewayHealthCode = Number.parseInt(String(runCommandText('curl -s -o /dev/null -w "%{http_code}" --connect-timeout 1 --max-time 2 http://127.0.0.1:18789/health 2>/dev/null || true', 3000) || '').trim(), 10) || 0;
-    const gatewayRunning = gatewayHealthCode === 200;
-    const gatewayProcessRunning = isGatewayRuntimeProcessRunning()
-      || runCommandOk('ss -ltn 2>/dev/null | grep -q "[:.]18789[[:space:]]" || netstat -ltn 2>/dev/null | grep -q "[:.]18789[[:space:]]"', 1200);
-    const watchdogStarting = runCommandOk('pgrep -f "[o]penclaw-gateway-watchdog.sh" >/dev/null 2>&1', 1200)
-      && isGatewayWatchdogStartupInProgress(900);
-
-    if (gatewayRunning) {
-      console.log('[openclaw][start] gateway became healthy, clearing restart operation state');
-      clearOpenClawOperationState('restarting_gateway');
-      clearGatewayRestartSettleTimer();
-      return;
-    }
-    if (!gatewayProcessRunning && !watchdogStarting) {
-      console.log('[openclaw][start] gateway process missing during restart settle, clearing restart operation state');
-      clearOpenClawOperationState('restarting_gateway');
-      clearGatewayRestartSettleTimer();
-      return;
-    }
-    if ((Date.now() - startedAt) >= Math.max(30000, Number(timeoutMs || 240000))) {
-      console.log('[openclaw][start] restart settle timeout reached, clearing restart operation state');
-      clearOpenClawOperationState('restarting_gateway');
-      clearGatewayRestartSettleTimer();
-      return;
-    }
-    gatewayRestartSettleTimer = setTimeout(tick, Math.max(1000, Number(intervalMs || 3000)));
-  };
-  gatewayRestartSettleTimer = setTimeout(tick, Math.max(1000, Number(intervalMs || 3000)));
 }
 
 function stripAnsi(input) {
@@ -1100,7 +975,7 @@ function runOpenClawCli(command, timeoutMs = 30000) {
     const escaped = String(command).replace(/'/g, `"'"'`);
     const defaultPath = '/root/.npm-global/bin:/usr/local/bin:/usr/bin:/bin';
     const mergedPath = process.env.PATH ? `${process.env.PATH}:${defaultPath}` : defaultPath;
-      exec(`bash --noprofile --norc -lc '${escaped}'`, { timeout: timeoutMs, env: { ...process.env, TERM: 'dumb', PATH: mergedPath } }, (err, stdout, stderr) => {
+    exec(`bash --noprofile --norc -lc '${escaped}'`, { timeout: timeoutMs, env: { ...process.env, TERM: 'dumb', PATH: mergedPath } }, (err, stdout, stderr) => {
       const out = String(stdout || '');
       const errText = String(stderr || '');
       const output = `${out}${errText}`;
@@ -2586,7 +2461,7 @@ app.get('/api/status', (req, res) => {
     status.openclawInstalled
     &&
     opState?.type === 'restarting_gateway'
-    && (gatewayRestartRunning || status.gatewayProcessRunning || status.gateway)
+    && (status.gatewayProcessRunning || status.gateway)
   );
   const gatewayWarmupByWatchdog = !!(
     status.openclawInstalled
@@ -2751,7 +2626,7 @@ app.get('/api/ai/status', async (req, res) => {
 
   if (!aiStatusCache.inFlight) {
     aiStatusCache.inFlight = (async () => {
-      const statusResult = await runOpenClawCli('openclaw models status --json 2>&1', 7000);
+      const statusResult = await runOpenClawCli('openclaw models status --json 2>&1', 30000);
       const parsed = extractJsonObject(statusResult.output);
 
       const providerHints = parsed?.auth?.oauth?.providers || [];
@@ -2786,7 +2661,7 @@ app.post('/api/ai/model', async (req, res) => {
   if (!model) return res.status(400).json({ error: '模型不能为空' });
   if (!/^[a-zA-Z0-9._/:\-]+$/.test(model)) return res.status(400).json({ error: '模型格式不合法' });
 
-  const result = await runOpenClawCli(`openclaw models set "${model.replace(/"/g, '')}" 2>&1`, 15000);
+  const result = await runOpenClawCli(`openclaw models set "${model.replace(/"/g, '')}" 2>&1`, 60000);
   if (!result.ok) return res.status(500).json({ error: compactOutput(result.output) || '设置模型失败' });
   res.json({ success: true, output: compactOutput(result.output) });
 });
@@ -2819,31 +2694,338 @@ app.get('/api/ai/auth/task/:taskId', (req, res) => {
 });
 
 // ============================================================
+// API: AI Config (New)
+// ============================================================
+
+// 读取 AI 配置
+app.get('/api/ai/config', async (req, res) => {
+  try {
+    const configPath = '/root/.openclaw/openclaw.json';
+    const modelsPath = '/root/.openclaw/agents/main/agent/models.json';
+
+    // 读取主配置
+    const configData = await new Promise((resolve, reject) => {
+      exec(`sudo cat "${configPath}" 2>&1`, { timeout: 5000 }, (err, stdout) => {
+        if (err) reject(err);
+        else resolve(String(stdout || ''));
+      });
+    });
+
+    const config = JSON.parse(configData);
+
+    // 读取 models.json 获取提供商列表
+    let providers = [];
+    let baseUrl = null;
+    try {
+      const modelsData = await new Promise((resolve) => {
+        exec(`sudo cat "${modelsPath}" 2>&1`, { timeout: 5000 }, (err, stdout) => {
+          resolve(String(stdout || ''));
+        });
+      });
+      const models = JSON.parse(modelsData);
+      providers = Object.keys(models?.providers || {});
+
+      // 获取第一个提供商的 baseUrl
+      if (providers.length > 0) {
+        const firstProvider = models.providers[providers[0]];
+        baseUrl = firstProvider?.baseUrl || null;
+      }
+    } catch {
+      // 忽略错误
+    }
+
+    // 解析默认模型
+    const primaryModel = config?.agents?.defaults?.model?.primary || '';
+    const provider = primaryModel.split('/')[0] || providers[0] || 'anthropic';
+
+    // 解析 aliases（反向查找）
+    const aliases = config?.models?.aliases || {};
+
+    // 解析 fallbacks
+    const fallbacks = config?.agents?.defaults?.fallbacks || [];
+
+    // 解析 image model
+    const imageModel = config?.agents?.defaults?.imageModel || null;
+
+    res.json({
+      success: true,
+      provider,
+      defaultModel: primaryModel,
+      baseUrl,
+      aliases,
+      fallbacks,
+      imageModel,
+      configuredProviders: providers,
+      rawConfig: config
+    });
+  } catch (err) {
+    console.error('[ai/config] Error reading config:', err);
+    res.status(500).json({ error: '读取配置失败: ' + (err?.message || '未知错误') });
+  }
+});
+
+// 保存 AI 配置
+app.post('/api/ai/config', async (req, res) => {
+  try {
+    const { provider, primaryModel, aliases, fallbacks, imageModel, baseUrl, apiKey } = req.body || {};
+
+    if (!primaryModel) {
+      return res.status(400).json({ error: '主模型不能为空' });
+    }
+
+    // 验证模型格式
+    if (!primaryModel.includes('/')) {
+      return res.status(400).json({ error: '模型名称格式应为 provider/model-id' });
+    }
+
+    const configPath = '/root/.openclaw/openclaw.json';
+    const modelsPath = '/root/.openclaw/agents/main/agent/models.json';
+
+    // 读取现有配置
+    let config = {};
+    let models = { providers: {} };
+
+    try {
+      const configData = await new Promise((resolve) => {
+        exec(`sudo cat "${configPath}" 2>&1`, { timeout: 5000 }, (err, stdout) => {
+          resolve(String(stdout || '{}'));
+        });
+      });
+      config = JSON.parse(configData);
+    } catch {
+      config = {};
+    }
+
+    try {
+      const modelsData = await new Promise((resolve) => {
+        exec(`sudo cat "${modelsPath}" 2>&1`, { timeout: 5000 }, (err, stdout) => {
+          resolve(String(stdout || '{}'));
+        });
+      });
+      models = JSON.parse(modelsData);
+    } catch {
+      models = { providers: {} };
+    }
+
+    // 更新主配置
+    if (!config.agents) config.agents = { defaults: {} };
+    if (!config.agents.defaults) config.agents.defaults = { model: {} };
+    if (!config.agents.defaults.model) config.agents.defaults.model = {};
+    if (!config.agents.defaults.models) config.agents.defaults.models = {};
+
+    config.agents.defaults.model.primary = primaryModel;
+    config.agents.defaults.models[primaryModel] = {};
+
+    // 更新 fallbacks
+    if (fallbacks && Array.isArray(fallbacks) && fallbacks.length > 0) {
+      config.agents.defaults.fallbacks = fallbacks;
+    }
+
+    // 更新 image model
+    if (imageModel) {
+      config.agents.defaults.imageModel = imageModel;
+    }
+
+    // 更新 aliases
+    if (aliases && typeof aliases === 'object') {
+      if (!config.models) config.models = {};
+      config.models.aliases = { ...config.models.aliases, ...aliases };
+    }
+
+    // 更新 models.json 中的提供商配置
+    const [providerName, modelId] = primaryModel.split('/');
+    if (!models.providers[providerName]) {
+      models.providers[providerName] = {
+        baseUrl: baseUrl || getDefaultBaseUrl(providerName),
+        apiKey: apiKey || 'YOUR_API_KEY',
+        api: 'openai-completions',
+        models: []
+      };
+    }
+
+    // 更新 baseUrl（如果提供了）
+    if (baseUrl) {
+      models.providers[providerName].baseUrl = baseUrl;
+    }
+
+    // 更新 API Key（如果提供了）
+    if (apiKey) {
+      models.providers[providerName].apiKey = apiKey;
+    }
+
+    // 添加模型到列表（如果不存在）
+    const existingModel = models.providers[providerName].models.find(m => m.id === modelId);
+    if (!existingModel) {
+      models.providers[providerName].models.push({
+        id: modelId,
+        name: modelId,
+        api: 'openai-completions',
+        reasoning: false,
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 4096
+      });
+    }
+
+    // 写入配置
+    const configJson = JSON.stringify(config, null, 2);
+    const modelsJson = JSON.stringify(models, null, 2);
+
+    await new Promise((resolve, reject) => {
+      exec(`sudo tee "${configPath}" > /dev/null << 'EOF'\n${configJson}\nEOF`, { timeout: 10000 }, (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+
+    await new Promise((resolve, reject) => {
+      exec(`sudo tee "${modelsPath}" > /dev/null << 'EOF'\n${modelsJson}\nEOF`, { timeout: 10000 }, (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+
+    res.json({ success: true, message: '配置已保存' });
+  } catch (err) {
+    console.error('[ai/config] Error saving config:', err);
+    res.status(500).json({ error: '保存配置失败: ' + (err?.message || '未知错误') });
+  }
+});
+
+// 获取可用模型列表
+app.post('/api/ai/models', async (req, res) => {
+  try {
+    const { provider, apiKey, baseUrl } = req.body || {};
+
+    if (!provider) {
+      return res.status(400).json({ error: 'provider 不能为空' });
+    }
+
+    // 对于某些 provider，返回内置模型列表
+    const builtInModels = {
+      'anthropic': [
+        { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4' },
+        { id: 'claude-opus-4-20250514', name: 'Claude Opus 4' },
+        { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet' },
+        { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku' }
+      ],
+      'openai': [
+        { id: 'gpt-4o', name: 'GPT-4o' },
+        { id: 'gpt-4-turbo', name: 'GPT-4 Turbo' },
+        { id: 'gpt-4', name: 'GPT-4' },
+        { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo' },
+        { id: 'o1', name: 'o1' },
+        { id: 'o1-mini', name: 'o1-mini' }
+      ],
+      'github-copilot': [
+        { id: 'copilot/gpt-4o', name: 'Copilot GPT-4o' },
+        { id: 'copilot/gpt-4', name: 'Copilot GPT-4' },
+        { id: 'copilot/claude-3.5-sonnet', name: 'Copilot Claude 3.5 Sonnet' },
+        { id: 'copilot/o1', name: 'Copilot o1' }
+      ],
+      'gemini': [
+        { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash' },
+        { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro' },
+        { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash' }
+      ],
+      'bailian': [
+        { id: 'qwen3.5-plus', name: 'Qwen 3.5 Plus' },
+        { id: 'qwen3-max-2026-01-23', name: 'Qwen 3 Max' },
+        { id: 'qwen3-coder-next', name: 'Qwen 3 Coder Next' },
+        { id: 'qwen3-coder-plus', name: 'Qwen 3 Coder Plus' },
+        { id: 'MiniMax-M2.5', name: 'MiniMax M2.5' },
+        { id: 'glm-5', name: 'GLM-5' },
+        { id: 'glm-4.7', name: 'GLM-4.7' },
+        { id: 'kimi-k2.5', name: 'Kimi K2.5' }
+      ],
+      'deepseek': [
+        { id: 'deepseek-chat', name: 'DeepSeek Chat' },
+        { id: 'deepseek-coder', name: 'DeepSeek Coder' },
+        { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner' }
+      ]
+    };
+
+    if (builtInModels[provider]) {
+      return res.json({ success: true, models: builtInModels[provider] });
+    }
+
+    // 对于 OpenRouter 和自定义端点，尝试获取模型列表
+    if ((provider === 'openrouter' || provider === 'custom') && apiKey) {
+      const endpoint = baseUrl || (provider === 'openrouter' ? 'https://openrouter.ai/api/v1' : '');
+      if (endpoint) {
+        try {
+          const response = await fetch(`${endpoint}/models`, {
+            headers: { 'Authorization': `Bearer ${apiKey}` }
+          });
+          if (response.ok) {
+            const data = await response.json();
+            const models = (data.data || []).map(m => ({
+              id: m.id,
+              name: m.name || m.id
+            }));
+            return res.json({ success: true, models });
+          }
+        } catch (e) {
+          console.error('[ai/models] Error fetching models:', e);
+        }
+      }
+    }
+
+    // 默认返回空列表
+    res.json({ success: true, models: [] });
+  } catch (err) {
+    console.error('[ai/models] Error:', err);
+    res.status(500).json({ error: '获取模型列表失败: ' + (err?.message || '未知错误') });
+  }
+});
+
+// 辅助函数：获取默认 baseUrl
+function getDefaultBaseUrl(provider) {
+  const urls = {
+    'anthropic': 'https://api.anthropic.com/v1',
+    'openai': 'https://api.openai.com/v1',
+    'github-copilot': 'https://api.githubcopilot.com',
+    'gemini': 'https://generativelanguage.googleapis.com/v1beta',
+    'openrouter': 'https://openrouter.ai/api/v1',
+    'deepseek': 'https://api.deepseek.com/v1',
+    'bailian': 'https://coding.dashscope.aliyuncs.com/v1'
+  };
+  return urls[provider] || 'https://api.openai.com/v1';
+}
+
+// ============================================================
 // API: restart gateway
 // ============================================================
 app.post('/api/restart', (req, res) => {
   try {
     const opState = getOpenClawOperationState();
-    if (opState.type !== 'idle' && opState.type !== 'restarting_gateway') {
+
+    if (opState.type === 'restarting_gateway') {
+      return res.json({
+        success: true,
+        message: 'Gateway 重启已在进行中，请稍候',
+        operationState: opState
+      });
+    }
+
+    if (opState.type !== 'idle') {
       return res.status(409).json({ success: false, error: `操作进行中: ${opState.type}`, operationState: opState });
     }
+
+    // 写入 operation.lock，让 watchdog 来执行重启
     setOpenClawOperationState('restarting_gateway');
-    restartGatewayForeground((err, stdout, stderr) => {
-      clearOpenClawOperationState('restarting_gateway');
-      if (!err) {
-        return res.json({ success: true, message: 'Gateway 进程已终止，watchdog 将自动拉起' });
-      }
-      const detail = compactOutput(stderr || stdout || err.message || '');
-      if (String(detail || '').includes('exit 21')) {
-        return res.json({ success: false, error: 'watchdog 脚本不存在，无法自动拉起 Gateway' });
-      }
-      if (/Unrecognized key|Invalid config/i.test(String(detail || ''))) {
-        return res.json({ success: false, error: `${detail || 'Gateway 配置无效'}；请点击“配置恢复”（内部会执行 openclaw doctor --fix）后重试` });
-      }
-      res.json({ success: false, error: detail || 'Gateway 重启失败，请查看 watchdog 日志' });
+    console.log('[api/restart] restart request submitted to watchdog');
+
+    res.json({
+      success: true,
+      message: '重启请求已提交，watchdog 将在 10 秒内执行',
+      operationState: getOpenClawOperationState()
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
   }
 });
 
@@ -3272,7 +3454,6 @@ function getLastBackupAt() {
   }
 }
 
-let gatewayRestartRunning = false;
 const OPENCLAW_OPERATION_LOCK_FILE = `${OPENCLAW_LOCK_DIR}/operation.lock`;
 let openClawOperationState = { type: 'idle', taskId: '', startedAt: 0, pid: process.pid };
 const OPENCLAW_OPERATION_MAX_SEC = {
@@ -4206,7 +4387,7 @@ app.get('/api/openclaw', async (req, res) => {
       installed
       &&
       operationState?.type === 'restarting_gateway'
-      && (gatewayRestartRunning || gatewayProcessRunning || gatewayRunning)
+      && (gatewayProcessRunning || gatewayRunning)
     );
     const gatewayWarmupByWatchdog = !!(
       installed
@@ -4245,7 +4426,6 @@ app.get('/api/openclaw', async (req, res) => {
       activeInstallTaskId,
       activeInstallLogFile: activeInstallTask?.logFile || OPENCLAW_INSTALL_LOG_FILE,
       repairTaskRunning,
-      gatewayRestartRunning,
       operationState,
       operationProgress,
       lastBackupAt,
@@ -4263,7 +4443,11 @@ app.get('/api/openclaw/gateway-link', (req, res) => {
     const accessPatch = ensureGatewayControlUiAccessForRequest(req);
     if (accessPatch?.changed) {
       console.log(`[openclaw][gateway-link] patched controlUi/trustedProxies for host=${accessPatch.host || 'unknown'}`);
-      restartGatewayForeground(() => {});
+      // 触发 watchdog 重启 gateway
+      const opState = getOpenClawOperationState();
+      if (opState.type === 'idle') {
+        setOpenClawOperationState('restarting_gateway');
+      }
     }
 
     const cfg = readJson(CONFIG_PATH, {});
@@ -4626,53 +4810,32 @@ app.get('/api/openclaw/dependencies', (req, res) => {
 
 app.post('/api/openclaw/start', (req, res) => {
   console.log('[openclaw][start] restart requested');
-  if (gatewayRestartRunning) {
-    console.log('[openclaw][start] restart already running, returning reuse response');
-    return res.json({
-      success: true,
-      message: 'Gateway 重启任务已在进行中，请稍候',
-      logs: readOpenClawGatewayLogs(120, { includeWatchdog: true })
-    });
-  }
   const opState = getOpenClawOperationState();
+
   if (opState.type === 'restarting_gateway') {
-    console.log('[openclaw][start] restart already settling, returning reuse response');
+    console.log('[openclaw][start] restart already in progress');
     return res.json({
       success: true,
-      message: 'Gateway 正在启动中，请稍候',
-      logs: readOpenClawGatewayLogs(120, { includeWatchdog: true })
+      message: 'Gateway 重启已在进行中，请稍候',
+      operationState: opState
     });
   }
-  if (opState.type !== 'idle' && opState.type !== 'restarting_gateway') {
+
+  if (opState.type !== 'idle') {
     console.log(`[openclaw][start] blocked by operation state: ${opState.type}`);
     return res.status(409).json({ success: false, error: `操作进行中: ${opState.type}`, operationState: opState });
   }
-  gatewayRestartRunning = true;
+
+  // 写入 operation.lock，让 watchdog 来执行重启
   setOpenClawOperationState('restarting_gateway');
-  restartGatewayForeground((err, stdout, stderr) => {
-    gatewayRestartRunning = false;
-    const startupLogs = readOpenClawGatewayLogs(160, { includeWatchdog: true, includeInstall: true });
-    if (!err) {
-      const directRunHandled = /direct run/i.test(String(stdout || ''));
-      if (directRunHandled) {
-        scheduleGatewayRestartSettle();
-      } else {
-        clearOpenClawOperationState('restarting_gateway');
-      }
-      console.log(directRunHandled
-        ? '[openclaw][start] gateway restart request finished via direct run'
-        : '[openclaw][start] gateway restart request finished, watchdog should relaunch');
-      return res.json({
-        success: true,
-        message: directRunHandled ? 'Gateway 新进程已直接拉起，正在预热' : 'Gateway 进程已终止，watchdog 将自动拉起',
-        logs: startupLogs
-      });
-    }
-    clearOpenClawOperationState('restarting_gateway');
-    const detail = compactOutput(stderr || stdout || err.message || '');
-    console.log(`[openclaw][start] restart failed: ${detail || 'unknown error'}`);
-    if (String(detail || '').includes('exit 21')) {
-      return res.json({ success: false, error: 'watchdog 脚本不存在，无法自动拉起 Gateway', logs: startupLogs });
+  console.log('[openclaw][start] restart request submitted to watchdog');
+
+  res.json({
+    success: true,
+    message: '重启请求已提交，watchdog 将在 10 秒内执行',
+    operationState: getOpenClawOperationState()
+  });
+});
     }
     if (/Unrecognized key|Invalid config/i.test(String(detail || ''))) {
       return res.json({ success: false, error: `${detail || 'Gateway 配置无效'}；请点击“配置恢复”（内部会执行 openclaw doctor --fix）后重试`, logs: startupLogs });

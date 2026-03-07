@@ -10,7 +10,7 @@ mkdir -p "$LOG_DIR"
 mkdir -p "/root/.openclaw/locks"
 LOG_FILE="$LOG_DIR/gateway-watchdog.log"
 
-CHECK_INTERVAL=30
+CHECK_INTERVAL=10
 POLL_INTERVAL=5
 STARTUP_TIMEOUT=900
 MAX_RETRIES=3
@@ -436,6 +436,24 @@ handle_restart() {
   start_gateway
 }
 
+handle_user_requested_restart() {
+  log "User requested restart detected, executing..."
+  log_event "restart-requested" "user initiated"
+
+  # 执行重启
+  kill_gateway
+  if start_gateway; then
+    log "User requested restart completed successfully"
+    log_event "restart-completed" "success"
+  else
+    log "User requested restart failed"
+    log_event "restart-failed" "start_gateway failed"
+  fi
+
+  # 清除 operation.lock，表示操作完成
+  rm -f "$OPERATION_LOCK_FILE" 2>/dev/null || true
+}
+
 trim_log() {
   if [[ -f "$LOG_FILE" ]]; then
     local lines
@@ -503,6 +521,15 @@ log "Watchdog v2 started (poll=${POLL_INTERVAL}s, timeout=${STARTUP_TIMEOUT}s, p
 log_event "start" "poll=${POLL_INTERVAL}s timeout=${STARTUP_TIMEOUT}s port=$PORT"
 
 while true; do
+  op=$(current_operation_type)
+
+  # 优先处理用户请求的重启
+  if [[ "$op" == "restarting_gateway" ]]; then
+    handle_user_requested_restart
+    sleep "$CHECK_INTERVAL"
+    continue
+  fi
+
   if is_watchdog_standby_active; then
     log "OpenClaw operation in progress, watchdog standby"
     sleep "$CHECK_INTERVAL"
