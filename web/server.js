@@ -2739,12 +2739,11 @@ app.post('/api/config', async (req, res) => {
 
     // 写回 openclaw.json
     const configJson = JSON.stringify(config, null, 2);
-    await new Promise((resolve, reject) => {
-      exec(`sudo tee "${configPath}" > /dev/null << 'EOF'\n${configJson}\nEOF`, { timeout: 10000 }, (err) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
+    try {
+      fs.writeFileSync(configPath, configJson, { encoding: 'utf8', mode: 0o644 });
+    } catch (err) {
+      throw new Error(`Failed to write config: ${err.message}`);
+    }
 
     res.json({ success: true });
   } catch (e) {
@@ -2982,22 +2981,14 @@ app.post('/api/ai/config', async (req, res) => {
     let models = { providers: {} };
 
     try {
-      const configData = await new Promise((resolve) => {
-        exec(`sudo cat "${configPath}" 2>&1`, { timeout: 5000 }, (err, stdout) => {
-          resolve(String(stdout || '{}'));
-        });
-      });
+      const configData = fs.readFileSync(configPath, 'utf8');
       config = JSON.parse(configData);
     } catch {
       config = {};
     }
 
     try {
-      const modelsData = await new Promise((resolve) => {
-        exec(`sudo cat "${modelsPath}" 2>&1`, { timeout: 5000 }, (err, stdout) => {
-          resolve(String(stdout || '{}'));
-        });
-      });
+      const modelsData = fs.readFileSync(modelsPath, 'utf8');
       models = JSON.parse(modelsData);
     } catch {
       models = { providers: {} };
@@ -3103,11 +3094,7 @@ app.post('/api/ai/config', async (req, res) => {
       try {
         let authProfiles = {};
         try {
-          const authData = await new Promise((resolve) => {
-            exec(`sudo cat "${authProfilesPath}" 2>&1`, { timeout: 3000 }, (err, stdout) => {
-              resolve(String(stdout || '{}'));
-            });
-          });
+          const authData = fs.readFileSync(authProfilesPath, 'utf8');
           authProfiles = JSON.parse(authData);
         } catch { authProfiles = {}; }
 
@@ -3117,9 +3104,7 @@ app.post('/api/ai/config', async (req, res) => {
           apiKey: apiKey 
         };
         const authJson = JSON.stringify(authProfiles, null, 2);
-        await new Promise((resolve) => {
-          exec(`sudo tee "${authProfilesPath}" > /dev/null << 'AUTHEOF'\n${authJson}\nAUTHEOF\nsudo chmod 600 "${authProfilesPath}"`, { timeout: 5000 }, () => resolve());
-        });
+        fs.writeFileSync(authProfilesPath, authJson, { encoding: 'utf8', mode: 0o600 });
         console.log(`[ai/config] auth-profiles.json updated for ${providerName}`);
       } catch (e) {
         console.warn('[ai/config] auth-profiles.json update failed:', e.message);
@@ -3141,19 +3126,17 @@ app.post('/api/ai/config', async (req, res) => {
     const configJson = JSON.stringify(config, null, 2);
     const modelsJson = JSON.stringify(models, null, 2);
 
-    await new Promise((resolve, reject) => {
-      exec(`sudo tee "${configPath}" > /dev/null << 'EOF'\n${configJson}\nEOF`, { timeout: 10000 }, (err) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
+    try {
+      fs.writeFileSync(configPath, configJson, { encoding: 'utf8', mode: 0o644 });
+    } catch (err) {
+      throw new Error(`Failed to write openclaw.json: ${err.message}`);
+    }
 
-    await new Promise((resolve, reject) => {
-      exec(`sudo tee "${modelsPath}" > /dev/null << 'EOF'\n${modelsJson}\nEOF`, { timeout: 10000 }, (err) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
+    try {
+      fs.writeFileSync(modelsPath, modelsJson, { encoding: 'utf8', mode: 0o600 });
+    } catch (err) {
+      throw new Error(`Failed to write models.json: ${err.message}`);
+    }
 
     res.json({ success: true, message: '配置已保存' });
   } catch (err) {
