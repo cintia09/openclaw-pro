@@ -1161,10 +1161,10 @@ async function loadGatewayStartupLogs(lines = 160){
     const snapshot = String(r?.logs || '').trim();
     if (r?.success && snapshot && snapshot !== ocLastGatewaySnapshot) {
       let delta = snapshot;
-      let label = '[gateway] 最近启动日志快照：';
+      let label = '📋 最近启动日志：';
       if (ocLastGatewaySnapshot && snapshot.startsWith(ocLastGatewaySnapshot)) {
         delta = snapshot.slice(ocLastGatewaySnapshot.length).replace(/^\n+/, '');
-        label = '[gateway] 启动日志增量：';
+        label = '📋 启动日志增量：';
       }
       if (delta.trim()) {
         appendOcLogLine(label);
@@ -1173,7 +1173,7 @@ async function loadGatewayStartupLogs(lines = 160){
       ocLastGatewaySnapshot = snapshot;
     }
   } catch (e) {
-    appendOcLogLine(`[gateway] 读取启动日志失败: ${e?.message || e}`);
+    appendOcLogLine(`❌ 读取启动日志失败: ${e?.message || e}`);
   }
 }
 
@@ -1433,7 +1433,7 @@ async function pollTask(taskId){
         ocInstallPhase = 'auto';
         syncOpenClawButtons();
         const detail = st?.error || '任务状态轮询失败';
-        appendOcLogLine(`[openclaw] 轮询中断: ${detail}`);
+        appendOcLogLine(`❌ 轮询中断: ${detail}`);
         toast('任务状态异常', detail);
       }
       return;
@@ -1447,7 +1447,7 @@ async function pollTask(taskId){
       ocUninstallRunning = false;
       ocInstallPhase = 'auto';
       syncOpenClawButtons();
-      appendOcLogLine('[openclaw] 任务执行超时，请检查日志并按需重试。');
+      appendOcLogLine('⚠️ 任务执行超时，请检查日志并按需重试');
       toast('任务超时', '执行超过 18 分钟，已停止前端轮询');
       return;
     }
@@ -1467,13 +1467,7 @@ async function pollTask(taskId){
       lastHeartbeatAt = now;
       const elapsedSec = Math.max(0, Math.floor((now - startedAt) / 1000));
       const quick = await refreshOpenClaw({ retries: 0 });
-      if (!quick?.error) {
-        const op = String(quick.operationState?.type || 'idle');
-        const gw = quick.gatewayRunning ? 'running' : (quick.gatewayStarting ? 'starting' : 'down');
-        appendOcLogLine(`[progress] task=${taskId} seq=${lastSeq} elapsed=${formatRemainingTime(elapsedSec)} op=${op} gateway=${gw}`);
-      } else {
-        appendOcLogLine(`[progress] task=${taskId} seq=${lastSeq} elapsed=${formatRemainingTime(elapsedSec)} status=running`);
-      }
+      appendOcLogLine(`⏳ 执行中... 已耗时 ${formatRemainingTime(elapsedSec)}`);
     }
 
     if (st.status && st.status !== 'running'){
@@ -1482,32 +1476,33 @@ async function pollTask(taskId){
       ocInstallRunning = false;
       ocUninstallRunning = false;
       const taskOp = String(st.operationType || '').trim() || (initialPhase === 'uninstall' ? 'uninstalling' : (initialPhase === 'update' ? 'updating' : 'installing'));
+      const opLabel = taskOp === 'uninstalling' ? '卸载' : (taskOp === 'updating' ? '更新' : '安装');
       ocInstallPhase = 'auto';
       syncOpenClawButtons();
-      appendOcLogLine(`[state] operation=${taskOp} status=${st.status === 'success' ? 'success' : 'failed'} source=task`);
+      appendOcLogLine(st.status === 'success' ? `✅ ${opLabel}完成` : `❌ ${opLabel}失败`);
       toast(st.status === 'success' ? '完成' : '失败', st.status === 'success' ? 'OpenClaw 已就绪' : (st.error || st.log || '请查看日志'));
       if (st.status === 'success' && taskOp !== 'uninstalling') {
-        appendOcLogLine('[gateway] 安装/更新成功，正在自动重启 Gateway...');
+        appendOcLogLine('⏳ 正在自动重启 Gateway...');
         ocPostInstallWarmupUntil = Date.now() + (5 * 60 * 1000);
         ocLastGatewaySnapshot = '';
         try {
           const rr = await api('/api/openclaw/start', { method:'POST', timeoutMs: 90000 });
           if (rr.success) {
-            appendOcLogLine(`[gateway] ${rr.message || '重启请求已提交，watchdog 将自动拉起'}`);
+            appendOcLogLine('✅ Gateway 重启成功');
             if (rr.logs) {
               appendOcLogBlock(rr.logs);
               ocLastGatewaySnapshot = String(rr.logs || '').trim() || ocLastGatewaySnapshot;
             }
             scheduleGatewayStartupLogPulls(220);
           } else {
-            appendOcLogLine(`[gateway] 自动重启失败: ${rr.error || '请查看日志'}`);
+            appendOcLogLine(`❌ Gateway 重启失败: ${rr.error || '请查看日志'}`);
             if (rr.logs) {
               appendOcLogBlock(rr.logs);
               ocLastGatewaySnapshot = String(rr.logs || '').trim() || ocLastGatewaySnapshot;
             }
           }
         } catch (e) {
-          appendOcLogLine(`[gateway] 自动重启请求失败: ${e.message || e}`);
+          appendOcLogLine(`❌ Gateway 重启失败: ${e.message || e}`);
         }
       }
       refreshOpenClaw();
@@ -1670,14 +1665,13 @@ $('btn-oc-install').addEventListener('click', async ()=>{
   try{
     if (!ocInstalled) {
       ocInstallPhase = 'install';
-      appendOcLogLine('[state] operation=installing status=begin source=ui');
-      appendOcLogLine('[openclaw] 未安装，正在提交安装任务...');
+      appendOcLogLine('📦 开始安装 OpenClaw...');
       const i = await api('/api/openclaw/install', { method:'POST' });
       if (!i.taskId && Number(i?.status || 0) === 409) {
         const existingTaskId = String(i?.operationState?.taskId || '').trim();
         const existingType = String(i?.operationState?.type || '').trim();
         if (existingTaskId && (existingType === 'installing' || existingType === 'updating')) {
-          appendOcLogLine(`[openclaw] 检测到已有任务进行中，接管日志轮询: ${existingTaskId}`);
+          appendOcLogLine('⏳ 检测到已有任务进行中，接管进度显示...');
           toast('任务进行中', '已存在安装/更新任务，正在接管进度显示');
           taskStarted = true;
           pollTask(existingTaskId);
@@ -1689,17 +1683,16 @@ $('btn-oc-install').addEventListener('click', async ()=>{
         const detail = i.error || (isEmptyResponse
           ? '接口返回空响应（可能会话失效或页面缓存未更新，请刷新后重试）'
           : `接口返回异常（${JSON.stringify(i || {}) || 'empty'}）`);
-        appendOcLogLine(`[openclaw] 安装启动失败: ${detail}`);
+        appendOcLogLine(`❌ 安装启动失败: ${detail}`);
         if (/空响应|缓存未更新|会话失效/.test(detail)) {
-          appendOcLogLine('[openclaw] 提示: 请强制刷新页面后重试（macOS: Command+Shift+R）。');
+          appendOcLogLine('💡 提示: 请强制刷新页面后重试（macOS: Command+Shift+R）');
         }
         toast('安装失败', detail);
         return;
       }
       toast('开始安装', '正在执行 OpenClaw 安装...');
-      appendOcLogLine(`[openclaw] 安装任务已启动: ${i.taskId}`);
-      if (i?.release?.tag) appendOcLogLine(`[openclaw] 目标版本: ${i.release.tag}`);
-      if (i?.logFile) appendOcLogLine(`[openclaw] 日志文件: ${i.logFile}`);
+      appendOcLogLine(`✅ 安装任务已启动`);
+      if (i?.release?.tag) appendOcLogLine(`📋 目标版本: ${i.release.tag}`);
       taskStarted = true;
       pollTask(i.taskId);
       return;
@@ -1708,7 +1701,7 @@ $('btn-oc-install').addEventListener('click', async ()=>{
     let current = await refreshOpenClaw({ retries: 2 });
     if (!current || current.error) {
       const detail = current?.error || '无法获取当前 OpenClaw 状态';
-      appendOcLogLine(`[openclaw] 状态读取失败，改用本地缓存状态继续（${detail}）。`);
+      appendOcLogLine(`⚠️ 状态读取失败，使用缓存继续（${detail}）`);
       current = {
         installed: !!ocInstalled,
         version: '',
@@ -1720,14 +1713,13 @@ $('btn-oc-install').addEventListener('click', async ()=>{
 
     if (!current.installed) {
       ocInstallPhase = 'install';
-      appendOcLogLine('[state] operation=installing status=begin source=ui');
-      appendOcLogLine('[openclaw] 未安装，正在提交安装任务...');
+      appendOcLogLine('📦 开始安装 OpenClaw...');
       const i = await api('/api/openclaw/install', { method:'POST' });
       if (!i.taskId && Number(i?.status || 0) === 409) {
         const existingTaskId = String(i?.operationState?.taskId || '').trim();
         const existingType = String(i?.operationState?.type || '').trim();
         if (existingTaskId && (existingType === 'installing' || existingType === 'updating')) {
-          appendOcLogLine(`[openclaw] 检测到已有任务进行中，接管日志轮询: ${existingTaskId}`);
+          appendOcLogLine('⏳ 检测到已有任务进行中，接管进度显示...');
           toast('任务进行中', '已存在安装/更新任务，正在接管进度显示');
           taskStarted = true;
           pollTask(existingTaskId);
@@ -1739,49 +1731,47 @@ $('btn-oc-install').addEventListener('click', async ()=>{
         const detail = i.error || (isEmptyResponse
           ? '接口返回空响应（可能会话失效或页面缓存未更新，请刷新后重试）'
           : `接口返回异常（${JSON.stringify(i || {}) || 'empty'}）`);
-        appendOcLogLine(`[openclaw] 安装启动失败: ${detail}`);
+        appendOcLogLine(`❌ 安装启动失败: ${detail}`);
         if (/空响应|缓存未更新|会话失效/.test(detail)) {
-          appendOcLogLine('[openclaw] 提示: 请强制刷新页面后重试（macOS: Command+Shift+R）。');
+          appendOcLogLine('💡 提示: 请强制刷新页面后重试（macOS: Command+Shift+R）');
         }
         toast('安装失败', detail);
         return;
       }
       toast('开始安装', '正在执行 OpenClaw 安装...');
-      appendOcLogLine(`[openclaw] 安装任务已启动: ${i.taskId}`);
-      if (i?.release?.tag) appendOcLogLine(`[openclaw] 目标版本: ${i.release.tag}`);
-      if (i?.logFile) appendOcLogLine(`[openclaw] 日志文件: ${i.logFile}`);
+      appendOcLogLine('✅ 安装任务已启动');
+      if (i?.release?.tag) appendOcLogLine(`📋 目标版本: ${i.release.tag}`);
       taskStarted = true;
       pollTask(i.taskId);
       return;
     }
 
     if (!current.version) {
-      appendOcLogLine('[openclaw] 未检测到本地版本，已取消更新。');
+      appendOcLogLine('⚠️ 未检测到本地版本，已取消更新');
       toast('更新已取消', '未检测到本地版本，请先检查安装状态');
       return;
     }
 
     if (!current.latestVersion) {
-      appendOcLogLine('[openclaw] 无法获取远端最新版本，已取消更新。');
+      appendOcLogLine('⚠️ 无法获取远端最新版本，已取消更新');
       toast('更新已取消', current.updateCheckError || '无法获取远端版本');
       return;
     }
 
     if (!current.hasUpdate) {
-      appendOcLogLine(`[openclaw] 当前已是最新版本（${formatVersionLabel(current.version)}），无需更新。`);
+      appendOcLogLine(`✅ 当前已是最新版本（${formatVersionLabel(current.version)}）`);
       toast('无需更新', `当前已是最新版本：${formatVersionLabel(current.version)}`);
       return;
     }
 
-    appendOcLogLine('[state] operation=updating status=begin source=ui');
-    appendOcLogLine(`[openclaw] 检测到新版本：${formatVersionLabel(current.version)} -> ${current.latestVersion}，开始更新...`);
+    appendOcLogLine(`📦 开始更新 OpenClaw: ${formatVersionLabel(current.version)} → ${current.latestVersion}`);
     ocInstallPhase = 'update';
     const r = await api('/api/openclaw/update', { method:'POST' });
     if (!r.taskId && Number(r?.status || 0) === 409) {
       const existingTaskId = String(r?.operationState?.taskId || '').trim();
       const existingType = String(r?.operationState?.type || '').trim();
       if (existingTaskId && (existingType === 'installing' || existingType === 'updating')) {
-        appendOcLogLine(`[openclaw] 检测到已有任务进行中，接管日志轮询: ${existingTaskId}`);
+        appendOcLogLine('⏳ 检测到已有任务进行中，接管进度显示...');
         toast('任务进行中', '已存在安装/更新任务，正在接管进度显示');
         taskStarted = true;
         pollTask(existingTaskId);
@@ -1793,21 +1783,20 @@ $('btn-oc-install').addEventListener('click', async ()=>{
       const detail = r.error || (isEmptyResponse
         ? '接口返回空响应（可能会话失效或页面缓存未更新，请刷新后重试）'
         : `接口返回异常（${JSON.stringify(r || {}) || 'empty'}）`);
-      appendOcLogLine(`[openclaw] 更新启动失败: ${detail}`);
+      appendOcLogLine(`❌ 更新启动失败: ${detail}`);
       if (/空响应|缓存未更新|会话失效/.test(detail)) {
-        appendOcLogLine('[openclaw] 提示: 请强制刷新页面后重试（macOS: Command+Shift+R）。');
+        appendOcLogLine('💡 提示: 请强制刷新页面后重试（macOS: Command+Shift+R）');
       }
       toast('更新失败', detail);
       return;
     }
     toast('开始更新', `正在更新到 ${current.latestVersion}...`);
-    appendOcLogLine(`[openclaw] 更新任务已启动: ${r.taskId}`);
-    if (r?.release?.tag) appendOcLogLine(`[openclaw] 目标版本: ${r.release.tag}`);
-    if (r?.logFile) appendOcLogLine(`[openclaw] 日志文件: ${r.logFile}`);
+    appendOcLogLine('✅ 更新任务已启动');
+    if (r?.release?.tag) appendOcLogLine(`📋 目标版本: ${r.release.tag}`);
     taskStarted = true;
     pollTask(r.taskId);
   } catch (e) {
-    appendOcLogLine(`[openclaw] 请求失败: ${e.message || e}`);
+    appendOcLogLine(`❌ 请求失败: ${e.message || e}`);
     toast('请求失败', e.message || String(e));
   }finally{
     if (!taskStarted) {
@@ -1839,19 +1828,15 @@ $('btn-oc-start').addEventListener('click', async (event)=>{
   ocGatewayRestartRunningRemote = true;
   applyGatewayRestartingUi();
   syncOpenClawButtons();
-  appendOcLogLine('[state] operation=restarting_gateway status=begin source=ui');
-  appendOcLogLine('[gateway] 正在提交重启请求...');
+  appendOcLogLine('⏳ 正在提交重启请求...');
   ocLastGatewaySnapshot = '';
   let restartAccepted = false;
   try {
     const r = await api('/api/openclaw/start', { method:'POST', timeoutMs: 90000 });
     if (r.success) {
       restartAccepted = true;
-      appendOcLogLine('[state] operation=restarting_gateway status=running source=api');
-      appendOcLogLine(`[gateway] ${r.message || '重启请求已提交'}`);
-      appendOcLogLine('[gateway] 请稍候 2-5 秒，状态将自动刷新。');
+      appendOcLogLine('✅ 重启请求已接受，Gateway 重启中...');
       if (r.logs) {
-        appendOcLogBlock(r.logs);
         ocLastGatewaySnapshot = String(r.logs || '').trim() || ocLastGatewaySnapshot;
       }
       triggerLogsBurstPolling(22000, 1200);
@@ -1866,22 +1851,20 @@ $('btn-oc-start').addEventListener('click', async (event)=>{
         if (backendRestarting) {
           restartAccepted = true;
           ocGatewayRestartRunningRemote = true;
-          appendOcLogLine('[state] operation=restarting_gateway status=running source=status-check');
-          appendOcLogLine('[gateway] 重启请求返回超时，但后端显示仍在执行重启，继续跟踪日志。');
+          appendOcLogLine('⏳ 请求超时，但后端仍在重启中...');
           triggerLogsBurstPolling(22000, 1200);
           scheduleGatewayStartupLogPulls(220);
           toast('重启处理中', '请求超时，但后端仍在重启 Gateway');
           return;
         }
       }
-      appendOcLogLine('[state] operation=restarting_gateway status=failed source=api');
-      appendOcLogLine(`[gateway] 重启失败: ${r.error || '请查看日志'}`);
+      appendOcLogLine(`❌ 重启失败: ${r.error || '请查看日志'}`);
       if (r.logs) {
         appendOcLogBlock(r.logs);
         ocLastGatewaySnapshot = String(r.logs || '').trim() || ocLastGatewaySnapshot;
       }
       if (/Unrecognized key|Invalid config|配置无效/i.test(String(r.error || ''))) {
-        appendOcLogLine('[gateway] 检测到配置无效，请点击“配置恢复”按钮后重试。');
+        appendOcLogLine('💡 检测到配置无效，请点击“配置恢复”按钮后重试');
       }
       ocGatewayRestartRunningRemote = false;
       toast('重启失败', r.error || '请查看日志');
@@ -1893,7 +1876,7 @@ $('btn-oc-start').addEventListener('click', async (event)=>{
     ocStartRunning = false;
     syncOpenClawButtons();
   }
-  if (restartAccepted) appendOcLogLine('[state] operation=restarting_gateway status=success source=ui');
+  if (restartAccepted) appendOcLogLine('✅ Gateway 重启成功');
   setTimeout(() => refreshOpenClaw({ retries: 0 }), 200);
   setTimeout(refreshOpenClaw, 1800);
 });
@@ -1921,25 +1904,20 @@ $('btn-oc-uninstall')?.addEventListener('click', async ()=>{
   syncOpenClawButtons();
   let taskStarted = false;
   try {
-    appendOcLogLine('[state] operation=uninstalling status=begin source=ui');
-    appendOcLogLine('[openclaw] 正在提交卸载任务...');
+    appendOcLogLine('🗑️ 开始卸载 OpenClaw...');
     const r = await api('/api/openclaw/uninstall', { method:'POST' });
     if (!r?.taskId) {
       const detail = r?.error || '卸载任务创建失败';
-      appendOcLogLine('[state] operation=uninstalling status=failed source=api');
-      appendOcLogLine(`[openclaw] 卸载启动失败: ${detail}`);
+      appendOcLogLine(`❌ 卸载启动失败: ${detail}`);
       toast('卸载失败', detail);
       return;
     }
     taskStarted = true;
-    appendOcLogLine('[state] operation=uninstalling status=running source=api');
-    appendOcLogLine(`[openclaw] 卸载任务已启动: ${r.taskId}`);
-    if (r?.logFile) appendOcLogLine(`[openclaw] 日志文件: ${r.logFile}`);
+    appendOcLogLine('⏳ 卸载任务执行中...');
     pollTask(r.taskId);
     toast('开始卸载', '正在执行 OpenClaw 卸载...');
   } catch (e) {
-    appendOcLogLine('[state] operation=uninstalling status=failed source=ui');
-    appendOcLogLine(`[openclaw] 卸载请求失败: ${e.message || e}`);
+    appendOcLogLine(`❌ 卸载请求失败: ${e.message || e}`);
     toast('请求失败', e.message || String(e));
   } finally {
     if (!taskStarted) {
@@ -2208,35 +2186,166 @@ function renderModelsList() {
 }
 
 function renderConfiguredKeys() {
-  const container = $('ai-configured-list');
-  if (!container) return;
+  const select = $('ai-configured-select');
+  if (!select) return;
 
-  if (aiConfiguredKeys.length === 0) {
-    container.innerHTML = '<div class="muted small" style="padding:20px;text-align:center">暂无已配置的 API Key</div>';
+  // 保存当前选中值
+  const prevVal = select.value;
+
+  // 清空并重建选项
+  select.innerHTML = '<option value="">— 请选择 —</option>';
+
+  aiConfiguredKeys.forEach((k, idx) => {
+    const pConfig = AI_PROVIDERS[k.provider] || {};
+    const providerName = pConfig.name || k.provider;
+    const keyHint = k.keyMasked ? ` (${k.keyMasked})` : (k.authType === 'oauth' ? ' (OAuth)' : '');
+    const opt = document.createElement('option');
+    opt.value = String(idx);
+    opt.textContent = `${providerName}${keyHint}`;
+    select.appendChild(opt);
+  });
+
+  // 恢复选中
+  if (prevVal && select.querySelector(`option[value="${prevVal}"]`)) {
+    select.value = prevVal;
+  }
+
+  onConfiguredKeySelected();
+}
+
+function onConfiguredKeySelected() {
+  const select = $('ai-configured-select');
+  const idx = parseInt(select?.value || '', 10);
+  const key = aiConfiguredKeys[idx];
+
+  const detail = $('ai-configured-detail');
+  const info = $('ai-configured-info');
+  const actions = $('ai-configured-actions');
+  const modelsWrap = $('ai-configured-models-wrap');
+
+  if (!key || isNaN(idx)) {
+    if (detail) detail.hidden = true;
+    if (actions) actions.hidden = true;
+    if (modelsWrap) modelsWrap.hidden = true;
     return;
   }
 
-  container.innerHTML = aiConfiguredKeys.map((k, idx) => {
-    const pConfig = AI_PROVIDERS[k.provider] || {};
-    const providerName = pConfig.name || k.provider;
-    const authLabel = k.authType === 'oauth' ? 'OAuth' : 'API Key';
-    const keyDisplay = k.keyMasked || (k.authType === 'oauth' ? 'OAuth 已授权' : '—');
-    const modelCount = (k.models || []).length;
-    return `<div class="card" style="padding:12px 16px;margin:0" data-key-idx="${idx}">
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <div style="flex:1">
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-            <span style="font-weight:800;font-size:14px">${providerName}</span>
-            <span class="badge" style="font-size:11px">${authLabel}</span>
-            ${modelCount > 0 ? `<span class="muted small">${modelCount} 个模型</span>` : ''}
-          </div>
-          <div style="margin-top:4px;font-family:var(--mono);font-size:12px;color:#86868b">${keyDisplay}</div>
-          ${k.baseUrl ? `<div style="margin-top:2px;font-size:11px;color:#64748b">${k.baseUrl}</div>` : ''}
-        </div>
-        <button class="btn btn-danger" style="font-size:12px;padding:4px 10px" onclick="deleteAiKey(${idx})">删除</button>
-      </div>
+  if (detail) detail.hidden = false;
+  if (actions) actions.hidden = false;
+
+  const pConfig = AI_PROVIDERS[key.provider] || {};
+  const authLabel = key.authType === 'oauth' ? 'OAuth' : 'API Key';
+  const modelCount = (key.models || []).length;
+  let infoText = `${authLabel}: ${key.keyMasked || '—'}`;
+  if (key.baseUrl) infoText += `\nURL: ${key.baseUrl}`;
+  if (modelCount > 0) infoText += `\n已注册 ${modelCount} 个模型`;
+  if (info) info.textContent = infoText;
+}
+
+async function fetchConfiguredKeyModels() {
+  const select = $('ai-configured-select');
+  const idx = parseInt(select?.value || '', 10);
+  const key = aiConfiguredKeys[idx];
+  if (!key) {
+    toast('请先选择', '请先从下拉菜单选择一个 Key');
+    return;
+  }
+
+  const pConfig = AI_PROVIDERS[key.provider] || {};
+  appendAiAuthLog(`[fetch] 正在获取 ${pConfig.name || key.provider} 的模型列表...`);
+
+  try {
+    // 使用内置模型列表
+    if (pConfig.models && pConfig.models.length > 0) {
+      const models = pConfig.models.map(m => ({
+        id: m.includes('/') ? m : `${key.provider}/${m}`,
+        name: m
+      }));
+      renderConfiguredModelsList(models);
+      appendAiAuthLog(`[fetch] 成功获取 ${models.length} 个模型`, 'success');
+      return;
+    }
+
+    const res = await api('/api/ai/models', {
+      method: 'POST',
+      body: { provider: key.provider }
+    });
+    if (res.error) {
+      appendAiAuthLog(`[fetch] 获取失败: ${res.error}`, 'error');
+      return;
+    }
+    renderConfiguredModelsList(res.models || []);
+    appendAiAuthLog(`[fetch] 成功获取 ${(res.models || []).length} 个模型`, 'success');
+  } catch (e) {
+    appendAiAuthLog(`[fetch] 错误: ${e.message}`, 'error');
+  }
+}
+
+function renderConfiguredModelsList(models) {
+  const wrap = $('ai-configured-models-wrap');
+  const list = $('ai-configured-models-list');
+  if (!wrap || !list) return;
+
+  if (!models || models.length === 0) {
+    wrap.hidden = true;
+    return;
+  }
+
+  wrap.hidden = false;
+  list.innerHTML = models.map(m => {
+    const id = m.id || m;
+    const name = m.name || m.id || m;
+    return `<div class="model-item" data-model="${id}" style="padding:6px 12px;margin:3px 0;background:#232326;border-radius:6px;cursor:pointer;display:flex;justify-content:space-between;align-items:center" onmouseover="this.style.background='#3a3a3e'" onmouseout="this.style.background='#232326'">
+      <span style="font-weight:600;font-size:13px">${name}</span>
+      <span style="font-size:11px;color:#86868b;font-family:var(--mono)">${id}</span>
     </div>`;
   }).join('');
+
+  list.querySelectorAll('.model-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const modelId = item.dataset.model;
+      if ($('ai-model-primary')) {
+        $('ai-model-primary').value = modelId;
+        appendAiAuthLog(`[select] 已选择模型: ${modelId}`);
+      }
+    });
+  });
+}
+
+async function deleteConfiguredKey() {
+  const select = $('ai-configured-select');
+  const idx = parseInt(select?.value || '', 10);
+  const key = aiConfiguredKeys[idx];
+  if (!key) {
+    toast('请先选择', '请先从下拉菜单选择一个 Key');
+    return;
+  }
+
+  const pConfig = AI_PROVIDERS[key.provider] || {};
+  const label = `${pConfig.name || key.provider} (${key.keyMasked || 'OAuth'})`;
+  if (!confirm(`确认删除 ${label}？\n关联的模型配置也会被清除。`)) return;
+
+  appendAiAuthLog(`[delete] 正在删除 ${label}...`);
+
+  try {
+    const res = await api('/api/ai/keys', {
+      method: 'DELETE',
+      body: { provider: key.provider, keyId: key.id }
+    });
+
+    if (res.error) {
+      toast('删除失败', res.error);
+      appendAiAuthLog(`[delete] 失败: ${res.error}`, 'error');
+      return;
+    }
+
+    toast('已删除', `${label} 已移除`);
+    appendAiAuthLog(`[delete] ${label} 已删除`, 'success');
+    await loadAIConfig();
+  } catch (e) {
+    toast('删除失败', e.message);
+    appendAiAuthLog(`[delete] 错误: ${e.message}`, 'error');
+  }
 }
 
 async function addAiKey() {
@@ -2277,41 +2386,17 @@ async function addAiKey() {
   }
 }
 
-async function deleteAiKey(idx) {
-  const key = aiConfiguredKeys[idx];
-  if (!key) return;
-  const pConfig = AI_PROVIDERS[key.provider] || {};
-  const label = `${pConfig.name || key.provider} (${key.keyMasked || 'OAuth'})`;
-  if (!confirm(`确认删除 ${label}？\n关联的模型配置也会被清除。`)) return;
-
-  appendAiAuthLog(`[delete] 正在删除 ${label}...`);
-
-  try {
-    const res = await api('/api/ai/keys', {
-      method: 'DELETE',
-      body: { provider: key.provider, keyId: key.id }
-    });
-
-    if (res.error) {
-      toast('删除失败', res.error);
-      appendAiAuthLog(`[delete] 失败: ${res.error}`, 'error');
-      return;
-    }
-
-    toast('已删除', `${label} 已移除`);
-    appendAiAuthLog(`[delete] ${label} 已删除`, 'success');
-    await loadAIConfig();
-  } catch (e) {
-    toast('删除失败', e.message);
-    appendAiAuthLog(`[delete] 错误: ${e.message}`, 'error');
-  }
-}
-
 async function loadAIConfig(){
   appendAiAuthLog('[load] 正在读取配置...');
 
   try {
-    const d = await api('/api/ai/config');
+    let d = await api('/api/ai/config', { timeoutMs: 30000 });
+
+    // 首次超时自动重试一次
+    if (d.error && /超时|timeout/i.test(d.error)) {
+      appendAiAuthLog('[load] 首次读取超时，正在重试...');
+      d = await api('/api/ai/config', { timeoutMs: 30000 });
+    }
 
     if (d.error) {
       $('ai-status').textContent = `状态：读取失败（${d.error}）`;
@@ -2450,6 +2535,9 @@ $('btn-ai-fetch-models')?.addEventListener('click', fetchAvailableModels);
 $('btn-ai-oauth-login')?.addEventListener('click', startOAuthLogin);
 $('btn-ai-save')?.addEventListener('click', saveAIConfig);
 $('btn-ai-add-key')?.addEventListener('click', addAiKey);
+$('ai-configured-select')?.addEventListener('change', onConfiguredKeySelected);
+$('btn-ai-configured-fetch')?.addEventListener('click', fetchConfiguredKeyModels);
+$('btn-ai-configured-delete')?.addEventListener('click', deleteConfiguredKey);
 
 // 初始化
 updateAiProviderUI();

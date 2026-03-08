@@ -1,11 +1,12 @@
-# Runtime / install outputs
-.install-state.json
-install-log.txt
-node_modules/
-test/logs/
-test/.tmp/
-test/*.remote.sh
 
 # OS
+# Runtime / install outputs
 .DS_Store
+.install-state.json
 Thumbs.db
+install-log.txt
+node_modules/
+test/*.remote.sh
+test/.tmp/
+test/logs/
+ws-test*

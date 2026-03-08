@@ -376,7 +376,7 @@ function ensureEncryptionKey() {
     const key = crypto.randomBytes(32).toString('base64').slice(0, 32);
     fs.mkdirSync(path.dirname(ENC_KEY_PATH), { recursive: true });
     fs.writeFileSync(ENC_KEY_PATH, key, { mode: 0o400 });
-    console.log('[enc] 加密主密钥已自动生成:', ENC_KEY_PATH);
+    console.log('[enc] 加密主密钥已自动生成');
   } catch (e) {
     console.warn('[enc] 无法生成加密密钥:', e.message);
   }
@@ -1901,9 +1901,9 @@ function requireAuthApi(req, res, next) {
   if (req.path === '/login') return next();
   if (req.path === '/bootstrap/status') return next();
   if (req.path === '/bootstrap/setup') return next();
-  // Allow hotpatch from localhost (docker exec)
+  // Allow hotpatch from localhost only (docker exec) — use socket address, not req.ip (trust proxy could spoof)
   if (req.path.startsWith('/update/hotpatch')) {
-    const ip = req.ip || req.connection?.remoteAddress || '';
+    const ip = req.socket?.remoteAddress || req.connection?.remoteAddress || '';
     if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') return next();
   }
   if (!isAuthenticated(req)) return res.status(401).json({ error: 'unauthorized' });
@@ -2865,7 +2865,7 @@ app.post('/api/config', async (req, res) => {
     // 写回 openclaw.json
     const configJson = JSON.stringify(config, null, 2);
     try {
-      fs.writeFileSync(configPath, configJson, { encoding: 'utf8', mode: 0o644 });
+      fs.writeFileSync(configPath, configJson, { encoding: 'utf8', mode: 0o600 });
     } catch (err) {
       throw new Error(`Failed to write config: ${err.message}`);
     }
@@ -3209,7 +3209,7 @@ app.post('/api/ai/config', async (req, res) => {
     if (config.providers) delete config.providers;
 
     // 写入文件
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), { encoding: 'utf8', mode: 0o644 });
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), { encoding: 'utf8', mode: 0o600 });
     fs.writeFileSync(modelsPath, JSON.stringify(models, null, 2), { encoding: 'utf8', mode: 0o600 });
 
     res.json({ success: true, message: '模型配置已保存' });
@@ -3290,7 +3290,7 @@ app.post('/api/ai/keys', async (req, res) => {
     if (baseUrl) config.models.providers[provider].baseUrl = baseUrl;
     if (apiKey) config.models.providers[provider].apiKey = apiKey;
 
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), { encoding: 'utf8', mode: 0o644 });
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), { encoding: 'utf8', mode: 0o600 });
     fs.writeFileSync(modelsPath, JSON.stringify(models, null, 2), { encoding: 'utf8', mode: 0o600 });
 
     res.json({ success: true, message: `${provider} API Key 已保存` });
@@ -3348,7 +3348,7 @@ app.delete('/api/ai/keys', async (req, res) => {
     // 写回所有文件
     fs.writeFileSync(modelsPath, JSON.stringify(models, null, 2), { encoding: 'utf8', mode: 0o600 });
     fs.writeFileSync(authProfilesPath, JSON.stringify(authProfiles, null, 2), { encoding: 'utf8', mode: 0o600 });
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), { encoding: 'utf8', mode: 0o644 });
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), { encoding: 'utf8', mode: 0o600 });
 
     res.json({ success: true, message: `${provider} 已删除` });
   } catch (err) {
