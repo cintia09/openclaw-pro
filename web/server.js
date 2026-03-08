@@ -3076,19 +3076,74 @@ app.get('/api/ai/config', async (req, res) => {
       }
     }
 
-    // 解析默认模型
-    const primaryModel = config?.agents?.defaults?.model?.primary || '';
-    const provider = primaryModel.split('/')[0] || (providers.length > 0 ? providers[0] : 'anthropic');
+    // --- 自动清理孤立模型引用（provider 无有效 key 时清除对应模型配置） ---
+    const validProviders = new Set(configuredKeys.map(k => k.provider));
+    const isOrphan = (modelStr) => {
+      if (!modelStr) return false;
+      const p = String(modelStr).split('/')[0];
+      return p && !validProviders.has(p);
+    };
 
-    // 解析 fallbacks
-    const modelFallbacks = config?.agents?.defaults?.model?.fallbacks || [];
+    let configDirty = false;
+    const defaults = config?.agents?.defaults || {};
+
+    // 清理 primary model
+    if (defaults.model?.primary && isOrphan(defaults.model.primary)) {
+      console.log(`[ai/config] Auto-clean orphaned primary model: ${defaults.model.primary}`);
+      defaults.model.primary = '';
+      configDirty = true;
+    }
+
+    // 清理 primary fallbacks
+    if (Array.isArray(defaults.model?.fallbacks)) {
+      const before = defaults.model.fallbacks.length;
+      defaults.model.fallbacks = defaults.model.fallbacks.filter(m => !isOrphan(m));
+      if (defaults.model.fallbacks.length < before) {
+        console.log(`[ai/config] Auto-clean ${before - defaults.model.fallbacks.length} orphaned primary fallback(s)`);
+        configDirty = true;
+      }
+    }
+
+    // 清理 subModel
+    if (defaults.subModel && isOrphan(defaults.subModel)) {
+      console.log(`[ai/config] Auto-clean orphaned sub model: ${defaults.subModel}`);
+      defaults.subModel = '';
+      configDirty = true;
+    }
+
+    // 清理 subModel fallbacks
+    if (Array.isArray(defaults.subModelFallbacks)) {
+      const before = defaults.subModelFallbacks.length;
+      defaults.subModelFallbacks = defaults.subModelFallbacks.filter(m => !isOrphan(m));
+      if (defaults.subModelFallbacks.length < before) {
+        console.log(`[ai/config] Auto-clean ${before - defaults.subModelFallbacks.length} orphaned sub fallback(s)`);
+        configDirty = true;
+      }
+    }
+
+    // 写回清理后的配置
+    if (configDirty) {
+      try {
+        fs.writeFileSync(configPath, JSON.stringify(config, null, 2), { encoding: 'utf8', mode: 0o600 });
+        console.log('[ai/config] Wrote back cleaned config to openclaw.json');
+      } catch (writeErr) {
+        console.error('[ai/config] Failed to write cleaned config:', writeErr.message);
+      }
+    }
+
+    // 解析默认模型（清理后的值）
+    const primaryModel = defaults.model?.primary || '';
+    const provider = primaryModel.split('/')[0] || (validProviders.size > 0 ? [...validProviders][0] : 'anthropic');
+
+    // 解析 fallbacks（清理后的值）
+    const modelFallbacks = defaults.model?.fallbacks || [];
     const fallbackObj = { primary: Array.isArray(modelFallbacks) ? modelFallbacks : [] };
 
-    // 解析 subModel（从 openclaw.json 或 models.json 推断）
-    const subModel = config?.agents?.defaults?.subModel || '';
+    // 解析 subModel（清理后的值）
+    const subModel = defaults.subModel || '';
 
-    // 解析 subModel fallbacks
-    const subFallbacks = config?.agents?.defaults?.subModelFallbacks || [];
+    // 解析 subModel fallbacks（清理后的值）
+    const subFallbacks = defaults.subModelFallbacks || [];
     fallbackObj.sub = Array.isArray(subFallbacks) ? subFallbacks : [];
 
     res.json({

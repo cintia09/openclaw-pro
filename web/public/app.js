@@ -2590,7 +2590,8 @@ async function loadAIConfig(){
 
     const keyCount = aiConfiguredKeys.length;
     const keyStatus = keyCount > 0 ? `✅ ${keyCount} 个 Key` : '⚠️ 未配置';
-    $('ai-status').textContent = `状态：已读取（主模型：${primaryModel || '未设置'}；API Key：${keyStatus}）`;
+    const modelStatus = primaryModel ? `主模型：${primaryModel}` : '主模型：未设置';
+    $('ai-status').textContent = `状态：已读取（${modelStatus}；API Key：${keyStatus}）`;
     appendAiAuthLog(`[load] 配置读取成功，${keyCount} 个已配置 Key`, 'success');
 
   } catch (e) {
