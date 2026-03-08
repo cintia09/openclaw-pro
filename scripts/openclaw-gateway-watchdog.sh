@@ -186,10 +186,15 @@ restore_previous_backup() {
 }
 
 get_gateway_pid() {
-  pgrep -x "openclaw-gateway" 2>/dev/null | head -1 && return
-  pgrep -x "openclaw-gatewa" 2>/dev/null | head -1 && return
-  pgrep -f "openclaw.mjs gateway" 2>/dev/null | head -1 && return
-  pgrep -f "openclaw.*gateway run" 2>/dev/null | head -1 && return
+  local _pid
+  _pid=$(pgrep -x "openclaw-gateway" 2>/dev/null | head -1)
+  [[ -n "$_pid" ]] && echo "$_pid" && return
+  _pid=$(pgrep -x "openclaw-gatewa" 2>/dev/null | head -1)
+  [[ -n "$_pid" ]] && echo "$_pid" && return
+  _pid=$(pgrep -f "openclaw.mjs gateway" 2>/dev/null | head -1)
+  [[ -n "$_pid" ]] && echo "$_pid" && return
+  _pid=$(pgrep -f "openclaw.*gateway run" 2>/dev/null | head -1)
+  [[ -n "$_pid" ]] && echo "$_pid" && return
   local pid
   for pid in $(pgrep -x "openclaw" 2>/dev/null); do
     [[ "$(cat /proc/$pid/comm 2>/dev/null)" == "bash" ]] && continue
