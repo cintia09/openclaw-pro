@@ -5686,11 +5686,22 @@ app.get('/api/openclaw/gateway-link', (req, res) => {
     const preferredUrl = externalGatewayUrl;
 
     let hint = '';
-    if (authMode === 'token' && !rawToken) {
+    const opState = getOpenClawOperationState();
+    const gatewayBusy = opState.type === 'restarting_gateway' || opState.type === 'installing' || opState.type === 'updating';
+    if (gatewayBusy) {
+      hint = 'Gateway 正在启动中，请稍候片刻后再打开控制台。';
+    } else if (authMode === 'token' && !rawToken) {
       hint = 'Gateway 为 token 模式但未读取到 token，已回退到代理地址。';
     } else if (authMode !== 'token' && authMode !== 'none') {
       hint = `Gateway 当前认证模式为 ${authMode}，可能需要在控制台中手动输入凭据。`;
     }
+
+    // 检查 gateway 健康状态
+    let gatewayReady = false;
+    try {
+      const healthText = runCommandText('curl -s -o /dev/null -w "%{http_code}" --connect-timeout 1 --max-time 2 http://127.0.0.1:18789/health 2>/dev/null || true', 3000);
+      gatewayReady = Number.parseInt(String(healthText || '').trim(), 10) === 200;
+    } catch {}
 
     res.json({
       success: true,
@@ -5701,7 +5712,9 @@ app.get('/api/openclaw/gateway-link', (req, res) => {
       externalProxyUrl,
       directUrl,
       proxyUrl,
-      hint
+      hint,
+      gatewayReady,
+      gatewayBusy
     });
   } catch (e) {
     res.status(500).json({ success: false, error: e?.message || 'gateway link 生成失败' });

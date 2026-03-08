@@ -507,18 +507,15 @@ function applySidebarPreference(){
 
 $('btn-gateway-console')?.addEventListener('click', (e) => {
   e.preventDefault();
-  const popup = window.open('', '_blank');
-  if (popup) {
-    try { popup.opener = null; } catch {}
-    popup.document.title = 'OpenClaw Gateway';
-    popup.document.body.innerHTML = '<p style="font-family:system-ui;padding:16px;">正在打开 OpenClaw Gateway 控制台...</p>';
-  }
   (async () => {
     const r = await api('/api/openclaw/gateway-link', { timeoutMs: 6000 });
+    if (r?.gatewayBusy || r?.gatewayReady === false) {
+      toast('Gateway 未就绪', r?.hint || 'Gateway 正在启动中，请稍候后再试');
+      return;
+    }
     const target = r?.preferredUrl || r?.directUrl || r?.proxyUrl || '/gateway-proxy/';
-    if (popup) {
-      popup.location.href = target;
-    } else {
+    const popup = window.open(target, '_blank');
+    if (!popup) {
       window.location.href = target;
       toast('弹窗被拦截', '已在当前页面打开 Gateway 控制台');
     }
@@ -1297,8 +1294,9 @@ async function refreshOpenClaw(opts = {}){
   } else {
     $('oc-version').textContent = '—';
   }
-  if (installBusyNow && installPhaseNow === 'install') {
-    setStatusBadge('oc-gateway', 'pending', '安装中', true);
+  if (installBusyNow && (installPhaseNow === 'install' || installPhaseNow === 'update')) {
+    const gwLabel = installPhaseNow === 'update' ? '更新中' : '安装中';
+    setStatusBadge('oc-gateway', 'pending', gwLabel, true);
   } else if (!d.installed && !d.gatewayRunning && !restartBusyNow) {
     setStatusBadge('oc-gateway', 'offline', '未安装', false);
   } else if (restartBusyNow) {
@@ -1470,40 +1468,31 @@ async function pollTask(taskId){
         appendOcLogLine('⏳ 正在自动重启 Gateway...');
         ocPostInstallWarmupUntil = Date.now() + (5 * 60 * 1000);
         ocLastGatewaySnapshot = '';
+        setStatusBadge('oc-gateway', 'pending', '启动中', true);
+        setOpenClawStatusLine('更新状态：Gateway 启动中', { active: true, startedAt: Date.now(), totalSec: 60 });
         try {
           const rr = await api('/api/openclaw/start', { method:'POST', timeoutMs: 90000 });
           if (rr.success) {
-            appendOcLogLine('✅ 重启请求已接受，等待 Gateway 启动...');
-            if (rr.logs) {
-              ocLastGatewaySnapshot = String(rr.logs || '').trim() || ocLastGatewaySnapshot;
-            }
+            if (rr.logs) ocLastGatewaySnapshot = String(rr.logs || '').trim() || ocLastGatewaySnapshot;
             scheduleGatewayStartupLogPulls(220);
-            // 轮询等待 Gateway 真正启动（最多 5 分钟）
+            await new Promise(r => setTimeout(r, 8000));
             const pollStart = Date.now();
             let gwUp = false;
-            appendOcLogLine('⏳ 等待 Gateway 启动完成（最多 5 分钟）...');
-            // 初始等待：给旧进程退出、新进程启动留时间
-            await new Promise(r => setTimeout(r, 8000));
             while (Date.now() - pollStart < 5 * 60 * 1000) {
               await new Promise(r => setTimeout(r, 3000));
               try {
                 const ps = await api('/api/openclaw', { timeoutMs: 8000 });
                 const stillStarting = !!(ps.gatewayStarting) || ps.operationState?.type === 'restarting_gateway';
-                if (ps.gatewayRunning && !stillStarting) {
-                  gwUp = true;
-                  break;
-                }
+                if (ps.gatewayRunning && !stillStarting) { gwUp = true; break; }
               } catch {}
             }
-            appendOcLogLine(gwUp ? '✅ Gateway 重启成功' : '⚠️ Gateway 重启超时（5 分钟），请检查状态');
+            appendOcLogLine(gwUp ? '✅ Gateway 启动成功' : '⚠️ Gateway 启动超时，请检查状态');
           } else {
-            appendOcLogLine(`❌ Gateway 重启失败: ${rr.error || '请查看日志'}`);
-            if (rr.logs) {
-              ocLastGatewaySnapshot = String(rr.logs || '').trim() || ocLastGatewaySnapshot;
-            }
+            appendOcLogLine(`❌ Gateway 启动失败: ${rr.error || '请查看日志'}`);
+            if (rr.logs) ocLastGatewaySnapshot = String(rr.logs || '').trim() || ocLastGatewaySnapshot;
           }
         } catch (e) {
-          appendOcLogLine(`❌ Gateway 重启失败: ${e.message || e}`);
+          appendOcLogLine(`❌ Gateway 启动失败: ${e.message || e}`);
         }
       }
       refreshOpenClaw();
@@ -2189,6 +2178,8 @@ let aiConfiguredKeys = []; // [{id, provider, keyMasked, baseUrl, authType, mode
 let aiAvailableModels = [];
 let aiAuthTaskTimer = null;
 let lastFocusedModelInput = 'ai-model-primary';
+// 保存活跃的 OAuth 授权状态，切换 provider 时可恢复
+let _activeOAuthState = null; // { provider, url, userCode, taskId }
 
 function providerFromModel(modelId = '') {
   const text = String(modelId || '').trim();
@@ -2238,7 +2229,14 @@ function updateAiProviderUI() {
     if (config.authType === 'oauth') {
       oauthWrap.hidden = false;
       const guideEl = $('ai-oauth-guide');
-      if (guideEl && config.oauthGuide) guideEl.innerHTML = config.oauthGuide;
+      // 如果有正在进行的 OAuth 授权，恢复授权信息而不是覆盖
+      if (guideEl) {
+        if (_activeOAuthState && _activeOAuthState.provider === provider) {
+          _showActiveOAuthInCard();
+        } else if (config.oauthGuide) {
+          guideEl.innerHTML = config.oauthGuide;
+        }
+      }
     } else {
       oauthWrap.hidden = true;
     }
@@ -2734,19 +2732,10 @@ async function pollAiAuthTask(taskId){
           // 提取 user_code
           const codeMatch = st.delta.match(/(?:授权码|code)[:：]\s*([A-Z0-9]{4,}(?:-[A-Z0-9]{4,})?)/i);
           const userCode = codeMatch ? codeMatch[1] : '';
-          // 在 OAuth 卡片区域（ai-oauth-guide）内显示链接和授权码
-          const guideEl = $('ai-oauth-guide');
-          const statusEl = $('ai-oauth-status');
-          if (statusEl) statusEl.textContent = '⏳ 等待用户完成授权…';
-          if (guideEl) {
-            const linkHtml = `<a href="${url}" target="_blank" rel="noopener" style="color:#58a6ff;text-decoration:underline;font-weight:bold;font-size:14px">👉 点击此处打开 GitHub 授权页面</a>`;
-            const codeHtml = userCode ? `<div style="margin-top:10px;font-size:20px;font-weight:bold;color:#f5f5f7;letter-spacing:4px;text-align:center;padding:10px 16px;background:#2d333b;border-radius:8px;border:1px solid #444c56">授权码: ${userCode}</div>` : '';
-            const hintHtml = `<div style="margin-top:8px;font-size:12px;color:#8b949e">请点击上方链接，在 GitHub 页面中输入授权码完成认证</div>`;
-            guideEl.innerHTML = `<div style="padding:4px 0">${linkHtml}${codeHtml}${hintHtml}</div>`;
-          }
-          // 禁用启动按钮，避免重复点击
-          const oauthBtn = $('btn-ai-oauth-login');
-          if (oauthBtn) { oauthBtn.disabled = true; oauthBtn.textContent = '授权进行中…'; }
+          // 保存活跃授权状态，切换 provider 时可恢复
+          const provider = $('ai-provider')?.value || '';
+          _activeOAuthState = { provider, url, userCode, taskId };
+          _showActiveOAuthInCard();
         }
       }
     }
@@ -2783,6 +2772,31 @@ async function pollAiAuthTask(taskId){
   aiAuthTaskTimer = setInterval(tick, 1000);
 }
 
+/** 在 OAuth 卡片区域显示活跃的授权信息（链接+授权码+重新授权按钮） */
+function _showActiveOAuthInCard() {
+  if (!_activeOAuthState) return;
+  const { url, userCode } = _activeOAuthState;
+  const guideEl = $('ai-oauth-guide');
+  const statusEl = $('ai-oauth-status');
+  const oauthBtn = $('btn-ai-oauth-login');
+  if (statusEl) statusEl.textContent = '⏳ 等待用户完成授权…';
+  if (oauthBtn) { oauthBtn.disabled = true; oauthBtn.textContent = '授权进行中…'; }
+  if (guideEl) {
+    const linkHtml = `<a href="${url}" target="_blank" rel="noopener" style="color:#58a6ff;text-decoration:underline;font-weight:bold;font-size:14px">👉 点击此处打开 GitHub 授权页面</a>`;
+    const codeHtml = userCode ? `<div style="margin-top:10px;font-size:20px;font-weight:bold;color:#f5f5f7;letter-spacing:4px;text-align:center;padding:10px 16px;background:#2d333b;border-radius:8px;border:1px solid #444c56">授权码: ${userCode}</div>` : '';
+    const hintHtml = `<div style="margin-top:8px;font-size:12px;color:#8b949e">请点击上方链接，在 GitHub 页面中输入授权码完成认证</div>`;
+    const reAuthHtml = `<div style="margin-top:12px;text-align:center"><button class="btn btn-secondary" id="_btn-reauth" style="font-size:12px">🔄 重新授权</button></div>`;
+    guideEl.innerHTML = `<div style="padding:4px 0">${linkHtml}${codeHtml}${hintHtml}${reAuthHtml}</div>`;
+    // 绑定重新授权按钮
+    const reAuthBtn = document.getElementById('_btn-reauth');
+    if (reAuthBtn) reAuthBtn.addEventListener('click', () => {
+      _activeOAuthState = null;
+      _restoreOAuthCard(false);
+      startOAuthLogin();
+    });
+  }
+}
+
 /** 恢复 OAuth 卡片区域到初始状态 */
 function _restoreOAuthCard(success) {
   const statusEl = $('ai-oauth-status');
@@ -2790,6 +2804,8 @@ function _restoreOAuthCard(success) {
   const oauthBtn = $('btn-ai-oauth-login');
   if (oauthBtn) { oauthBtn.disabled = false; oauthBtn.textContent = '启动设备授权'; }
   if (statusEl) statusEl.textContent = success ? '✅ 授权成功，可再次点击刷新授权' : '点击按钮启动设备授权流程';
+  // 清除活跃状态
+  if (success || !_activeOAuthState) _activeOAuthState = null;
   // 恢复 guide 内容
   const provider = $('ai-provider')?.value || '';
   const config = AI_PROVIDERS[provider] || {};
