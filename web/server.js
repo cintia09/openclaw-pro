@@ -357,6 +357,47 @@ function writeJson(p, obj) {
   fs.writeFileSync(p, JSON.stringify(obj, null, 2), { mode: 0o600 });
 }
 
+const AI_AGENT_DIR = '/root/.openclaw/agents/main/agent';
+const AI_MODELS_PATH = path.join(AI_AGENT_DIR, 'models.json');
+const AI_AUTH_PROFILES_PATH = path.join(AI_AGENT_DIR, 'auth-profiles.json');
+
+function normalizeAuthProfiles(raw) {
+  let authProfiles = raw && typeof raw === 'object' ? { ...raw } : {};
+  if (!authProfiles.profiles || typeof authProfiles.profiles !== 'object' || Array.isArray(authProfiles.profiles)) {
+    const oldEntries = Object.entries(authProfiles).filter(([k]) => !['version', 'profiles', 'lastGood', 'usageStats'].includes(k));
+    authProfiles = { version: 1, profiles: {} };
+    for (const [k, v] of oldEntries) {
+      if (v && typeof v === 'object' && !Array.isArray(v)) authProfiles.profiles[k] = v;
+    }
+  }
+  if (!authProfiles.version) authProfiles.version = 1;
+  return authProfiles;
+}
+
+function readAiAuthProfiles() {
+  return normalizeAuthProfiles(readJson(AI_AUTH_PROFILES_PATH, {}));
+}
+
+function writeAiAuthProfiles(obj) {
+  writeJson(AI_AUTH_PROFILES_PATH, normalizeAuthProfiles(obj));
+}
+
+function readAiModels() {
+  const models = readJson(AI_MODELS_PATH, { providers: {} }) || { providers: {} };
+  if (!models.providers || typeof models.providers !== 'object' || Array.isArray(models.providers)) {
+    models.providers = {};
+  }
+  return models;
+}
+
+function writeAiModels(obj) {
+  const models = obj && typeof obj === 'object' ? obj : { providers: {} };
+  if (!models.providers || typeof models.providers !== 'object' || Array.isArray(models.providers)) {
+    models.providers = {};
+  }
+  writeJson(AI_MODELS_PATH, models);
+}
+
 // ============================================================
 // Helpers: API Key 加密/解密（AES-256-CBC + PBKDF2）
 // ============================================================
@@ -3442,31 +3483,22 @@ app.post('/api/ai/auth/oauth/login', async (req, res) => {
         appendAiTaskLog(task, '[ai] GitHub 访问令牌获取成功!\n');
 
         // Step 3: 保存到 auth-profiles.json（兼容 openclaw 格式）
-        const authProfilesPath = '/root/.openclaw/agents/main/agent/auth-profiles.json';
-        let authProfiles = {};
-        try { authProfiles = JSON.parse(fs.readFileSync(authProfilesPath, 'utf8')); } catch {}
-        // openclaw 使用 { profiles: { "profileId": { type, provider, token } }, version: 1 } 格式
-        if (!authProfiles.profiles) {
-          // 旧格式或空文件，迁移
-          const oldEntries = Object.entries(authProfiles).filter(([k]) => k !== 'version' && k !== 'profiles' && k !== 'lastGood');
-          authProfiles = { version: 1, profiles: {} };
-          // 迁移旧条目
-          for (const [k, v] of oldEntries) {
-            if (v && typeof v === 'object') authProfiles.profiles[k] = v;
-          }
-        }
+        const authProfiles = readAiAuthProfiles();
         authProfiles.profiles['github-copilot:github'] = {
           type: 'token',
           provider: 'github-copilot',
-          token: accessToken
+          mode: 'token',
+          token: accessToken,
+          addedAt: Date.now()
         };
-        fs.writeFileSync(authProfilesPath, JSON.stringify(authProfiles, null, 2), { encoding: 'utf8', mode: 0o600 });
 
         // 同时写入以 provider key 为索引的条目（兼容我们的 /api/ai/models 读取逻辑）
         authProfiles.profiles['github-copilot'] = {
           type: 'token',
           provider: 'github-copilot',
-          token: accessToken
+          mode: 'token',
+          token: accessToken,
+          addedAt: Date.now()
         };
         // 也在旧格式位置写一份
         authProfiles['github-copilot'] = {
@@ -3474,14 +3506,11 @@ app.post('/api/ai/auth/oauth/login', async (req, res) => {
           mode: 'token',
           token: accessToken
         };
-        fs.writeFileSync(authProfilesPath, JSON.stringify(authProfiles, null, 2), { encoding: 'utf8', mode: 0o600 });
+        writeAiAuthProfiles(authProfiles);
         appendAiTaskLog(task, '[ai] 认证信息已保存到 auth-profiles.json\n');
 
         // Step 4: 确保 models.json 中有 github-copilot provider 条目
-        const modelsPath = '/root/.openclaw/agents/main/agent/models.json';
-        let modelsData = { providers: {} };
-        try { modelsData = JSON.parse(fs.readFileSync(modelsPath, 'utf8')); } catch {}
-        if (!modelsData.providers) modelsData.providers = {};
+        const modelsData = readAiModels();
         if (!modelsData.providers['github-copilot']) {
           modelsData.providers['github-copilot'] = {
             baseUrl: 'https://api.githubcopilot.com',
@@ -3493,7 +3522,7 @@ app.post('/api/ai/auth/oauth/login', async (req, res) => {
           modelsData.providers['github-copilot'].apiKey = accessToken;
           modelsData.providers['github-copilot'].baseUrl = 'https://api.githubcopilot.com';
         }
-        fs.writeFileSync(modelsPath, JSON.stringify(modelsData, null, 2), { encoding: 'utf8', mode: 0o600 });
+        writeAiModels(modelsData);
         appendAiTaskLog(task, '[ai] 已更新 models.json 中的 github-copilot 配置\n');
 
         task.status = 'success';
@@ -3536,9 +3565,6 @@ app.get('/api/ai/auth/task/:taskId', (req, res) => {
 app.get('/api/ai/config', async (req, res) => {
   try {
     const configPath = '/root/.openclaw/openclaw.json';
-    const modelsPath = '/root/.openclaw/agents/main/agent/models.json';
-    const authProfilesPath = '/root/.openclaw/agents/main/agent/auth-profiles.json';
-
     // 读取主配置
     let config = {};
     try {
@@ -3549,24 +3575,18 @@ app.get('/api/ai/config', async (req, res) => {
     }
 
     // 读取 models.json 获取提供商列表
-    let models = { providers: {} };
-    try {
-      const modelsData = fs.readFileSync(modelsPath, 'utf8');
-      models = JSON.parse(modelsData);
-    } catch {
-      models = { providers: {} };
-    }
+    const models = readAiModels();
 
     // 读取 auth-profiles.json
-    let authProfiles = {};
-    try {
-      const authData = fs.readFileSync(authProfilesPath, 'utf8');
-      authProfiles = JSON.parse(authData);
-    } catch {
-      authProfiles = {};
-    }
+    const authProfiles = readAiAuthProfiles();
 
-    const providers = Object.keys(models?.providers || {});
+    const providers = new Set(Object.keys(models?.providers || {}));
+    for (const [, profile] of Object.entries(authProfiles.profiles || {})) {
+      if (profile?.provider) providers.add(profile.provider);
+    }
+    for (const [key, profile] of Object.entries(authProfiles || {})) {
+      if (!['version', 'profiles', 'lastGood', 'usageStats'].includes(key) && profile?.provider) providers.add(profile.provider);
+    }
 
     // 构建 configuredKeys 数组（支持每个 provider 多个 key）
     const configuredKeys = [];
@@ -3577,8 +3597,7 @@ app.get('/api/ai/config', async (req, res) => {
     for (const [profileId, profile] of Object.entries(profiles)) {
       if (!profile || !profile.provider) continue;
       const pName = profile.provider;
-      const prov = models.providers?.[pName];
-      if (!prov) continue; // provider 不在 models.json 中，跳过
+      const prov = models.providers?.[pName] || {};
 
       const isApiKey = profile.mode === 'api_key' || profile.type === 'api_key';
       const isToken = profile.mode === 'token' || profile.type === 'token';
@@ -3595,7 +3614,7 @@ app.get('/api/ai/config', async (req, res) => {
           id: profileId,
           provider: pName,
           keyMasked: isApiKey ? maskApiKey(rawKey) : (isOAuth ? 'OAuth 已授权' : ''),
-          baseUrl: prov?.baseUrl || '',
+          baseUrl: prov?.baseUrl || getDefaultBaseUrl(pName) || '',
           authType: isOAuth ? 'oauth' : 'apikey',
           models: (prov?.models || []).map(m => m.id || m),
           isActive
@@ -3623,7 +3642,7 @@ app.get('/api/ai/config', async (req, res) => {
           id: pName,
           provider: pName,
           keyMasked: hasKey ? maskApiKey(rawKey) : (isTopOAuth ? 'OAuth 已授权' : ''),
-          baseUrl: prov?.baseUrl || '',
+          baseUrl: prov?.baseUrl || getDefaultBaseUrl(pName) || '',
           authType: isTopOAuth ? 'oauth' : 'apikey',
           models: (prov?.models || []).map(m => m.id || m),
           isActive: true
@@ -3960,9 +3979,12 @@ app.post('/api/ai/keys/validate', async (req, res) => {
     if (!endpoint) return res.json({ valid: false, error: '无法确定 API 端点' });
 
     // 尝试调用 /models 端点来验证 key 可用性
-    const modelsUrl = provider === 'ollama'
-      ? `${endpoint}/api/tags`
-      : `${endpoint}/models`;
+    let modelsUrl;
+    if (provider === 'ollama') {
+      modelsUrl = `${endpoint}/api/tags`;
+    } else {
+      modelsUrl = `${endpoint}/models`;
+    }
 
     const headers = {};
     if (provider === 'anthropic') {
@@ -4004,6 +4026,11 @@ app.post('/api/ai/keys/validate', async (req, res) => {
     // 其他状态码（如 429 rate limit）认为 key 本身有效
     if (status === 429 || status === 200 || status === 201) {
       return res.json({ valid: true });
+    }
+
+    // 404 表示该 provider 可能没有 /models 端点，不代表 key 无效
+    if (status === 404) {
+      return res.json({ valid: true, warning: `${provider} 不支持 /models 端点验证，已跳过` });
     }
 
     return res.json({ valid: false, error: errMsg });
@@ -4054,13 +4081,7 @@ app.post('/api/ai/keys', async (req, res) => {
       return res.status(400).json({ error: 'provider 不能为空' });
     }
 
-    const modelsPath = '/root/.openclaw/agents/main/agent/models.json';
-    const authProfilesPath = '/root/.openclaw/agents/main/agent/auth-profiles.json';
-
-    let models = { providers: {} };
-    try {
-      models = JSON.parse(fs.readFileSync(modelsPath, 'utf8'));
-    } catch { models = { providers: {} }; }
+    let models = readAiModels();
 
     if (!models.providers) models.providers = {};
 
@@ -4086,17 +4107,7 @@ app.post('/api/ai/keys', async (req, res) => {
     }
 
     // 同步 auth-profiles.json（支持多 key：每个 key 用唯一 profileId）
-    let authProfiles = {};
-    try {
-      authProfiles = JSON.parse(fs.readFileSync(authProfilesPath, 'utf8'));
-    } catch { authProfiles = {}; }
-    if (!authProfiles.profiles) {
-      const oldEntries = Object.entries(authProfiles).filter(([k]) => k !== 'version' && k !== 'profiles' && k !== 'lastGood' && k !== 'usageStats');
-      authProfiles = { version: 1, profiles: {} };
-      for (const [k, v] of oldEntries) {
-        if (v && typeof v === 'object') authProfiles.profiles[k] = v;
-      }
-    }
+    let authProfiles = readAiAuthProfiles();
 
     if (apiKey) {
       // 检查是否已有相同 apiKey 的 profile（避免重复）
@@ -4136,7 +4147,7 @@ app.post('/api/ai/keys', async (req, res) => {
       };
     }
 
-    fs.writeFileSync(authProfilesPath, JSON.stringify(authProfiles, null, 2), { encoding: 'utf8', mode: 0o600 });
+    writeAiAuthProfiles(authProfiles);
 
     // 同步 openclaw.json 中的 models.providers
     const configPath = '/root/.openclaw/openclaw.json';
@@ -4158,7 +4169,7 @@ app.post('/api/ai/keys', async (req, res) => {
     if (apiKey) config.models.providers[provider].apiKey = apiKey;
 
     writeOpenClawConfig(config);
-    fs.writeFileSync(modelsPath, JSON.stringify(models, null, 2), { encoding: 'utf8', mode: 0o600 });
+    writeAiModels(models);
 
     res.json({ success: true, message: `${provider} API Key 已保存` });
   } catch (err) {
@@ -4176,15 +4187,10 @@ app.delete('/api/ai/keys', async (req, res) => {
       return res.status(400).json({ error: 'provider 不能为空' });
     }
 
-    const modelsPath = '/root/.openclaw/agents/main/agent/models.json';
-    const authProfilesPath = '/root/.openclaw/agents/main/agent/auth-profiles.json';
     const configPath = '/root/.openclaw/openclaw.json';
 
     // 读取 auth-profiles
-    let authProfiles = {};
-    try {
-      authProfiles = JSON.parse(fs.readFileSync(authProfilesPath, 'utf8'));
-    } catch { authProfiles = {}; }
+    let authProfiles = readAiAuthProfiles();
 
     // 删除指定的 profile（keyId 是 profileId）
     const profileId = keyId || provider;
@@ -4201,10 +4207,7 @@ app.delete('/api/ai/keys', async (req, res) => {
     const hasRemainingKeys = remainingKeys.length > 0;
 
     // 从 models.json 中处理
-    let models = { providers: {} };
-    try {
-      models = JSON.parse(fs.readFileSync(modelsPath, 'utf8'));
-    } catch { models = { providers: {} }; }
+    let models = readAiModels();
 
     if (!hasRemainingKeys) {
       // 没有剩余 key，移除 provider
@@ -4266,8 +4269,8 @@ app.delete('/api/ai/keys', async (req, res) => {
       }
     }
     // 写回所有文件（自动清理非法 key）
-    fs.writeFileSync(modelsPath, JSON.stringify(models, null, 2), { encoding: 'utf8', mode: 0o600 });
-    fs.writeFileSync(authProfilesPath, JSON.stringify(authProfiles, null, 2), { encoding: 'utf8', mode: 0o600 });
+    writeAiModels(models);
+    writeAiAuthProfiles(authProfiles);
     writeOpenClawConfig(config);
 
     res.json({ success: true, message: `${provider} 已删除` });
@@ -4422,9 +4425,7 @@ app.post('/api/ai/models', async (req, res) => {
     // github-copilot: 先交换 Copilot API Token，再获取模型
     if (provider === 'github-copilot') {
       try {
-        const authProfilesPath = '/root/.openclaw/agents/main/agent/auth-profiles.json';
-        let authProfiles = {};
-        try { authProfiles = JSON.parse(fs.readFileSync(authProfilesPath, 'utf8')); } catch {}
+        const authProfiles = readAiAuthProfiles();
         // 兼容 openclaw 格式 (profiles sub-key) 和旧格式 (直接 top-level)
         const copilotAuth = authProfiles?.profiles?.['github-copilot:github']
           || authProfiles?.profiles?.['github-copilot']

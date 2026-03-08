@@ -333,7 +333,7 @@ function toast(title, detail=''){
 const ROUTES = [
   { id: 'dashboard', title: '仪表盘' },
   { id: 'openclaw-engine', title: 'OpenClaw 控制台' },
-  { id: 'openclaw-ai', title: 'AI 模型配置' },
+  { id: 'openclaw-ai', title: '接入模型配置' },
   { id: 'messaging', title: '消息平台' },
   { id: 'trading', title: '交易系统' },
   { id: 'plugins', title: '插件市场' },
@@ -351,20 +351,15 @@ function getRouteFromHash(){
 }
 
 function setActiveRoute(route){
-  const isOpenClawRoute = route === 'openclaw-engine' || route === 'openclaw-ai';
   if (route !== 'openclaw-engine') stopGatewayStartupLogPulls();
 
   // nav active
   qa('#nav a').forEach(a => {
     const itemRoute = a.dataset.route;
-    const active = itemRoute === route || (isOpenClawRoute && itemRoute === 'openclaw-engine');
-    a.classList.toggle('active', !!active);
+    a.classList.toggle('active', itemRoute === route);
   });
   // pages
   qa('.page').forEach(p => p.classList.toggle('active', p.id === 'page-' + route));
-  qa('[data-oc-switch]').forEach(btn => {
-    btn.classList.toggle('active', btn.getAttribute('data-oc-switch') === route);
-  });
   // title
   const page = $('page-' + route);
   $('page-title').textContent = page?.dataset?.title || (ROUTES.find(r => r.id===route)?.title ?? '');
@@ -407,15 +402,6 @@ function renderDetectedTimezone(){
 }
 
 window.addEventListener('hashchange', ()=> setActiveRoute(getRouteFromHash()));
-
-qa('[data-oc-switch]').forEach((btn) => {
-  btn.addEventListener('click', () => {
-    const route = String(btn.getAttribute('data-oc-switch') || '').trim();
-    if (!route) return;
-    if (getRouteFromHash() === route) return;
-    location.hash = route;
-  });
-});
 
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
@@ -1630,7 +1616,7 @@ $('btn-oc-install').addEventListener('click', async ()=>{
     if (!ocInstalled) {
       ocInstallPhase = 'install';
       appendOcLogLine('📦 开始安装 OpenClaw...');
-      const i = await api('/api/openclaw/install', { method:'POST' });
+      const i = await api('/api/openclaw/install', { method:'POST', timeoutMs: 90000 });
       if (!i.taskId && Number(i?.status || 0) === 409) {
         const existingTaskId = String(i?.operationState?.taskId || '').trim();
         const existingType = String(i?.operationState?.type || '').trim();
@@ -1678,7 +1664,7 @@ $('btn-oc-install').addEventListener('click', async ()=>{
     if (!current.installed) {
       ocInstallPhase = 'install';
       appendOcLogLine('📦 开始安装 OpenClaw...');
-      const i = await api('/api/openclaw/install', { method:'POST' });
+      const i = await api('/api/openclaw/install', { method:'POST', timeoutMs: 90000 });
       if (!i.taskId && Number(i?.status || 0) === 409) {
         const existingTaskId = String(i?.operationState?.taskId || '').trim();
         const existingType = String(i?.operationState?.type || '').trim();
@@ -2261,6 +2247,8 @@ function renderConfiguredKeys() {
   onConfiguredKeySelected();
 }
 
+let _modelsFetchGen = 0; // 防止竞态：切换 key 时旧请求覆盖新结果
+
 function onConfiguredKeySelected() {
   const select = $('ai-configured-select');
   const idx = parseInt(select?.value || '', 10);
@@ -2270,11 +2258,15 @@ function onConfiguredKeySelected() {
   const info = $('ai-configured-info');
   const actions = $('ai-configured-actions');
   const modelsWrap = $('ai-configured-models-wrap');
+  const modelsList = $('ai-configured-models-list');
+
+  // 切换时立即清空旧模型列表，避免显示上一个 provider 的模型
+  if (modelsList) modelsList.innerHTML = '';
+  if (modelsWrap) modelsWrap.hidden = true;
 
   if (!key || isNaN(idx)) {
     if (detail) detail.hidden = true;
     if (actions) actions.hidden = true;
-    if (modelsWrap) modelsWrap.hidden = true;
     return;
   }
 
@@ -2303,6 +2295,14 @@ async function fetchConfiguredKeyModels() {
   }
 
   const pConfig = AI_PROVIDERS[key.provider] || {};
+  const gen = ++_modelsFetchGen; // 递增 generation
+
+  // 显示加载中
+  const modelsWrap = $('ai-configured-models-wrap');
+  const modelsList = $('ai-configured-models-list');
+  if (modelsWrap) modelsWrap.hidden = false;
+  if (modelsList) modelsList.innerHTML = '<div style="padding:8px;color:#86868b">加载中...</div>';
+
   appendAiAuthLog(`[fetch] 正在获取 ${pConfig.name || key.provider} 的模型列表...`);
 
   try {
@@ -2311,8 +2311,12 @@ async function fetchConfiguredKeyModels() {
       method: 'POST',
       body: { provider: key.provider }
     });
+    // 丢弃过期的请求结果（用户已切换到其他 key）
+    if (gen !== _modelsFetchGen) return;
     if (res.error && !res.models) {
       appendAiAuthLog(`[fetch] 获取失败: ${res.error}`, 'error');
+      if (modelsList) modelsList.innerHTML = '';
+      if (modelsWrap) modelsWrap.hidden = true;
       return;
     }
     renderConfiguredModelsList(res.models || []);
@@ -2322,7 +2326,10 @@ async function fetchConfiguredKeyModels() {
       appendAiAuthLog(`[fetch] ⚠️ ${res.error}`, 'error');
     }
   } catch (e) {
+    if (gen !== _modelsFetchGen) return;
     appendAiAuthLog(`[fetch] 错误: ${e.message}`, 'error');
+    if (modelsList) modelsList.innerHTML = '';
+    if (modelsWrap) modelsWrap.hidden = true;
   }
 }
 

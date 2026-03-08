@@ -41,6 +41,8 @@ MAX_BACKUPS=30
 CONSECUTIVE_FAILURES=0
 LAST_PID=""
 STARTUP_OLD_PIDS=""
+LAST_IDLE_RUNTIME_LOG_TS=0
+IDLE_RUNTIME_LOG_INTERVAL=300
 
 log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
@@ -55,6 +57,28 @@ log_event() {
   else
     log "[wd][$event]"
   fi
+}
+
+log_throttled() {
+  local now key interval msg
+  key="$1"
+  interval="$2"
+  shift 2
+  msg="$*"
+  now=$(date +%s)
+
+  case "$key" in
+    runtime-missing)
+      if [ $((now - LAST_IDLE_RUNTIME_LOG_TS)) -lt "$interval" ]; then
+        return 0
+      fi
+      LAST_IDLE_RUNTIME_LOG_TS="$now"
+      ;;
+    *)
+      ;;
+  esac
+
+  log "$msg"
 }
 
 detect_runtime_version() {
@@ -537,7 +561,7 @@ while true; do
   fi
 
   if [ ! -f "$SOURCE_ROOT/openclaw.mjs" ] && ! command -v openclaw >/dev/null 2>&1 && [ ! -x /root/.npm-global/bin/openclaw ] && [ ! -x /usr/local/bin/openclaw ]; then
-    log "OpenClaw runtime entry missing (source/binary), watchdog idle"
+    log_throttled "runtime-missing" "$IDLE_RUNTIME_LOG_INTERVAL" "OpenClaw runtime entry missing (source/binary), watchdog idle"
     sleep "$CHECK_INTERVAL"
     continue
   fi

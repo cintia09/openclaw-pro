@@ -1045,12 +1045,14 @@ create_and_start(){
   if [ -n "$host_user" ] && [ "$host_user" != "root" ]; then
     if docker exec "$CONTAINER_NAME" bash -lc "id '$host_user' >/dev/null 2>&1"; then
       user_ready="true"
+      ssh_login_user="$host_user"
     elif ensure_container_host_user "$host_user" "$host_uid" "$host_gid"; then
       user_ready="true"
+      ssh_login_user="$host_user"
     fi
   fi
 
-  # Public key injection (优先普通用户，失败回退 root)
+  # Public key injection（优先普通用户；仅在普通用户未就绪时才回退 root）
   for keyfile in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_rsa.pub" "$HOME/.ssh/id_ecdsa.pub"; do
     [ -f "$keyfile" ] || continue
     if [ "$user_ready" = "true" ]; then
@@ -1062,6 +1064,7 @@ create_and_start(){
         ssh_login_user="$host_user"
         break
       fi
+      continue
     fi
     if docker exec "$CONTAINER_NAME" bash -lc "chmod 700 /root 2>/dev/null || true; mkdir -p /root/.ssh && chmod 700 /root/.ssh" >/dev/null 2>&1 \
       && docker cp "$keyfile" "$CONTAINER_NAME:/root/.ssh/authorized_keys.tmp" >/dev/null 2>&1 \
@@ -1078,7 +1081,15 @@ create_and_start(){
     auto_pub="$(generate_host_pubkey_if_missing || true)"
     if [ -n "$auto_pub" ]; then
       info "未检测到宿主机公钥，已自动生成 $(basename "$auto_pub")"
-      if docker exec "$CONTAINER_NAME" bash -lc "chmod 700 /root 2>/dev/null || true; mkdir -p /root/.ssh && chmod 700 /root/.ssh" >/dev/null 2>&1 \
+      if [ "$user_ready" = "true" ]; then
+        docker exec "$CONTAINER_NAME" bash -lc "mkdir -p '/home/$host_user/.ssh' && chmod 700 '/home/$host_user/.ssh'" >/dev/null 2>&1 || true
+        if docker cp "$auto_pub" "$CONTAINER_NAME:/tmp/host_user_key.pub" >/dev/null 2>&1 \
+          && docker exec "$CONTAINER_NAME" bash -lc "touch '/home/$host_user/.ssh/authorized_keys' && while IFS= read -r k; do [ -z \"\$k\" ] && continue; grep -qxF \"\$k\" '/home/$host_user/.ssh/authorized_keys' || echo \"\$k\" >> '/home/$host_user/.ssh/authorized_keys'; done < /tmp/host_user_key.pub && chmod 600 '/home/$host_user/.ssh/authorized_keys' && chown -R '$host_user:$host_user' '/home/$host_user/.ssh' && test -s '/home/$host_user/.ssh/authorized_keys' && rm -f /tmp/host_user_key.pub" >/dev/null 2>&1; then
+          key_injected="true"
+          ssh_login_user="$host_user"
+          success "已自动生成并注入宿主机 SSH 公钥到用户 $host_user"
+        fi
+      elif docker exec "$CONTAINER_NAME" bash -lc "chmod 700 /root 2>/dev/null || true; mkdir -p /root/.ssh && chmod 700 /root/.ssh" >/dev/null 2>&1 \
         && docker cp "$auto_pub" "$CONTAINER_NAME:/root/.ssh/authorized_keys.tmp" >/dev/null 2>&1 \
         && docker exec "$CONTAINER_NAME" bash -lc "touch /root/.ssh/authorized_keys && while IFS= read -r k; do [ -z \"\$k\" ] && continue; grep -qxF \"\$k\" /root/.ssh/authorized_keys || echo \"\$k\" >> /root/.ssh/authorized_keys; done < /root/.ssh/authorized_keys.tmp && chmod 600 /root/.ssh/authorized_keys && test -s /root/.ssh/authorized_keys && rm -f /root/.ssh/authorized_keys.tmp" >/dev/null 2>&1; then
         key_injected="true"
@@ -1120,7 +1131,11 @@ create_and_start(){
     warn "  - 密码登录：状态未知（请手动检查）"
   fi
   if [ "$ssh_login_user" = "root" ]; then
-    warn "  - 登录用户: root（普通用户创建失败）"
+    if [ -n "$host_user" ] && [ "$host_user" != "root" ] && [ "$user_ready" = "true" ]; then
+      warn "  - 登录用户: root（普通用户未启用为当前 SSH 登录用户，请检查公钥与 SSH 配置）"
+    else
+      warn "  - 登录用户: root（普通用户未就绪或创建失败）"
+    fi
     info "  - 登录命令: ssh root@<host> -p ${SSH_PORT}"
     warn "  - 建议: 修复后重新运行安装脚本恢复普通用户登录"
   elif [ -n "$host_user" ] && [ "$host_user" != "root" ]; then
@@ -1137,7 +1152,7 @@ create_and_start(){
     success "  - SSH 公钥: 已自动注入"
   else
     warn "  - SSH 公钥: 未自动注入，请手动执行以下命令配置授权密钥："
-    local current_user="${host_user:-root}"
+    local current_user="${ssh_login_user:-root}"
     echo -e "    ${WHITE}cat ~/.ssh/id_rsa.pub | ssh -p ${SSH_PORT} ${current_user}@<host> \"mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys\"${NC}"
   fi
 

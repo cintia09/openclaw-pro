@@ -2019,7 +2019,11 @@ function Show-Completion {
             Write-Host "     登录命令: ssh ${sshUser}@<host> -p ${SshPort}" -ForegroundColor Cyan
             Write-Host "     容器内提权: 登录后执行 sudo -i" -ForegroundColor DarkGray
         } else {
-            Write-Host "     登录用户: root（普通用户创建失败）" -ForegroundColor Yellow
+            if ($script:sshRootFallback) {
+                Write-Host "     登录用户: root（普通用户已创建或预期使用普通用户，但 SSH 公钥注入失败，当前回退）" -ForegroundColor Yellow
+            } else {
+                Write-Host "     登录用户: root（普通用户未就绪或创建失败）" -ForegroundColor Yellow
+            }
             Write-Host "     登录命令: ssh root@<host> -p ${SshPort}" -ForegroundColor Cyan
             Write-Host "     建议: 修复后重新运行安装脚本恢复普通用户登录" -ForegroundColor DarkGray
         }
@@ -4277,8 +4281,8 @@ function Main {
                     $injected = $false
 
                     # 注入到普通用户（如果有）
+                    $userReady = $false
                     if ($hostUser -and $hostUser -ne "root" -and $hostUser -ne "administrator") {
-                        $userReady = $false
                         for ($retryUser = 1; $retryUser -le 12; $retryUser++) {
                             & docker exec $containerName bash -lc "id '$hostUser' >/dev/null 2>&1" 2>$null | Out-Null
                             if ($LASTEXITCODE -eq 0) {
@@ -4312,8 +4316,8 @@ function Main {
                         }
                     }
 
-                    if (-not $injected) {
-                        # 降级：没有普通用户时，注入到 root（兼容旧行为）
+                    if (-not $injected -and -not $userReady) {
+                        # 降级：普通用户未就绪时，注入到 root（兼容旧行为）
                         $script:sshRootFallback = $true
                         $script:hostUserForSSH = "root"
                         foreach ($keyFile in $pubKeyCandidates) {
@@ -4325,7 +4329,7 @@ function Main {
                             if ($LASTEXITCODE -eq 0) {
                                 $script:sshInjectedKeyPath = $keyFile
                                 $injected = $true
-                                Write-Warn "普通用户公钥注入失败，已回退为 root 密钥登录: $keyFile"
+                                Write-Warn "普通用户未就绪，已回退为 root 密钥登录: $keyFile"
                                 break
                             }
                         }
@@ -4350,16 +4354,31 @@ function Main {
                             }
 
                             if (Test-Path $pubPath) {
-                                & docker exec $containerName bash -lc "chmod 700 /root 2>/dev/null || true; mkdir -p /root/.ssh && chmod 700 /root/.ssh" 2>$null | Out-Null
-                                & docker cp $pubPath "${containerName}:/root/.ssh/authorized_keys.tmp" 2>$null | Out-Null
-                                if ($LASTEXITCODE -eq 0) {
-                                    & docker exec $containerName bash -lc "touch /root/.ssh/authorized_keys && cat /root/.ssh/authorized_keys /root/.ssh/authorized_keys.tmp | awk 'NF>=2 { k=\$2; if (!seen[k]++) print; next } { if (!seenRaw[\$0]++) print }' > /root/.ssh/authorized_keys.new && mv /root/.ssh/authorized_keys.new /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && rm -f /root/.ssh/authorized_keys.tmp" 2>$null | Out-Null
+                                if ($userReady -and $hostUser -and $hostUser -ne "root" -and $hostUser -ne "administrator") {
+                                    & docker exec $containerName bash -lc "mkdir -p '/home/$hostUser/.ssh' && chmod 700 '/home/$hostUser/.ssh'" 2>$null | Out-Null
+                                    & docker cp $pubPath "${containerName}:/tmp/host_user_key.pub" 2>$null | Out-Null
                                     if ($LASTEXITCODE -eq 0) {
-                                        $script:sshInjectedKeyPath = $pubPath
-                                        $injected = $true
-                                        $script:sshRootFallback = $true
-                                        $script:hostUserForSSH = "root"
-                                        Write-OK "已自动生成并注入宿主机 SSH 公钥: $pubPath"
+                                        & docker exec $containerName bash -lc "touch '/home/$hostUser/.ssh/authorized_keys' && cat '/home/$hostUser/.ssh/authorized_keys' /tmp/host_user_key.pub | awk 'NF>=2 { k=\$2; if (!seen[k]++) print; next } { if (!seenRaw[\$0]++) print }' > '/home/$hostUser/.ssh/authorized_keys.new' && mv '/home/$hostUser/.ssh/authorized_keys.new' '/home/$hostUser/.ssh/authorized_keys' && chmod 600 '/home/$hostUser/.ssh/authorized_keys' && chown -R '${hostUser}:${hostUser}' '/home/$hostUser/.ssh' && test -s '/home/$hostUser/.ssh/authorized_keys' && rm -f /tmp/host_user_key.pub" 2>$null | Out-Null
+                                        if ($LASTEXITCODE -eq 0) {
+                                            $script:sshInjectedKeyPath = $pubPath
+                                            $injected = $true
+                                            $script:sshRootFallback = $false
+                                            $script:hostUserForSSH = $hostUser
+                                            Write-OK "已自动生成并注入宿主机 SSH 公钥到用户 $hostUser : $pubPath"
+                                        }
+                                    }
+                                } else {
+                                    & docker exec $containerName bash -lc "chmod 700 /root 2>/dev/null || true; mkdir -p /root/.ssh && chmod 700 /root/.ssh" 2>$null | Out-Null
+                                    & docker cp $pubPath "${containerName}:/root/.ssh/authorized_keys.tmp" 2>$null | Out-Null
+                                    if ($LASTEXITCODE -eq 0) {
+                                        & docker exec $containerName bash -lc "touch /root/.ssh/authorized_keys && cat /root/.ssh/authorized_keys /root/.ssh/authorized_keys.tmp | awk 'NF>=2 { k=\$2; if (!seen[k]++) print; next } { if (!seenRaw[\$0]++) print }' > /root/.ssh/authorized_keys.new && mv /root/.ssh/authorized_keys.new /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && rm -f /root/.ssh/authorized_keys.tmp" 2>$null | Out-Null
+                                        if ($LASTEXITCODE -eq 0) {
+                                            $script:sshInjectedKeyPath = $pubPath
+                                            $injected = $true
+                                            $script:sshRootFallback = $true
+                                            $script:hostUserForSSH = "root"
+                                            Write-OK "已自动生成并注入宿主机 SSH 公钥: $pubPath"
+                                        }
                                     }
                                 }
                             }
@@ -4369,7 +4388,13 @@ function Main {
                     }
 
                     if (-not $injected) {
-                        Write-Warn "未发现可用宿主机公钥（id_ed25519/id_rsa/id_ecdsa），请手动注入 authorized_keys"
+                        if ($userReady -and $hostUser -and $hostUser -ne "root" -and $hostUser -ne "administrator") {
+                            $script:sshRootFallback = $false
+                            $script:hostUserForSSH = $hostUser
+                            Write-Warn "普通用户已创建，但宿主机 SSH 公钥未自动注入，请手动配置 /home/$hostUser/.ssh/authorized_keys"
+                        } else {
+                            Write-Warn "未发现可用宿主机公钥（id_ed25519/id_rsa/id_ecdsa），请手动注入 authorized_keys"
+                        }
                     }
 
                     # 保存部署信息（供后续显示）

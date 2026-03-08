@@ -857,7 +857,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-OK "新容器已启动"
 
-# -- 9.1 SSH 公钥注入（优先普通用户，失败回退 root）--
+# -- 9.1 SSH 公钥注入（优先普通用户；仅在普通用户未就绪时才回退 root）--
 $pubKeyCandidates = @(
     (Join-Path $env:USERPROFILE ".ssh\id_ed25519.pub"),
     (Join-Path $env:USERPROFILE ".ssh\id_rsa.pub"),
@@ -873,8 +873,8 @@ if ($env:HOME -and $env:HOME -ne $env:USERPROFILE) {
 $pubKeyCandidates = $pubKeyCandidates | Where-Object { $_ } | Select-Object -Unique
 
 $injected = $false
+$userReady = $false
 if ($hostUser -and $hostUser -ne "root" -and $hostUser -ne "administrator") {
-    $userReady = $false
     for ($retryUser = 1; $retryUser -le 12; $retryUser++) {
         & docker exec $CONTAINER_NAME bash -lc "id '$hostUser' >/dev/null 2>&1" 2>$null | Out-Null
         if ($LASTEXITCODE -eq 0) {
@@ -903,7 +903,7 @@ if ($hostUser -and $hostUser -ne "root" -and $hostUser -ne "administrator") {
     }
 }
 
-if (-not $injected) {
+if (-not $injected -and -not $userReady) {
     foreach ($keyFile in $pubKeyCandidates) {
         if (-not (Test-Path $keyFile)) { continue }
         & docker exec $CONTAINER_NAME bash -lc "chmod 700 /root 2>/dev/null || true; mkdir -p /root/.ssh && chmod 700 /root/.ssh" 2>$null | Out-Null
@@ -912,14 +912,18 @@ if (-not $injected) {
         & docker exec $CONTAINER_NAME bash -lc "cat /root/.ssh/authorized_keys.tmp >> /root/.ssh/authorized_keys && sort -u -o /root/.ssh/authorized_keys /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && rm -f /root/.ssh/authorized_keys.tmp" 2>$null | Out-Null
         if ($LASTEXITCODE -eq 0) {
             $injected = $true
-            Write-Warn "普通用户公钥注入失败，已回退为 root 密钥登录"
+            Write-Warn "普通用户未就绪，已回退为 root 密钥登录"
             break
         }
     }
 }
 
 if (-not $injected) {
-    Write-Warn "未检测到可用宿主机 SSH 公钥，请手动注入 authorized_keys"
+    if ($userReady -and $hostUser -and $hostUser -ne "root" -and $hostUser -ne "administrator") {
+        Write-Warn "普通用户已创建，但宿主机 SSH 公钥未自动注入，请手动配置 /home/$hostUser/.ssh/authorized_keys"
+    } else {
+        Write-Warn "未检测到可用宿主机 SSH 公钥，请手动注入 authorized_keys"
+    }
 }
 
 # -- 10. 等待服务就绪 --

@@ -25,6 +25,7 @@
 
         <div class="nav-group-label">OpenClaw</div>
         <a href="#openclaw-engine" data-route="openclaw-engine"><span class="ico">✦</span><span>OpenClaw 控制台</span></a>
+        <a href="#openclaw-ai" data-route="openclaw-ai"><span class="ico">◈</span><span>接入模型配置</span></a>
         <a href="#messaging" data-route="messaging"><span class="ico">⌁</span><span>消息平台</span></a>
         <a href="#plugins" data-route="plugins"><span class="ico">◌</span><span>插件市场</span></a>
 
@@ -140,23 +141,12 @@
       </section>
 
       <!-- OpenClaw Engine -->
-      <section class="page" id="page-openclaw-engine" data-title="OpenClaw 引擎">
+      <section class="page" id="page-openclaw-engine" data-title="OpenClaw 控制台">
         <div class="grid">
-          <div class="oc-switch" style="grid-column: span 12;">
-            <button class="oc-switch-card active" data-oc-switch="openclaw-engine">
-              <div class="oc-switch-title">OpenClaw 引擎</div>
-              <div class="oc-switch-sub">安装、版本、Gateway 运行</div>
-            </button>
-            <button class="oc-switch-card" data-oc-switch="openclaw-ai">
-              <div class="oc-switch-title">AI 模型配置</div>
-              <div class="oc-switch-sub">Provider、模型与密钥</div>
-            </button>
-          </div>
-
           <div class="card" style="grid-column: span 12;">
             <div class="row" style="justify-content:space-between">
               <div>
-                <div style="font-weight:900;font-size:18px">OpenClaw 引擎</div>
+                <div style="font-weight:900;font-size:18px">OpenClaw 控制台</div>
                 <div class="muted small" style="margin-top:4px">安装 / 版本 / Gateway 运行状态</div>
               </div>
               <div class="row">
@@ -199,23 +189,12 @@
       </section>
 
       <!-- OpenClaw AI -->
-      <section class="page" id="page-openclaw-ai" data-title="AI 模型配置">
+      <section class="page" id="page-openclaw-ai" data-title="接入模型配置">
         <div class="grid">
-          <div class="oc-switch" style="grid-column: span 12;">
-            <button class="oc-switch-card" data-oc-switch="openclaw-engine">
-              <div class="oc-switch-title">OpenClaw 引擎</div>
-              <div class="oc-switch-sub">安装、版本、Gateway 运行</div>
-            </button>
-            <button class="oc-switch-card active" data-oc-switch="openclaw-ai">
-              <div class="oc-switch-title">AI 模型配置</div>
-              <div class="oc-switch-sub">Provider、模型与密钥</div>
-            </button>
-          </div>
-
           <div class="card" style="grid-column: span 12;">
             <div class="row" style="justify-content:space-between">
               <div>
-                <div style="font-weight:900;font-size:18px">AI 模型配置</div>
+                <div style="font-weight:900;font-size:18px">接入模型配置</div>
                 <div class="muted small" style="margin-top:4px">配置 API Key / 认证、模型选择</div>
               </div>
               <div class="row">
@@ -296,6 +275,9 @@
                     <div class="label"><span id="ai-apikey-label">API Key</span></div>
                     <input class="input" type="password" id="ai-apikey" placeholder="sk-..." autocomplete="off" />
                     <div class="muted small" style="margin-top:6px">同一个 Provider 支持多个 API Key，每个 Key 独立使用</div>
+                    <div class="row" style="gap:12px;margin:12px 0 0 0">
+                      <button class="btn btn-primary" id="btn-ai-add-key">添加此 API Key</button>
+                    </div>
                   </div>
                 </div>
                 <div style="grid-column: span 12;" id="ai-oauth-wrap" hidden>
@@ -306,11 +288,6 @@
                       <span class="muted small" id="ai-oauth-status">点击按钮启动设备授权流程</span>
                     </div>
                     <div id="ai-oauth-guide" style="color:#98989d;line-height:1.6;font-size:13px"></div>
-                  </div>
-                </div>
-                <div style="grid-column: span 12;">
-                  <div class="row" style="gap:12px;margin:8px 0">
-                    <button class="btn btn-primary" id="btn-ai-add-key">添加此 API Key</button>
                   </div>
                 </div>
               </div>
@@ -678,7 +655,7 @@
       <div id="wizard" hidden>
         <div class="toast">
           <div class="t"><b>首次使用提示</b></div>
-          <div class="s">检测到尚未完成模型配置。请到「AI 模型配置」完成基础设置。</div>
+          <div class="s">检测到尚未完成模型配置。请到「接入模型配置」完成基础设置。</div>
         </div>
       </div>
     </main>
