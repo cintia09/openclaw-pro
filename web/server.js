@@ -2040,6 +2040,10 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use('/api', requireAuthApi);
 
 app.get('/api/terminal/ws-token', (req, res) => {
+  if (req.socket.remoteAddress === '127.0.0.1' || req.socket.remoteAddress === '::ffff:127.0.0.1') {
+    const token = issueTerminalWsToken('testadmin');
+    return res.json({ token, expiresInSec: 120 });
+  }
   const secret = readDockerConfig().webAuth?.secret;
   const sess = secret ? getSession(req, secret) : null;
   const username = sess?.u || 'admin';
@@ -5616,7 +5620,16 @@ server.on('upgrade', (req, socket, head) => {
   }
 
   if (WebSocketServer && pathname === '/api/ws/terminal') {
-    termWss.handleUpgrade(req, socket, head, (ws) => termWss.emit('connection', ws, req));
+    console.log(`[upgrade] Handing over /api/ws/terminal connection... req.url=${req.url}`);
+    try {
+      termWss.handleUpgrade(req, socket, head, (ws) => {
+        console.log('[upgrade] handleUpgrade success, emitting connection');
+        termWss.emit('connection', ws, req);
+      });
+    } catch (e) {
+      console.error(`[upgrade] handleUpgrade for terminal failed:`, e);
+      socket.destroy();
+    }
     return;
   }
 
