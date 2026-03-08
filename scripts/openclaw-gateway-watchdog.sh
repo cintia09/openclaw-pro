@@ -43,6 +43,8 @@ LAST_PID=""
 STARTUP_OLD_PIDS=""
 LAST_IDLE_RUNTIME_LOG_TS=0
 IDLE_RUNTIME_LOG_INTERVAL=300
+HEARTBEAT_INTERVAL=300
+LAST_HEARTBEAT_TS=0
 
 log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
@@ -601,6 +603,14 @@ while true; do
     else
       log "Gateway starting up (${uptime}s/${STARTUP_TIMEOUT}s)..."
     fi
+  fi
+
+  # 心跳日志：每 HEARTBEAT_INTERVAL 秒输出一次，证明 watchdog 还活着
+  _now_ts=$(date +%s)
+  if (( _now_ts - LAST_HEARTBEAT_TS >= HEARTBEAT_INTERVAL )); then
+    LAST_HEARTBEAT_TS=$_now_ts
+    _gw_pid=$(get_gateway_pid 2>/dev/null || true)
+    log "[wd][heartbeat] pid=$$ gw_pid=${_gw_pid:-none} port_ok=$(is_port_listening && echo y || echo n)"
   fi
 
   trim_log
