@@ -542,7 +542,24 @@ acquire_lock() {
 if ! acquire_lock; then
   exit 0
 fi
-trap 'rm -rf "$LOCK_DIR" >/dev/null 2>&1 || true' EXIT
+
+# Signal trap: log reason before exit so we can diagnose unexpected watchdog deaths
+_watchdog_signal_handler() {
+  local sig="$1"
+  log "[wd][signal] received SIG${sig} (pid=$$), exiting"
+  rm -rf "$LOCK_DIR" >/dev/null 2>&1 || true
+  exit 0
+}
+trap '_watchdog_signal_handler TERM' TERM
+trap '_watchdog_signal_handler HUP'  HUP
+trap '_watchdog_signal_handler INT'  INT
+trap '_watchdog_signal_handler PIPE' PIPE
+trap '_watchdog_signal_handler USR1' USR1
+trap '_watchdog_signal_handler USR2' USR2
+trap 'log "[wd][exit] watchdog exiting (pid=$$)"; rm -rf "$LOCK_DIR" >/dev/null 2>&1 || true' EXIT
+
+# ERR trap: log unexpected errors (set -u causes ERR on unbound variables)
+trap 'log "[wd][error] unexpected error at line $LINENO (pid=$$): last command exit=$?"' ERR
 
 mkdir -p "$BACKUP_DIR"
 
