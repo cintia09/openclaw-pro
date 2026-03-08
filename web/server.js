@@ -3212,11 +3212,13 @@ app.get('/api/status', (req, res) => {
   const now = Date.now();
   const isSlow = statusElapsed > STATUS_LOG_SLOW_THRESHOLD_MS;
   const slowLogDue = !statusLogState.lastSlowLogAt || (now - statusLogState.lastSlowLogAt) >= STATUS_LOG_SLOW_THROTTLE_MS;
-  if (debugMode || changed || (isSlow && slowLogDue)) {
-    const reason = debugMode ? 'debug' : (changed ? 'changed' : 'slow-throttled');
+  // 仅在状态变化或异常(gateway/caddy 挂掉)时打印，正常慢请求不再打印
+  const isAbnormal = !status.gateway || !status.caddy;
+  if (debugMode || changed || isAbnormal) {
+    const reason = debugMode ? 'debug' : (changed ? 'changed' : (isAbnormal ? 'abnormal' : 'slow'));
     console.log(`[status] reason=${reason} elapsed=${statusElapsed}ms gateway=${status.gateway} caddy=${status.caddy} version=${status.version}`);
   }
-  if (isSlow && (debugMode || changed || slowLogDue)) {
+  if (isSlow && (debugMode || changed || isAbnormal || slowLogDue)) {
     statusLogState.lastSlowLogAt = now;
   }
 
