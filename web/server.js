@@ -466,6 +466,59 @@ function repairModelsJsonApiKeys() {
 }
 setTimeout(repairModelsJsonApiKeys, 3000);
 
+// 启动时确保 models.json 中的 models 数组包含已配置的模型（避免 OpenClaw 发送不兼容参数）
+function syncConfiguredModelsToModelsJson() {
+  try {
+    const modelsPath = '/root/.openclaw/agents/main/agent/models.json';
+    const configPath = '/root/.openclaw/openclaw.json';
+    if (!fs.existsSync(modelsPath) || !fs.existsSync(configPath)) return;
+    const config = readJson(configPath, {});
+    const models = readJson(modelsPath, { providers: {} });
+    if (!models?.providers) return;
+    const defaults = config?.agents?.defaults || {};
+    // 收集所有已配置的模型 (provider/modelId)
+    const configuredModels = [];
+    const primary = defaults.model?.primary;
+    if (primary && primary.includes('/')) configuredModels.push(primary);
+    const fallbacks = defaults.model?.fallbacks || [];
+    for (const fb of fallbacks) {
+      if (fb && fb.includes('/')) configuredModels.push(fb);
+    }
+    const subPrimary = typeof defaults.subagents?.model === 'string'
+      ? defaults.subagents.model
+      : defaults.subagents?.model?.primary;
+    if (subPrimary && subPrimary.includes('/')) configuredModels.push(subPrimary);
+    const subFb = Array.isArray(defaults.subagents?.model?.fallbacks) ? defaults.subagents.model.fallbacks : [];
+    for (const fb of subFb) {
+      if (fb && fb.includes('/')) configuredModels.push(fb);
+    }
+    let changed = false;
+    for (const modelStr of configuredModels) {
+      const [provName, modelId] = modelStr.split('/');
+      const prov = models.providers[provName];
+      if (!prov) continue;
+      if (!prov.models) prov.models = [];
+      if (!prov.models.find(m => m.id === modelId)) {
+        prov.models.push({
+          id: modelId, name: modelId, api: 'openai-completions',
+          reasoning: false, input: ['text'],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128000, maxTokens: 4096
+        });
+        changed = true;
+        console.log(`[sync] 已将模型 ${modelStr} 添加到 models.json`);
+      }
+    }
+    if (changed) {
+      writeJson(modelsPath, models);
+      console.log('[sync] models.json 已更新');
+    }
+  } catch (e) {
+    console.warn('[sync] models.json 同步失败:', e.message);
+  }
+}
+setTimeout(syncConfiguredModelsToModelsJson, 4000);
+
 function ensureGatewayControlUiAccessForRequest(req) {
   let changed = false;
   try {
@@ -1015,7 +1068,17 @@ function ensureGatewayWatchdog(callback) {
     'sleep 1',
     'pgrep -f "[o]penclaw-gateway-watchdog.sh" >/dev/null 2>&1'
   ].join('\n');
-  exec(`bash --noprofile --norc -lc '${cmd}'`, { env: { ...process.env, TERM: 'dumb' } }, callback);
+  // 清除容器构建时遗留的旧版本环境变量，让 watchdog 从 package.json 重新检测
+  const cleanEnv = { ...process.env, TERM: 'dumb' };
+  delete cleanEnv.OPENCLAW_VERSION;
+  delete cleanEnv.OPENCLAW_SERVICE_VERSION;
+  exec(`bash --noprofile --norc -lc '${cmd}'`, { env: cleanEnv }, (err, stdout, stderr) => {
+    if (err) {
+      return callback(err, stdout, stderr);
+    }
+    console.log('[watchdog] Watchdog started or already running');
+    callback(null, 'watchdog started', '');
+  });
 }
 
 function ensureOpenClawSourceEntryCompat() {
@@ -1047,23 +1110,6 @@ function ensureOpenClawSourceEntryCompat() {
   } catch (e) {
     return { checked: true, repaired: false, reason: e?.message || 'unknown' };
   }
-}
-
-function ensureGatewayWatchdog(callback) {
-  const cmd = [
-    'pgrep -f "[o]penclaw-gateway-watchdog.sh" >/dev/null 2>&1 && exit 0',
-    `[ -x "${GATEWAY_WATCHDOG_SCRIPT}" ] || exit 21`,
-    'nohup "' + GATEWAY_WATCHDOG_SCRIPT + '" >> /var/log/openclaw-watchdog.log 2>&1 &',
-    'sleep 1',
-    'pgrep -f "[o]penclaw-gateway-watchdog.sh" >/dev/null 2>&1'
-  ].join('\n');
-  exec(`bash --noprofile --norc -lc '${cmd}'`, { env: { ...process.env, TERM: 'dumb' } }, (err, stdout, stderr) => {
-    if (err) {
-      return callback(err, stdout, stderr);
-    }
-    console.log('[watchdog] Watchdog started or already running');
-    callback(null, 'watchdog started', '');
-  });
 }
 
 function stripAnsi(input) {
