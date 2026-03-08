@@ -3129,7 +3129,11 @@ app.post('/api/ai/config', async (req, res) => {
           authProfiles = JSON.parse(authData);
         } catch { authProfiles = {}; }
 
-        authProfiles[providerName] = { type: 'apikey', key: apiKey };
+        authProfiles[providerName] = { 
+          provider: providerName, 
+          mode: 'api_key', 
+          apiKey: apiKey 
+        };
         const authJson = JSON.stringify(authProfiles, null, 2);
         await new Promise((resolve) => {
           exec(`sudo tee "${authProfilesPath}" > /dev/null << 'AUTHEOF'\n${authJson}\nAUTHEOF\nsudo chmod 600 "${authProfilesPath}"`, { timeout: 5000 }, () => resolve());
