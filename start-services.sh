@@ -491,10 +491,7 @@ fi
 
 GATEWAY_PID=""
 GATEWAY_WATCHDOG_PID=""
-BROWSER_ENABLED="false"
 CERT_MODE="letsencrypt"
-NOVNC_PID=""
-CHROME_PID=""
 CADDY_PID=""
 GATEWAY_WATCHDOG_SCRIPT="/usr/local/bin/openclaw-gateway-watchdog.sh"
 OPENCLAW_STATE_ROOT="/root/.openclaw"
@@ -790,11 +787,7 @@ gateway_is_healthy() {
 }
 
 if [ -f "$CONFIG_FILE" ]; then
-    raw_browser_enabled=$(jq -r '.browserEnabled // "false"' "$CONFIG_FILE" 2>/dev/null)
     raw_cert_mode=$(jq -r '.cert_mode // "letsencrypt"' "$CONFIG_FILE" 2>/dev/null)
-    if [ "$raw_browser_enabled" = "true" ]; then
-        BROWSER_ENABLED="true"
-    fi
     if [ "$raw_cert_mode" = "internal" ]; then
         CERT_MODE="internal"
     fi
@@ -831,31 +824,7 @@ for i in 1 2 3 4 5 6 7 8 9 10; do
     sleep 1
 done
 
-# --- 3. 启动浏览器服务（可选） ---
-if [ "$BROWSER_ENABLED" = "true" ]; then
-    echo "[start-services] Browser enabled: starting noVNC/Chromium..."
-    Xvfb :99 -screen 0 1280x720x24 -nolisten tcp &
-    sleep 1
-    x11vnc -display :99 -nopw -listen 127.0.0.1 -forever -shared -bg -o "$LOG_DIR/x11vnc.log"
-
-    # 找到 noVNC web 目录
-    NOVNC_DIR="/usr/share/novnc"
-    [ -d "$NOVNC_DIR" ] || NOVNC_DIR="/usr/share/javascript/novnc"
-
-    websockify --web "$NOVNC_DIR" 6080 127.0.0.1:5900 >> "$LOG_DIR/novnc.log" 2>&1 &
-    NOVNC_PID=$!
-    echo "[start-services] noVNC PID: $NOVNC_PID (port 6080)"
-
-    # 启动 Chromium（Cookie 持久化到 /root/.chromium-data）
-    CHROME_BIN=$(which chromium-browser 2>/dev/null || which chromium 2>/dev/null || which google-chrome-stable 2>/dev/null || echo "chromium-browser")
-    DISPLAY=:99 "$CHROME_BIN" --no-sandbox --disable-gpu --disable-dev-shm-usage --window-size=1280,720 --user-data-dir=/root/.chromium-data "about:blank" >> "$LOG_DIR/chromium.log" 2>&1 &
-    CHROME_PID=$!
-    echo "[start-services] Chromium PID: $CHROME_PID"
-else
-    echo "[start-services] Browser disabled by config (browserEnabled=false), skipping noVNC/Chromium"
-fi
-
-# --- 4. 启动 Caddy (如果配置了HTTPS) ---
+# --- 3. 启动 Caddy (如果配置了HTTPS) ---
 if [ -f "$CONFIG_FILE" ]; then
     DOMAIN=$(jq -r '.domain // empty' "$CONFIG_FILE" 2>/dev/null)
     AUTH_USER=$(jq -r '.auth_user // empty' "$CONFIG_FILE" 2>/dev/null)

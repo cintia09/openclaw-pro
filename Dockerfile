@@ -42,20 +42,6 @@ RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
     && tar xzf /tmp/caddy.tar.gz -C /usr/local/bin/ caddy && rm /tmp/caddy.tar.gz \
     && chmod +x /usr/local/bin/caddy
 
-# 浏览器服务（noVNC远程访问）
-RUN apt-get update && apt-get install -y \
-    xvfb x11vnc novnc websockify supervisor \
-    fonts-noto-cjk fonts-noto-color-emoji \
-    && rm -rf /var/lib/apt/lists/*
-
-# Chromium（Ubuntu 24.04 Docker环境）
-RUN wget -q --tries=3 --retry-connrefused https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
-    && (dpkg -i google-chrome-stable_current_amd64.deb || apt-get -f install -y) \
-    && rm -f google-chrome-stable_current_amd64.deb \
-    && rm -rf /var/lib/apt/lists/*
-
-ENV DISPLAY=:99
-
 # LightGBM (交易系统推理用)
 RUN pip3 install --break-system-packages lightgbm pandas numpy baostock
 

@@ -3087,7 +3087,6 @@ app.get('/api/status', (req, res) => {
   dockerConfig = readDockerConfig();
   status.domain = dockerConfig.domain || '';
   status.port = dockerConfig.port || 18789;
-  status.browserEnabled = !!dockerConfig.browserEnabled;
   status.gatewayWatchdog = runCommandOk('pgrep -f "[o]penclaw-gateway-watchdog.sh" >/dev/null 2>&1', 1200);
   const gatewayWarmupByProcess = !!(
     status.openclawInstalled
@@ -3111,18 +3110,6 @@ app.get('/api/status', (req, res) => {
   );
   status.gatewayStarting = gatewayWarmupByProcess || gatewayRestartingByOp || gatewayWarmupByWatchdog;
 
-  if (status.browserEnabled) {
-    status.browser = runCommandOk('pgrep -f "websockify.*6080" >/dev/null 2>&1', 1200);
-    if (!status.browser) {
-      const e = new Error('browser bridge not detected');
-      if (req.query.debug === '1') {
-        console.log(`[status] browser check miss: ${e.message || e}`);
-      }
-    }
-  } else {
-    status.browser = false;
-  }
-
   status.terminal = {
     wsEnabled: !!terminalBackendState.wsEnabled,
     ready: !!terminalBackendState.ready,
@@ -3137,8 +3124,6 @@ app.get('/api/status', (req, res) => {
     Number(status.gateway),
     Number(status.gatewayStarting),
     Number(status.caddy),
-    Number(status.browser),
-    Number(status.browserEnabled),
     Number(status.gatewayWatchdog),
     status.version || '',
     status.openclawVersion || '',
@@ -3154,34 +3139,13 @@ app.get('/api/status', (req, res) => {
   const slowLogDue = !statusLogState.lastSlowLogAt || (now - statusLogState.lastSlowLogAt) >= STATUS_LOG_SLOW_THROTTLE_MS;
   if (debugMode || changed || (isSlow && slowLogDue)) {
     const reason = debugMode ? 'debug' : (changed ? 'changed' : 'slow-throttled');
-    console.log(`[status] reason=${reason} elapsed=${statusElapsed}ms gateway=${status.gateway} caddy=${status.caddy} browser=${status.browser} version=${status.version}`);
+    console.log(`[status] reason=${reason} elapsed=${statusElapsed}ms gateway=${status.gateway} caddy=${status.caddy} version=${status.version}`);
   }
   if (isSlow && (debugMode || changed || slowLogDue)) {
     statusLogState.lastSlowLogAt = now;
   }
 
   res.json(status);
-});
-
-app.get('/api/docker-config', (req, res) => {
-  const cfg = readDockerConfig();
-  res.json({ browserEnabled: !!cfg.browserEnabled });
-});
-
-app.post('/api/docker-config', (req, res) => {
-  try {
-    const cfg = readDockerConfig();
-    const updates = req.body || {};
-    if (typeof updates.browserEnabled === 'boolean') {
-      cfg.browserEnabled = updates.browserEnabled;
-    }
-    writeDockerConfig(cfg);
-    res.json({ success: true, browserEnabled: !!cfg.browserEnabled, restartRequired: true });
-  } catch (e) {
-    const detail = e?.message || String(e || '配置恢复失败');
-    console.error('[openclaw][repair] failed:', detail);
-    res.status(500).json({ success: false, error: detail });
-  }
 });
 
 // ============================================================
@@ -3788,6 +3752,81 @@ app.post('/api/ai/config', async (req, res) => {
       models = JSON.parse(fs.readFileSync(modelsPath, 'utf8'));
     } catch { models = { providers: {} }; }
 
+    // ---- 验证: 检查每个模型的 provider 是否有有效的 API Key / 授权 ----
+    const authProfilesPath = '/root/.openclaw/agents/main/agent/auth-profiles.json';
+    let authProfiles = {};
+    try { authProfiles = JSON.parse(fs.readFileSync(authProfilesPath, 'utf8')); } catch { authProfiles = {}; }
+
+    // 收集所有有有效 key 的 provider
+    const validProviders = new Set();
+    const profiles = authProfiles.profiles || {};
+    for (const [, profile] of Object.entries(profiles)) {
+      if (!profile?.provider) continue;
+      const rawKey = profile.apiKey || profile.key || profile.token || '';
+      const hasKey = !!rawKey && rawKey !== 'YOUR_API_KEY';
+      const isOAuth = profile.mode === 'oauth' || profile.mode === 'device' || profile.mode === 'token' || profile.type === 'token';
+      if (hasKey || isOAuth) validProviders.add(profile.provider);
+    }
+    // 同时检查 models.json 中直接配置了有效 key 的 provider
+    for (const [pName, prov] of Object.entries(models.providers || {})) {
+      const rawKey = prov?.apiKey || '';
+      if (rawKey && rawKey !== 'YOUR_API_KEY') validProviders.add(pName);
+      // 检查旧格式顶级 auth-profiles
+      const topProfile = authProfiles[pName];
+      if (topProfile?.mode === 'oauth' || topProfile?.mode === 'device' || topProfile?.mode === 'token') {
+        validProviders.add(pName);
+      }
+    }
+
+    // 收集当前已存在于配置中的模型（这些跳过验证）
+    const existingModels = new Set();
+    const curDefaults = config?.agents?.defaults || {};
+    if (curDefaults.model?.primary) existingModels.add(curDefaults.model.primary);
+    if (Array.isArray(curDefaults.model?.fallbacks)) curDefaults.model.fallbacks.forEach(m => m && existingModels.add(m));
+    const curSub = curDefaults.subagents?.model;
+    if (typeof curSub === 'string' && curSub) existingModels.add(curSub);
+    if (curSub?.primary) existingModels.add(curSub.primary);
+    if (Array.isArray(curSub?.fallbacks)) curSub.fallbacks.forEach(m => m && existingModels.add(m));
+
+    // 收集本次要保存的所有模型
+    const allModelsToSave = [];
+    if (primaryModel) allModelsToSave.push({ model: primaryModel, role: '主模型' });
+    if (subModel) allModelsToSave.push({ model: subModel, role: '子代理模型' });
+    if (fallbacks) {
+      const addFb = (arr, label) => {
+        if (!Array.isArray(arr)) return;
+        arr.filter(Boolean).forEach(m => allModelsToSave.push({ model: m, role: label }));
+      };
+      if (Array.isArray(fallbacks)) {
+        addFb(fallbacks, '主代理 Fallback');
+      } else if (typeof fallbacks === 'object') {
+        addFb(fallbacks.primary, '主代理 Fallback');
+        addFb(fallbacks.sub, '子代理 Fallback');
+      }
+    }
+
+    // 验证每个模型
+    const errors = [];
+    for (const { model, role } of allModelsToSave) {
+      if (!model || !model.includes('/')) continue;
+      // 已存在于当前配置中的模型跳过验证
+      if (existingModels.has(model)) continue;
+      const [prov] = model.split('/');
+      // 检查 provider 是否有有效 key
+      if (!validProviders.has(prov)) {
+        errors.push(`${role} "${model}" 的 provider "${prov}" 没有配置有效的 API Key 或授权，请先添加`);
+      }
+      // 检查模型是否在目录中被支持
+      const [provName, modId] = model.split('/');
+      const catalogHit = lookupModelCapabilities(provName, modId);
+      if (!catalogHit) {
+        errors.push(`${role} "${model}" 未在 OpenClaw 模型目录中找到，请确认模型名称是否正确`);
+      }
+    }
+    if (errors.length > 0) {
+      return res.status(400).json({ error: errors.join('；') });
+    }
+
     // ---- 更新 openclaw.json ----
     if (!config.agents) config.agents = {};
     if (!config.agents.defaults) config.agents.defaults = {};
@@ -3901,7 +3940,22 @@ app.post('/api/ai/config', async (req, res) => {
     writeOpenClawConfig(config);
     fs.writeFileSync(modelsPath, JSON.stringify(models, null, 2), { encoding: 'utf8', mode: 0o600 });
 
-    res.json({ success: true, message: '模型配置已保存' });
+    // 配置保存成功后，触发 gateway 重启以加载新配置
+    let gatewayRestarting = false;
+    try {
+      const opState = getOpenClawOperationState();
+      if (opState.type === 'idle') {
+        setOpenClawOperationState('restarting_gateway');
+        gatewayRestarting = true;
+        console.log('[ai/config] 模型配置已保存，已触发 gateway 重启');
+      } else {
+        console.log(`[ai/config] 模型配置已保存，gateway 重启跳过（当前操作: ${opState.type}）`);
+      }
+    } catch (restartErr) {
+      console.warn('[ai/config] 触发 gateway 重启失败:', restartErr.message);
+    }
+
+    res.json({ success: true, message: '模型配置已保存' + (gatewayRestarting ? '，Gateway 正在重启以加载新配置' : ''), gatewayRestarting });
   } catch (err) {
     console.error('[ai/config] Error saving config:', err);
     res.status(500).json({ error: '保存配置失败: ' + (err?.message || '未知错误') });
@@ -6498,6 +6552,10 @@ function sanitizeLogLine(line) {
   if (typeof line !== 'string') return null;
   // 过滤掉频繁的 webchat connected/disconnected 日志
   if (/\[ws\]\s+webchat\s+(connected|disconnected)/i.test(line)) {
+    return null;
+  }
+  // 过滤掉高频 ws 消息日志（device.pair.list, node.list, chat.history 等）
+  if (/\[ws\]\s+⇄\s+res\s+✓\s+(device\.pair\.list|node\.list|chat\.history|device\.list)\b/.test(line)) {
     return null;
   }
   const keyRegexes = [

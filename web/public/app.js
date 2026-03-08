@@ -337,7 +337,6 @@ const ROUTES = [
   { id: 'messaging', title: '消息平台' },
   { id: 'trading', title: '交易系统' },
   { id: 'plugins', title: '插件市场' },
-  { id: 'browser', title: '浏览器' },
   { id: 'terminal', title: '终端' },
   { id: 'settings', title: '系统设置' },
   { id: 'logs', title: '日志' },
@@ -388,8 +387,7 @@ function setActiveRoute(route){
     setTimeout(() => ensureTerminalViewportFitted(), 600);
     focusTerminalInput();
   }
-  if (route === 'browser') loadBrowserFrame();
-  if (route === 'settings') { loadBrowserSettings(); renderDetectedTimezone(); checkForUpdate(); }
+  if (route === 'settings') { renderDetectedTimezone(); checkForUpdate(); }
   if (route === 'logs') {
     // 重置 WebSocket 日志去重状态
     shownWsLogIds.clear();
@@ -406,30 +404,6 @@ function renderDetectedTimezone(){
     timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   } catch {}
   el.textContent = `${timezone}（自动探测）`;
-}
-
-function loadBrowserFrame(){
-  const frame = $('browser-frame');
-  if (!frame) return;
-  const vncSrc = frame.dataset.vncSrc;
-  if (vncSrc && frame.src !== location.origin + vncSrc) {
-    frame.src = vncSrc;
-  }
-}
-
-function setBrowserNavVisible(visible){
-  const link = q('#nav a[data-route="browser"]');
-  if (!link) return;
-  link.style.display = visible ? '' : 'none';
-}
-
-async function loadBrowserSettings(){
-  const d = await api('/api/docker-config');
-  if (!d || d.error) return;
-  if ($('settings-browser-enabled')) {
-    $('settings-browser-enabled').value = String(!!d.browserEnabled);
-  }
-  setBrowserNavVisible(!!d.browserEnabled);
 }
 
 window.addEventListener('hashchange', ()=> setActiveRoute(getRouteFromHash()));
@@ -2175,7 +2149,6 @@ const AI_PROVIDERS = {
 
 // --- 多 API Key 管理 ---
 let aiConfiguredKeys = []; // [{id, provider, keyMasked, baseUrl, authType, models:[]}]
-let aiAvailableModels = [];
 let aiAuthTaskTimer = null;
 let lastFocusedModelInput = 'ai-model-primary';
 // 保存活跃的 OAuth 授权状态，切换 provider 时可恢复
@@ -2258,91 +2231,6 @@ function updateAiProviderUI() {
     // OAuth 模式隐藏添加按钮（授权完成后自动添加）
     addBtn.hidden = config.authType === 'oauth';
   }
-
-  updateFetchModelsButton();
-}
-
-function updateFetchModelsButton() {
-  const btn = $('btn-ai-fetch-models');
-  const hint = $('ai-fetch-hint');
-  // 新增 key 面板的获取模型按钮始终隐藏（用户需先添加 key 验证通过后自动获取）
-  if (btn) btn.hidden = true;
-  if (hint) hint.hidden = true;
-}
-
-async function fetchAvailableModels() {
-  const provider = $('ai-provider')?.value || '';
-  const apiKey = $('ai-apikey')?.value?.trim() || '';
-  const baseUrl = $('ai-baseurl')?.value?.trim() || '';
-  const config = AI_PROVIDERS[provider] || {};
-
-  if (config.authType !== 'oauth' && !apiKey) {
-    appendAiAuthLog('[fetch] 请先输入 API Key', 'error');
-    return;
-  }
-
-  appendAiAuthLog(`[fetch] 正在获取 ${config.name || provider} 的模型列表...`);
-
-  try {
-    // 所有 provider 都通过后端 API 获取真实模型列表
-    const res = await api('/api/ai/models', {
-      method: 'POST',
-      body: { provider, apiKey, baseUrl }
-    });
-    if (res.error && !res.models) {
-      appendAiAuthLog(`[fetch] 获取失败: ${res.error}`, 'error');
-      return;
-    }
-    aiAvailableModels = res.models || [];
-    renderModelsList();
-    const srcLabel = res.source === 'api' ? '(来自 API)' : res.source === 'builtin' ? '(内置列表)' : '';
-    appendAiAuthLog(`[fetch] 成功获取 ${aiAvailableModels.length} 个模型 ${srcLabel}`, 'success');
-    if (res.error && res.source === 'builtin') {
-      appendAiAuthLog(`[fetch] ⚠️ ${res.error}`, 'error');
-    }
-  } catch (e) {
-    appendAiAuthLog(`[fetch] 错误: ${e.message}`, 'error');
-  }
-}
-
-function renderModelsList() {
-  const wrap = $('ai-models-list-wrap');
-  const list = $('ai-models-list');
-  if (!wrap || !list) return;
-
-  if (aiAvailableModels.length === 0) {
-    wrap.hidden = true;
-    return;
-  }
-
-  wrap.hidden = false;
-  list.innerHTML = aiAvailableModels.map(m => {
-    const id = m.id || m;
-    const name = m.name || m.id || m;
-    return `<div class="model-item" data-model="${id}" style="padding:6px 12px;margin:3px 0;background:#232326;border-radius:6px;cursor:pointer;display:flex;justify-content:space-between;align-items:center" onmouseover="this.style.background='#3a3a3e'" onmouseout="this.style.background='#232326'">
-      <div>
-        <span style="font-weight:600;font-size:13px">${name}</span>
-        <span style="font-size:11px;color:#86868b;margin-left:8px;font-family:var(--mono)">${id}</span>
-      </div>
-    </div>`;
-  }).join('');
-
-  list.querySelectorAll('.model-item').forEach(item => {
-    item.addEventListener('click', () => {
-      const modelId = item.dataset.model;
-      const target = $(lastFocusedModelInput) || $('ai-model-primary');
-      if (target) {
-        // 对 fallback 字段追加而非替换
-        if (lastFocusedModelInput.includes('fallback') && target.value.trim()) {
-          target.value = target.value.trim() + ', ' + modelId;
-        } else {
-          target.value = modelId;
-        }
-        const fieldLabel = target.closest('.field')?.querySelector('.label span')?.textContent || lastFocusedModelInput;
-        appendAiAuthLog(`[select] 已填充 ${fieldLabel}: ${modelId}`);
-      }
-    });
-  });
 }
 
 function renderConfiguredKeys() {
@@ -2709,8 +2597,11 @@ async function saveAIConfig() {
       return;
     }
 
-    toast('保存成功', '模型配置已保存');
+    toast('保存成功', res.message || '模型配置已保存');
     appendAiAuthLog('[save] 模型配置保存成功', 'success');
+    if (res.gatewayRestarting) {
+      appendAiAuthLog('[save] ♻ Gateway 正在重启以加载新配置，请稍候...', 'success');
+    }
     await loadAIConfig();
   } catch (e) {
     toast('保存失败', e.message);
@@ -2843,9 +2734,7 @@ async function startOAuthLogin() {
 
 // 事件监听
 $('ai-provider')?.addEventListener('change', updateAiProviderUI);
-$('ai-apikey')?.addEventListener('input', updateFetchModelsButton);
 $('btn-ai-load')?.addEventListener('click', loadAIConfig);
-$('btn-ai-fetch-models')?.addEventListener('click', fetchAvailableModels);
 $('btn-ai-oauth-login')?.addEventListener('click', startOAuthLogin);
 $('btn-ai-save')?.addEventListener('click', saveAIConfig);
 $('btn-ai-add-key')?.addEventListener('click', addAiKey);
@@ -3642,17 +3531,6 @@ $('btn-password').addEventListener('click', async ()=>{
   }
 });
 
-$('btn-browser-save')?.addEventListener('click', async ()=> {
-  const browserEnabled = $('settings-browser-enabled')?.value === 'true';
-  const r = await api('/api/docker-config', { method: 'POST', body: { browserEnabled } });
-  if (r.success) {
-    setBrowserNavVisible(browserEnabled);
-    toast('浏览器设置已保存', '重启容器后生效（docker restart openclaw-pro）');
-  } else {
-    toast('保存失败', r.error || '');
-  }
-});
-
 // ------------------------
 // Logout
 // ------------------------
@@ -3666,7 +3544,6 @@ $('btn-logout').addEventListener('click', async ()=>{
 // ------------------------
 setActiveRoute(getRouteFromHash());
 refreshStatus();
-loadBrowserSettings();
 setInterval(refreshStatus, 30000);
 setInterval(() => {
   const route = getRouteFromHash();
