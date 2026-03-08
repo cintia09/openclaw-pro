@@ -3525,6 +3525,24 @@ app.post('/api/ai/auth/oauth/login', async (req, res) => {
         writeAiModels(modelsData);
         appendAiTaskLog(task, '[ai] 已更新 models.json 中的 github-copilot 配置\n');
 
+        // Step 5: 同步 openclaw.json 中的 models.providers（确保 gateway 能识别）
+        const configPath = '/root/.openclaw/openclaw.json';
+        let ocConfig = {};
+        try { ocConfig = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch { ocConfig = {}; }
+        if (!ocConfig.models) ocConfig.models = {};
+        if (!ocConfig.models.providers) ocConfig.models.providers = {};
+        if (!ocConfig.models.providers['github-copilot']) {
+          ocConfig.models.providers['github-copilot'] = {
+            baseUrl: 'https://api.githubcopilot.com',
+            api: 'openai-completions',
+            models: []
+          };
+        }
+        ocConfig.models.providers['github-copilot'].baseUrl = 'https://api.githubcopilot.com';
+        // 注: openclaw.json 中不写 apiKey（token 式授权由 gateway 自行交换）
+        writeOpenClawConfig(ocConfig);
+        appendAiTaskLog(task, '[ai] 已同步 openclaw.json 中的 github-copilot provider\n');
+
         task.status = 'success';
         task.exitCode = 0;
         appendAiTaskLog(task, '[ai] GitHub Copilot 授权完成 ✓\n');
@@ -3933,9 +3951,30 @@ app.post('/api/ai/config', async (req, res) => {
     // 同时写入 openclaw.json 的 models.providers（确保 gateway 重启后不丢失）
     if (!config.models) config.models = {};
     if (!config.models.providers) config.models.providers = {};
+
+    // 辅助：确保 config.models.providers 中存在指定 provider
+    // 从 models.json 复制 provider 基本信息（不含 apiKey）
+    const ensureConfigProvider = (provName) => {
+      if (!config.models.providers[provName]) {
+        const src = models.providers[provName] || {};
+        config.models.providers[provName] = {
+          baseUrl: src.baseUrl || getDefaultBaseUrl(provName),
+          api: src.api || 'openai-completions',
+          models: []
+        };
+        // 复制 apiKey（如果 models.json 中有有效的）
+        if (src.apiKey && src.apiKey !== 'YOUR_API_KEY') {
+          config.models.providers[provName].apiKey = src.apiKey;
+        }
+        console.log(`[ai/config] 在 openclaw.json 中创建 provider: ${provName}`);
+      }
+    };
+
+    ensureConfigProvider(providerName);
     ensureModelEntry(config.models.providers, providerName, modelId);
     if (subModel && subModel.includes('/')) {
       const [subProv] = subModel.split('/');
+      ensureConfigProvider(subProv);
       ensureModelEntry(config.models.providers, subProv, subModel.split('/')[1]);
     }
     // 处理 fallback 模型（写入 models.json 和 openclaw.json）
@@ -3951,6 +3990,7 @@ app.post('/api/ai/config', async (req, res) => {
     for (const fb of allFbModels) {
       if (!fb || !fb.includes('/')) continue;
       const [fbProv, fbModel] = fb.split('/');
+      ensureConfigProvider(fbProv);
       ensureModelEntry(models.providers, fbProv, fbModel);
       ensureModelEntry(config.models.providers, fbProv, fbModel);
     }
