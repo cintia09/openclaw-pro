@@ -674,12 +674,43 @@ function syncConfiguredModelsToModelsJson() {
       } else {
         // 已存在时，用目录能力更新关键字段（保留用户自定义值）
         const existing = prov.models[existingIdx];
-        const fieldsToSync = ['reasoning', 'contextWindow', 'maxTokens', 'input', 'compat'];
+        const fieldsToSync = ['api', 'reasoning', 'contextWindow', 'maxTokens', 'input', 'compat'];
         for (const field of fieldsToSync) {
           if (entry[field] !== undefined && JSON.stringify(existing[field]) !== JSON.stringify(entry[field])) {
+            console.log(`[sync] 更新 ${modelStr}.${field}: ${JSON.stringify(existing[field])} → ${JSON.stringify(entry[field])}`);
             existing[field] = entry[field];
             configChanged = true;
           }
+        }
+      }
+      // 如果 catalog 指示不同的 api 类型，同步更新 provider 级别的 api
+      if (entry.api && prov.api && entry.api !== prov.api) {
+        console.log(`[sync] 更新 provider ${provName}.api: ${prov.api} → ${entry.api} (来自模型目录)`);
+        prov.api = entry.api;
+        configChanged = true;
+        // 同步更新该 provider 下已有模型的 api 字段（保持一致性）
+        for (const m of prov.models) {
+          if (m.api && m.api !== entry.api) {
+            // 查询 catalog 确认该模型的原生 api
+            const mCap = lookupModelCapabilities(provName, m.id);
+            const correctApi = mCap?.api || entry.api;
+            if (m.api !== correctApi) {
+              console.log(`[sync] 同步 ${provName}/${m.id}.api: ${m.api} → ${correctApi}`);
+              m.api = correctApi;
+            }
+          }
+        }
+      }
+    }
+    // 最终一致性检查：确保所有 provider 下模型的 api 与 catalog 一致
+    for (const [provName, prov] of Object.entries(config.models.providers)) {
+      if (!prov.models || !Array.isArray(prov.models)) continue;
+      for (const m of prov.models) {
+        const mCap = lookupModelCapabilities(provName, m.id);
+        if (mCap?.api && m.api !== mCap.api) {
+          console.log(`[sync] 修正 ${provName}/${m.id}.api: ${m.api} → ${mCap.api}`);
+          m.api = mCap.api;
+          configChanged = true;
         }
       }
     }
@@ -705,12 +736,38 @@ function syncConfiguredModelsToModelsJson() {
             console.log(`[sync] 已将模型 ${modelStr} 添加到 models.json`);
           } else {
             const existing = prov.models[existingIdx];
-            const fieldsToSync = ['reasoning', 'contextWindow', 'maxTokens', 'input', 'compat'];
+            const fieldsToSync = ['api', 'reasoning', 'contextWindow', 'maxTokens', 'input', 'compat'];
             for (const field of fieldsToSync) {
               if (entry[field] !== undefined && JSON.stringify(existing[field]) !== JSON.stringify(entry[field])) {
                 existing[field] = entry[field];
                 modelsChanged = true;
               }
+            }
+          }
+          // 同步 provider 级别的 api
+          if (entry.api && prov.api && entry.api !== prov.api) {
+            prov.api = entry.api;
+            modelsChanged = true;
+            // 同步更新该 provider 下已有模型的 api 字段
+            for (const m of prov.models) {
+              if (m.api && m.api !== entry.api) {
+                const mCap = lookupModelCapabilities(provName, m.id);
+                const correctApi = mCap?.api || entry.api;
+                if (m.api !== correctApi) {
+                  m.api = correctApi;
+                }
+              }
+            }
+          }
+        }
+        // 最终一致性检查
+        for (const [provName2, prov2] of Object.entries(models.providers)) {
+          if (!prov2.models || !Array.isArray(prov2.models)) continue;
+          for (const m of prov2.models) {
+            const mCap = lookupModelCapabilities(provName2, m.id);
+            if (mCap?.api && m.api !== mCap.api) {
+              m.api = mCap.api;
+              modelsChanged = true;
             }
           }
         }
@@ -3777,9 +3834,14 @@ app.post('/api/ai/config', async (req, res) => {
       } else {
         // 已存在时更新关键字段
         const existing = target[provName].models[existingIdx];
-        for (const field of ['reasoning', 'contextWindow', 'maxTokens', 'input', 'compat']) {
+        for (const field of ['api', 'reasoning', 'contextWindow', 'maxTokens', 'input', 'compat']) {
           if (entry[field] !== undefined) existing[field] = entry[field];
         }
+      }
+      // 同步 provider 级别的 api
+      if (entry.api && target[provName].api && entry.api !== target[provName].api) {
+        console.log(`[ensureModelEntry] 更新 provider ${provName}.api: ${target[provName].api} → ${entry.api}`);
+        target[provName].api = entry.api;
       }
     };
 
