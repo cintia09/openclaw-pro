@@ -2727,6 +2727,11 @@ async function pullTerminalFallbackLogs(){
 
 function startTerminalFallback(reason = ''){
   if (termFallbackTimer) return;
+  if (termEmulator) {
+    try { termEmulator.dispose(); } catch {}
+    termEmulator = null;
+    termFitAddon = null;
+  }
   $('term-state').textContent = '只读日志模式';
   termAppendText(`\n[terminal] 交互连接不可用，已切换只读日志模式${reason ? ` (${reason})` : ''}。\n`);
   pullTerminalFallbackLogs().catch(()=>{});
@@ -2918,6 +2923,11 @@ async function terminalConnect(){
         location.hash = 'terminal';
       }
       $('term-state').textContent = '已连接';
+
+      if (!termEmulator && window.Terminal) {
+        initTerminalEmulator();
+      }
+
       if (termEmulator) {
         try { termEmulator.clear(); } catch {}
       } else if ($('terminal')) {
