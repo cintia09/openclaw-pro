@@ -466,8 +466,172 @@ function repairModelsJsonApiKeys() {
 }
 setTimeout(repairModelsJsonApiKeys, 3000);
 
+// ============================================================
+// OpenClaw 内置模型目录 — 启动时从 models.generated.js 加载
+// 用于：保存配置时自动查询模型能力（reasoning, contextWindow 等）
+// ============================================================
+let _openclawModelCatalog = null; // { provider: { modelId: { name, api, reasoning, input, contextWindow, maxTokens, compat } } }
+
+// 我们的 provider 名称 → OpenClaw 内置 provider 名称 映射
+const PROVIDER_TO_OPENCLAW_MAP = {
+  'gemini': 'google',
+  'google': 'google',
+  'openai': 'openai',
+  'anthropic': 'anthropic',
+  'github-copilot': 'github-copilot',
+  'bedrock': 'amazon-bedrock',
+  'amazon-bedrock': 'amazon-bedrock',
+  'groq': 'groq',
+  'mistral': 'mistral',
+  'xai': 'xai',
+  'openrouter': 'openrouter',
+  'cerebras': 'cerebras',
+  'huggingface': 'huggingface',
+  'minimax': 'minimax',
+  'minimax-cn': 'minimax-cn',
+  'zai': 'zai',
+  'kimi-coding': 'kimi-coding',
+  'google-vertex': 'google-vertex',
+};
+
+// 加载 OpenClaw 内置模型目录
+function loadOpenClawModelCatalog() {
+  const catalogPath = '/root/.npm-global/lib/node_modules/openclaw/node_modules/@mariozechner/pi-ai/dist/models.generated.js';
+  try {
+    if (!fs.existsSync(catalogPath.replace('/dist/models.generated.js', ''))) {
+      // 尝试从缓存中加载
+      const cachePath = '/root/.openclaw/model-catalog-cache.json';
+      if (fs.existsSync(cachePath)) {
+        _openclawModelCatalog = readJson(cachePath, null);
+        if (_openclawModelCatalog) {
+          console.log(`[catalog] 已从缓存加载模型目录 (${Object.keys(_openclawModelCatalog).length} providers)`);
+          return;
+        }
+      }
+      console.log('[catalog] OpenClaw 模型目录未找到');
+      return;
+    }
+    // 使用 require 加载 ESM 模块中的 MODELS
+    const { execSync } = require('child_process');
+    const json = execSync(`node -e "const m = require('${catalogPath}'); process.stdout.write(JSON.stringify(Object.fromEntries(Object.entries(m.MODELS).map(([p, models]) => [p, Object.fromEntries(Object.entries(models).map(([id, model]) => [id, { name: model.name, api: model.api, reasoning: model.reasoning, input: model.input, contextWindow: model.contextWindow, maxTokens: model.maxTokens, compat: model.compat || undefined }]))]))))"`, {
+      encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe']
+    });
+    _openclawModelCatalog = JSON.parse(json);
+    // 缓存到文件
+    try {
+      fs.writeFileSync('/root/.openclaw/model-catalog-cache.json', json, { encoding: 'utf8', mode: 0o600 });
+    } catch {}
+    const totalModels = Object.values(_openclawModelCatalog).reduce((sum, prov) => sum + Object.keys(prov).length, 0);
+    console.log(`[catalog] 已加载 OpenClaw 模型目录: ${Object.keys(_openclawModelCatalog).length} providers, ${totalModels} models`);
+  } catch (e) {
+    console.warn('[catalog] 加载模型目录失败:', e.message);
+  }
+}
+setTimeout(loadOpenClawModelCatalog, 1000);
+
+/**
+ * 从 OpenClaw 内置目录查询模型能力
+ * @param {string} providerName - 我们的 provider 名称 (如 'gemini', 'bailian')
+ * @param {string} modelId - 模型 ID (如 'gemini-3-flash-preview')
+ * @returns {object|null} 模型能力定义，或 null（未找到时）
+ */
+function lookupModelCapabilities(providerName, modelId) {
+  if (!_openclawModelCatalog) return null;
+
+  // 1. 直接查找：先用映射后的 provider 名
+  const openclawProvider = PROVIDER_TO_OPENCLAW_MAP[providerName.toLowerCase()] || providerName.toLowerCase();
+  const providerModels = _openclawModelCatalog[openclawProvider];
+  if (providerModels && providerModels[modelId]) {
+    return providerModels[modelId];
+  }
+
+  // 2. 模糊匹配：在所有 provider 中按 modelId 搜索（处理 provider 名不一致的情况）
+  for (const [prov, models] of Object.entries(_openclawModelCatalog)) {
+    if (models[modelId]) {
+      return models[modelId];
+    }
+  }
+
+  // 3. 前缀匹配：例如 'gemini-3-flash-preview-0508' 匹配 'gemini-3-flash-preview'
+  for (const [prov, models] of Object.entries(_openclawModelCatalog)) {
+    for (const [id, model] of Object.entries(models)) {
+      if (modelId.startsWith(id) || id.startsWith(modelId)) {
+        return model;
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * 为指定模型生成完整的 models.json 条目
+ * 优先从 OpenClaw 内置目录获取真实能力，未命中时用安全默认值
+ * @param {string} providerName - provider 名称
+ * @param {string} modelId - 模型 ID
+ * @returns {object} 完整的模型条目
+ */
+function buildModelEntry(providerName, modelId) {
+  const catalogEntry = lookupModelCapabilities(providerName, modelId);
+
+  if (catalogEntry) {
+    console.log(`[catalog] 模型 ${providerName}/${modelId} 命中内置目录: reasoning=${catalogEntry.reasoning}, api=${catalogEntry.api}, ctx=${catalogEntry.contextWindow}`);
+    return {
+      id: modelId,
+      name: catalogEntry.name || modelId,
+      api: catalogEntry.api || 'openai-completions',
+      reasoning: catalogEntry.reasoning ?? false,
+      input: catalogEntry.input || ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: catalogEntry.contextWindow || 128000,
+      maxTokens: catalogEntry.maxTokens || 4096,
+      ...(catalogEntry.compat ? { compat: catalogEntry.compat } : {})
+    };
+  }
+
+  // 未命中内置目录 — 使用安全默认值
+  console.log(`[catalog] 模型 ${providerName}/${modelId} 未命中内置目录，使用安全默认值 (reasoning=false)`);
+  return {
+    id: modelId,
+    name: modelId,
+    api: 'openai-completions',
+    reasoning: false,
+    input: ['text'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+    maxTokens: 4096
+  };
+}
+
+/**
+ * 获取 OpenClaw 支持的内置 provider 列表
+ */
+function getOpenClawBuiltinProviders() {
+  if (!_openclawModelCatalog) return [];
+  return Object.keys(_openclawModelCatalog);
+}
+
+/**
+ * 获取指定 provider 的所有内置模型列表
+ */
+function getOpenClawProviderModels(providerName) {
+  if (!_openclawModelCatalog) return [];
+  const openclawProv = PROVIDER_TO_OPENCLAW_MAP[providerName.toLowerCase()] || providerName.toLowerCase();
+  const models = _openclawModelCatalog[openclawProv];
+  if (!models) return [];
+  return Object.entries(models).map(([id, m]) => ({
+    id,
+    name: m.name || id,
+    reasoning: m.reasoning,
+    api: m.api,
+    contextWindow: m.contextWindow,
+    maxTokens: m.maxTokens,
+    input: m.input
+  }));
+}
+
 // 启动时确保 models.json 和 openclaw.json 中的 models 数组包含已配置的模型
-// （设置 reasoning: false 避免 OpenClaw 向不兼容的 API 发送 thinking 参数）
+// 使用 OpenClaw 内置模型目录自动探测能力
 function syncConfiguredModelsToModelsJson() {
   try {
     const modelsPath = '/root/.openclaw/agents/main/agent/models.json';
@@ -492,12 +656,6 @@ function syncConfiguredModelsToModelsJson() {
       if (fb && fb.includes('/')) configuredModels.push(fb);
     }
     if (configuredModels.length === 0) return;
-    const makeModelEntry = (modelId) => ({
-      id: modelId, name: modelId, api: 'openai-completions',
-      reasoning: false, input: ['text'],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128000, maxTokens: 4096
-    });
     // 同步到 openclaw.json（gateway 启动时读取此文件生成 models.json）
     let configChanged = false;
     if (!config.models) config.models = {};
@@ -507,10 +665,22 @@ function syncConfiguredModelsToModelsJson() {
       const prov = config.models.providers[provName];
       if (!prov) continue;
       if (!prov.models) prov.models = [];
-      if (!prov.models.find(m => m.id === modelId)) {
-        prov.models.push(makeModelEntry(modelId));
+      const existingIdx = prov.models.findIndex(m => m.id === modelId);
+      const entry = buildModelEntry(provName, modelId);
+      if (existingIdx === -1) {
+        prov.models.push(entry);
         configChanged = true;
         console.log(`[sync] 已将模型 ${modelStr} 添加到 openclaw.json`);
+      } else {
+        // 已存在时，用目录能力更新关键字段（保留用户自定义值）
+        const existing = prov.models[existingIdx];
+        const fieldsToSync = ['reasoning', 'contextWindow', 'maxTokens', 'input', 'compat'];
+        for (const field of fieldsToSync) {
+          if (entry[field] !== undefined && JSON.stringify(existing[field]) !== JSON.stringify(entry[field])) {
+            existing[field] = entry[field];
+            configChanged = true;
+          }
+        }
       }
     }
     if (configChanged) {
@@ -527,10 +697,21 @@ function syncConfiguredModelsToModelsJson() {
           const prov = models.providers[provName];
           if (!prov) continue;
           if (!prov.models) prov.models = [];
-          if (!prov.models.find(m => m.id === modelId)) {
-            prov.models.push(makeModelEntry(modelId));
+          const existingIdx = prov.models.findIndex(m => m.id === modelId);
+          const entry = buildModelEntry(provName, modelId);
+          if (existingIdx === -1) {
+            prov.models.push(entry);
             modelsChanged = true;
             console.log(`[sync] 已将模型 ${modelStr} 添加到 models.json`);
+          } else {
+            const existing = prov.models[existingIdx];
+            const fieldsToSync = ['reasoning', 'contextWindow', 'maxTokens', 'input', 'compat'];
+            for (const field of fieldsToSync) {
+              if (entry[field] !== undefined && JSON.stringify(existing[field]) !== JSON.stringify(entry[field])) {
+                existing[field] = entry[field];
+                modelsChanged = true;
+              }
+            }
           }
         }
         if (modelsChanged) {
@@ -3584,17 +3765,21 @@ app.post('/api/ai/config', async (req, res) => {
     if (config.agents?.defaults?.subModel) delete config.agents.defaults.subModel;
     if (config.agents?.defaults?.subModelFallbacks) delete config.agents.defaults.subModelFallbacks;
 
-    // 辅助：确保 provider 的 models 数组中包含指定 model 条目（reasoning: false 避免发送 thinking 参数）
+    // 辅助：确保 provider 的 models 数组中包含指定 model 条目
+    // 使用 OpenClaw 内置模型目录自动探测能力
     const ensureModelEntry = (target, provName, modId) => {
       if (!target[provName]) return; // provider 不存在则跳过
       if (!target[provName].models) target[provName].models = [];
-      if (!target[provName].models.find(m => m.id === modId)) {
-        target[provName].models.push({
-          id: modId, name: modId, api: 'openai-completions',
-          reasoning: false, input: ['text'],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 128000, maxTokens: 4096
-        });
+      const existingIdx = target[provName].models.findIndex(m => m.id === modId);
+      const entry = buildModelEntry(provName, modId);
+      if (existingIdx === -1) {
+        target[provName].models.push(entry);
+      } else {
+        // 已存在时更新关键字段
+        const existing = target[provName].models[existingIdx];
+        for (const field of ['reasoning', 'contextWindow', 'maxTokens', 'input', 'compat']) {
+          if (entry[field] !== undefined) existing[field] = entry[field];
+        }
       }
     };
 
@@ -3724,6 +3909,37 @@ app.post('/api/ai/keys/validate', async (req, res) => {
     // 网络超时等错误 — 不确定 key 是否有效，允许继续
     return res.json({ valid: true, warning: '无法连接到 API 验证: ' + (err?.message || '未知错误') });
   }
+});
+
+// ============ OpenClaw 内置模型目录查询 API ============
+
+// 获取内置 provider 列表
+app.get('/api/ai/catalog/providers', (req, res) => {
+  const providers = getOpenClawBuiltinProviders();
+  res.json({ providers });
+});
+
+// 获取指定 provider 的内置模型列表
+app.get('/api/ai/catalog/models/:provider', (req, res) => {
+  const { provider } = req.params;
+  const models = getOpenClawProviderModels(provider);
+  res.json({ provider, models });
+});
+
+// 查询单个模型的能力
+app.get('/api/ai/catalog/lookup/:provider/:modelId', (req, res) => {
+  const { provider, modelId } = req.params;
+  const caps = lookupModelCapabilities(provider, modelId);
+  if (!caps) {
+    return res.json({ found: false, provider, modelId, message: '模型未在内置目录中找到，将使用安全默认值' });
+  }
+  res.json({
+    found: true,
+    provider,
+    modelId,
+    capabilities: caps,
+    entry: buildModelEntry(provider, modelId)
+  });
 });
 
 // 添加 API Key
