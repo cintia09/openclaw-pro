@@ -466,15 +466,14 @@ function repairModelsJsonApiKeys() {
 }
 setTimeout(repairModelsJsonApiKeys, 3000);
 
-// 启动时确保 models.json 中的 models 数组包含已配置的模型（避免 OpenClaw 发送不兼容参数）
+// 启动时确保 models.json 和 openclaw.json 中的 models 数组包含已配置的模型
+// （设置 reasoning: false 避免 OpenClaw 向不兼容的 API 发送 thinking 参数）
 function syncConfiguredModelsToModelsJson() {
   try {
     const modelsPath = '/root/.openclaw/agents/main/agent/models.json';
     const configPath = '/root/.openclaw/openclaw.json';
-    if (!fs.existsSync(modelsPath) || !fs.existsSync(configPath)) return;
+    if (!fs.existsSync(configPath)) return;
     const config = readJson(configPath, {});
-    const models = readJson(modelsPath, { providers: {} });
-    if (!models?.providers) return;
     const defaults = config?.agents?.defaults || {};
     // 收集所有已配置的模型 (provider/modelId)
     const configuredModels = [];
@@ -492,26 +491,53 @@ function syncConfiguredModelsToModelsJson() {
     for (const fb of subFb) {
       if (fb && fb.includes('/')) configuredModels.push(fb);
     }
-    let changed = false;
+    if (configuredModels.length === 0) return;
+    const makeModelEntry = (modelId) => ({
+      id: modelId, name: modelId, api: 'openai-completions',
+      reasoning: false, input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000, maxTokens: 4096
+    });
+    // 同步到 openclaw.json（gateway 启动时读取此文件生成 models.json）
+    let configChanged = false;
+    if (!config.models) config.models = {};
+    if (!config.models.providers) config.models.providers = {};
     for (const modelStr of configuredModels) {
       const [provName, modelId] = modelStr.split('/');
-      const prov = models.providers[provName];
+      const prov = config.models.providers[provName];
       if (!prov) continue;
       if (!prov.models) prov.models = [];
       if (!prov.models.find(m => m.id === modelId)) {
-        prov.models.push({
-          id: modelId, name: modelId, api: 'openai-completions',
-          reasoning: false, input: ['text'],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 128000, maxTokens: 4096
-        });
-        changed = true;
-        console.log(`[sync] 已将模型 ${modelStr} 添加到 models.json`);
+        prov.models.push(makeModelEntry(modelId));
+        configChanged = true;
+        console.log(`[sync] 已将模型 ${modelStr} 添加到 openclaw.json`);
       }
     }
-    if (changed) {
-      writeJson(modelsPath, models);
-      console.log('[sync] models.json 已更新');
+    if (configChanged) {
+      writeJson(configPath, config);
+      console.log('[sync] openclaw.json 已更新');
+    }
+    // 同步到 models.json（如果文件存在）
+    if (fs.existsSync(modelsPath)) {
+      const models = readJson(modelsPath, { providers: {} });
+      if (models?.providers) {
+        let modelsChanged = false;
+        for (const modelStr of configuredModels) {
+          const [provName, modelId] = modelStr.split('/');
+          const prov = models.providers[provName];
+          if (!prov) continue;
+          if (!prov.models) prov.models = [];
+          if (!prov.models.find(m => m.id === modelId)) {
+            prov.models.push(makeModelEntry(modelId));
+            modelsChanged = true;
+            console.log(`[sync] 已将模型 ${modelStr} 添加到 models.json`);
+          }
+        }
+        if (modelsChanged) {
+          writeJson(modelsPath, models);
+          console.log('[sync] models.json 已更新');
+        }
+      }
     }
   } catch (e) {
     console.warn('[sync] models.json 同步失败:', e.message);
@@ -3558,6 +3584,20 @@ app.post('/api/ai/config', async (req, res) => {
     if (config.agents?.defaults?.subModel) delete config.agents.defaults.subModel;
     if (config.agents?.defaults?.subModelFallbacks) delete config.agents.defaults.subModelFallbacks;
 
+    // 辅助：确保 provider 的 models 数组中包含指定 model 条目（reasoning: false 避免发送 thinking 参数）
+    const ensureModelEntry = (target, provName, modId) => {
+      if (!target[provName]) return; // provider 不存在则跳过
+      if (!target[provName].models) target[provName].models = [];
+      if (!target[provName].models.find(m => m.id === modId)) {
+        target[provName].models.push({
+          id: modId, name: modId, api: 'openai-completions',
+          reasoning: false, input: ['text'],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128000, maxTokens: 4096
+        });
+      }
+    };
+
     // 确保主模型的 provider 在 models.json 中存在
     const [providerName, modelId] = primaryModel.split('/');
     if (!models.providers) models.providers = {};
@@ -3569,15 +3609,7 @@ app.post('/api/ai/config', async (req, res) => {
         models: []
       };
     }
-    if (!models.providers[providerName].models) models.providers[providerName].models = [];
-    if (!models.providers[providerName].models.find(m => m.id === modelId)) {
-      models.providers[providerName].models.push({
-        id: modelId, name: modelId, api: 'openai-completions',
-        reasoning: false, input: ['text'],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128000, maxTokens: 4096
-      });
-    }
+    ensureModelEntry(models.providers, providerName, modelId);
 
     // 同样处理 subModel
     if (subModel && subModel.includes('/')) {
@@ -3590,15 +3622,32 @@ app.post('/api/ai/config', async (req, res) => {
           models: []
         };
       }
-      if (!models.providers[subProvider].models) models.providers[subProvider].models = [];
-      if (!models.providers[subProvider].models.find(m => m.id === subModelId)) {
-        models.providers[subProvider].models.push({
-          id: subModelId, name: subModelId, api: 'openai-completions',
-          reasoning: false, input: ['text'],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 128000, maxTokens: 4096
-        });
+      ensureModelEntry(models.providers, subProvider, subModelId);
+    }
+
+    // 同时写入 openclaw.json 的 models.providers（确保 gateway 重启后不丢失）
+    if (!config.models) config.models = {};
+    if (!config.models.providers) config.models.providers = {};
+    ensureModelEntry(config.models.providers, providerName, modelId);
+    if (subModel && subModel.includes('/')) {
+      const [subProv] = subModel.split('/');
+      ensureModelEntry(config.models.providers, subProv, subModel.split('/')[1]);
+    }
+    // 处理 fallback 模型（写入 models.json 和 openclaw.json）
+    const allFbModels = [];
+    if (fallbacks) {
+      if (Array.isArray(fallbacks)) {
+        allFbModels.push(...fallbacks);
+      } else if (typeof fallbacks === 'object') {
+        if (Array.isArray(fallbacks.primary)) allFbModels.push(...fallbacks.primary);
+        if (Array.isArray(fallbacks.sub)) allFbModels.push(...fallbacks.sub);
       }
+    }
+    for (const fb of allFbModels) {
+      if (!fb || !fb.includes('/')) continue;
+      const [fbProv, fbModel] = fb.split('/');
+      ensureModelEntry(models.providers, fbProv, fbModel);
+      ensureModelEntry(config.models.providers, fbProv, fbModel);
     }
 
     // 写入文件（自动清理非法 key）
