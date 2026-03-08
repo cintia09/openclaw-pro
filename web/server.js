@@ -3858,13 +3858,13 @@ app.post('/api/ai/models', async (req, res) => {
         { id: 'openai/o1-mini', name: 'o1-mini' }
       ],
       'github-copilot': [
-        { id: 'copilot/gpt-4o', name: 'Copilot GPT-4o' },
-        { id: 'copilot/gpt-4', name: 'Copilot GPT-4' },
-        { id: 'copilot/claude-3.5-sonnet', name: 'Copilot Claude 3.5 Sonnet' },
-        { id: 'copilot/claude-sonnet-4', name: 'Copilot Claude Sonnet 4' },
-        { id: 'copilot/o1', name: 'Copilot o1' },
-        { id: 'copilot/o3-mini', name: 'Copilot o3-mini' },
-        { id: 'copilot/gemini-2.0-flash', name: 'Copilot Gemini 2.0 Flash' }
+        { id: 'github-copilot/gpt-4o', name: 'Copilot GPT-4o' },
+        { id: 'github-copilot/gpt-4', name: 'Copilot GPT-4' },
+        { id: 'github-copilot/claude-3.5-sonnet', name: 'Copilot Claude 3.5 Sonnet' },
+        { id: 'github-copilot/claude-sonnet-4', name: 'Copilot Claude Sonnet 4' },
+        { id: 'github-copilot/o1', name: 'Copilot o1' },
+        { id: 'github-copilot/o3-mini', name: 'Copilot o3-mini' },
+        { id: 'github-copilot/gemini-2.0-flash', name: 'Copilot Gemini 2.0 Flash' }
       ],
       'gemini': [
         { id: 'gemini/gemini-2.0-flash', name: 'Gemini 2.0 Flash' },
@@ -3973,7 +3973,7 @@ app.post('/api/ai/models', async (req, res) => {
       ]
     };
 
-    // github-copilot: 尝试通过真实 API 获取模型（需要 OAuth token）
+    // github-copilot: 先交换 Copilot API Token，再获取模型
     if (provider === 'github-copilot') {
       try {
         const authProfilesPath = '/root/.openclaw/agents/main/agent/auth-profiles.json';
@@ -3983,36 +3983,63 @@ app.post('/api/ai/models', async (req, res) => {
         const copilotAuth = authProfiles?.profiles?.['github-copilot:github']
           || authProfiles?.profiles?.['github-copilot']
           || authProfiles['github-copilot'];
-        const copilotToken = copilotAuth?.token || copilotAuth?.apiKey || '';
-        if (copilotToken) {
-          console.log(`[ai/models] Fetching copilot models with token ${copilotToken.substring(0, 8)}...`);
-          const modelsUrl = 'https://api.githubcopilot.com/models';
-          const response = await fetch(modelsUrl, {
+        const githubToken = copilotAuth?.token || copilotAuth?.apiKey || '';
+        if (githubToken) {
+          console.log(`[ai/models] Exchanging GitHub token ${githubToken.substring(0, 8)}... for Copilot API token`);
+          // Step 1: 将 GitHub ghu_ token 交换为 Copilot API token
+          const COPILOT_TOKEN_URL = 'https://api.github.com/copilot_internal/v2/token';
+          const tokenRes = await fetch(COPILOT_TOKEN_URL, {
             headers: {
-              'Authorization': `Bearer ${copilotToken}`,
-              'Copilot-Integration-Id': 'vscode-chat',
-              'Editor-Version': 'vscode/1.96.0'
+              'Authorization': `Bearer ${githubToken}`,
+              'Accept': 'application/json'
             },
-            signal: AbortSignal.timeout(10000)
+            signal: AbortSignal.timeout(15000)
           });
-          if (response.ok) {
-            const data = await response.json();
-            const models = (data.data || data.models || []).map(m => ({
-              id: `copilot/${m.id || m.name}`,
-              name: m.name || m.id
-            })).filter(m => m.id);
-            if (models.length > 0) {
-              console.log(`[ai/models] copilot API returned ${models.length} models`);
-              return res.json({ success: true, models, source: 'api' });
-            }
+          if (!tokenRes.ok) {
+            console.log(`[ai/models] Copilot token exchange failed: HTTP ${tokenRes.status}`);
+            // token 过期或无效，fallback 到内置列表
           } else {
-            console.log(`[ai/models] copilot API returned HTTP ${response.status}`);
+            const tokenData = await tokenRes.json();
+            const copilotApiToken = tokenData.token;
+            if (copilotApiToken) {
+              console.log(`[ai/models] Copilot API token obtained, expires_at: ${tokenData.expires_at}`);
+              // 从 token 中提取实际 API base URL (proxy-ep 字段)
+              let apiBaseUrl = 'https://api.individual.githubcopilot.com';
+              const epMatch = copilotApiToken.match(/(?:^|;)\s*proxy-ep=([^;\s]+)/i);
+              if (epMatch) {
+                apiBaseUrl = 'https://' + epMatch[1].replace(/^proxy\./, 'api.');
+                console.log(`[ai/models] Using extracted API base: ${apiBaseUrl}`);
+              }
+              // Step 2: 用 Copilot API token 获取模型列表
+              const modelsUrl = `${apiBaseUrl}/models`;
+              const modelsRes = await fetch(modelsUrl, {
+                headers: {
+                  'Authorization': `Bearer ${copilotApiToken}`,
+                  'Copilot-Integration-Id': 'vscode-chat',
+                  'Editor-Version': 'vscode/1.96.0'
+                },
+                signal: AbortSignal.timeout(10000)
+              });
+              if (modelsRes.ok) {
+                const data = await modelsRes.json();
+                const models = (data.data || data.models || []).map(m => ({
+                  id: `github-copilot/${m.id || m.name}`,
+                  name: m.name || m.id
+                })).filter(m => m.id);
+                if (models.length > 0) {
+                  console.log(`[ai/models] Copilot API returned ${models.length} models`);
+                  return res.json({ success: true, models, source: 'api' });
+                }
+              } else {
+                console.log(`[ai/models] Copilot models API returned HTTP ${modelsRes.status}`);
+              }
+            }
           }
         } else {
           console.log(`[ai/models] No copilot token found in auth-profiles`);
         }
       } catch (e) {
-        console.log(`[ai/models] copilot API fetch failed: ${e.message}`);
+        console.log(`[ai/models] Copilot API fetch failed: ${e.message}`);
       }
       // fallback 到内置列表
       console.log(`[ai/models] Using builtin copilot model list`);

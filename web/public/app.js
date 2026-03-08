@@ -1985,14 +1985,14 @@ const AI_PROVIDERS = {
     apiKeyLabel: 'OAuth Token', apiKeyPlaceholder: '使用设备授权登录',
     authType: 'oauth', oauthType: 'device',
     baseUrl: 'https://api.githubcopilot.com',
-    models: ['copilot/gpt-4o', 'copilot/gpt-4', 'copilot/claude-3.5-sonnet', 'copilot/claude-sonnet-4', 'copilot/o1', 'copilot/o3-mini', 'copilot/gemini-2.0-flash'],
+    models: ['github-copilot/gpt-4o', 'github-copilot/gpt-4', 'github-copilot/claude-3.5-sonnet', 'github-copilot/claude-sonnet-4', 'github-copilot/o1', 'github-copilot/o3-mini', 'github-copilot/gemini-2.0-flash'],
     oauthGuide: `<div style="color:#98989d;line-height:1.6">
       <p style="margin:4px 0"><b>GitHub Copilot 设备授权流程：</b></p>
       <p style="margin:4px 0">1. 确保你有 GitHub Copilot 订阅（个人版或企业版）</p>
       <p style="margin:4px 0">2. 点击"启动设备授权"按钮</p>
       <p style="margin:4px 0">3. 在弹出页面中登录 GitHub 并授权设备</p>
       <p style="margin:4px 0">4. 输入显示的设备码完成授权</p>
-      <p style="margin:8px 0;color:#ff9f0a">注意：模型名称需要以 copilot/ 开头</p>
+      <p style="margin:8px 0;color:#ff9f0a">注意：模型名称需要以 github-copilot/ 开头</p>
     </div>`
   },
   gemini: {
@@ -2723,7 +2723,7 @@ async function pollAiAuthTask(taskId){
     if (!st || st.error) return;
     if (st.delta) {
       appendColored($('ai-auth-log'), st.delta, 3000, true);
-      // 自动显示设备授权信息
+      // 自动显示设备授权信息 — 在 OAuth 卡片区域内显示
       if (!oauthUrlOpened) {
         const urlMatch = st.delta.match(/https?:\/\/[^\s)]+\/login\/device[^\s)']*/i)
           || st.delta.match(/https?:\/\/[^\s)]+verification[^\s)']*/i)
@@ -2734,18 +2734,19 @@ async function pollAiAuthTask(taskId){
           // 提取 user_code
           const codeMatch = st.delta.match(/(?:授权码|code)[:：]\s*([A-Z0-9]{4,}(?:-[A-Z0-9]{4,})?)/i);
           const userCode = codeMatch ? codeMatch[1] : '';
-          // 直接在授权区域内显示链接和授权码
-          const linkHtml = `<a href="${url}" target="_blank" rel="noopener" style="color:#58a6ff;text-decoration:underline;font-weight:bold;font-size:14px">👉 点击此处打开 GitHub 授权页面</a>`;
-          const codeHtml = userCode ? `<div style="margin-top:8px;font-size:18px;font-weight:bold;color:#f5f5f7;letter-spacing:3px;text-align:center;padding:8px;background:#2d333b;border-radius:6px">授权码: ${userCode}</div>` : '';
-          const hintHtml = `<div style="margin-top:6px;font-size:12px;color:#8b949e">请点击上方链接，在 GitHub 页面中输入授权码完成认证</div>`;
-          const logEl = $('ai-auth-log');
-          if (logEl) {
-            const div = document.createElement('div');
-            div.style.cssText = 'padding:12px 14px;margin:8px 0;background:#1a2332;border:1px solid #30363d;border-radius:8px';
-            div.innerHTML = linkHtml + codeHtml + hintHtml;
-            logEl.appendChild(div);
-            logEl.scrollTop = logEl.scrollHeight;
+          // 在 OAuth 卡片区域（ai-oauth-guide）内显示链接和授权码
+          const guideEl = $('ai-oauth-guide');
+          const statusEl = $('ai-oauth-status');
+          if (statusEl) statusEl.textContent = '⏳ 等待用户完成授权…';
+          if (guideEl) {
+            const linkHtml = `<a href="${url}" target="_blank" rel="noopener" style="color:#58a6ff;text-decoration:underline;font-weight:bold;font-size:14px">👉 点击此处打开 GitHub 授权页面</a>`;
+            const codeHtml = userCode ? `<div style="margin-top:10px;font-size:20px;font-weight:bold;color:#f5f5f7;letter-spacing:4px;text-align:center;padding:10px 16px;background:#2d333b;border-radius:8px;border:1px solid #444c56">授权码: ${userCode}</div>` : '';
+            const hintHtml = `<div style="margin-top:8px;font-size:12px;color:#8b949e">请点击上方链接，在 GitHub 页面中输入授权码完成认证</div>`;
+            guideEl.innerHTML = `<div style="padding:4px 0">${linkHtml}${codeHtml}${hintHtml}</div>`;
           }
+          // 禁用启动按钮，避免重复点击
+          const oauthBtn = $('btn-ai-oauth-login');
+          if (oauthBtn) { oauthBtn.disabled = true; oauthBtn.textContent = '授权进行中…'; }
         }
       }
     }
@@ -2756,6 +2757,8 @@ async function pollAiAuthTask(taskId){
       const success = st.status === 'success';
       toast(success ? '认证完成' : '认证失败', success ? '认证信息已写入' : '请查看日志');
       appendAiAuthLog(`[auth] OAuth 认证${success ? '成功' : '失败'}`, success ? 'success' : 'error');
+      // 恢复 OAuth 卡片区域到初始状态
+      _restoreOAuthCard(success);
       if (success) {
         // OAuth 成功后重新加载配置（服务端已自动添加 provider 条目）
         const provider = $('ai-provider')?.value || '';
@@ -2780,21 +2783,39 @@ async function pollAiAuthTask(taskId){
   aiAuthTaskTimer = setInterval(tick, 1000);
 }
 
+/** 恢复 OAuth 卡片区域到初始状态 */
+function _restoreOAuthCard(success) {
+  const statusEl = $('ai-oauth-status');
+  const guideEl = $('ai-oauth-guide');
+  const oauthBtn = $('btn-ai-oauth-login');
+  if (oauthBtn) { oauthBtn.disabled = false; oauthBtn.textContent = '启动设备授权'; }
+  if (statusEl) statusEl.textContent = success ? '✅ 授权成功，可再次点击刷新授权' : '点击按钮启动设备授权流程';
+  // 恢复 guide 内容
+  const provider = $('ai-provider')?.value || '';
+  const config = AI_PROVIDERS[provider] || {};
+  if (guideEl && config.oauthGuide) guideEl.innerHTML = config.oauthGuide;
+}
+
 async function startOAuthLogin() {
   const provider = $('ai-provider')?.value || '';
   appendAiAuthLog(`[auth] 启动 ${provider} OAuth 登录...`);
+  // 更新 OAuth 卡片状态为"正在启动"
+  const statusEl = $('ai-oauth-status');
+  if (statusEl) statusEl.textContent = '正在启动授权…';
 
   try {
     const r = await api('/api/ai/auth/oauth/login', { method:'POST', body: { provider } });
     if (!r.success || !r.taskId) {
       toast('启动失败', r.error || '无法启动 OAuth 登录');
       appendAiAuthLog(`[auth] 启动失败: ${r.error || '未返回 taskId'}`, 'error');
+      if (statusEl) statusEl.textContent = '启动失败，请重试';
       return;
     }
     appendAiAuthLog(`[auth] OAuth 任务已启动: ${r.taskId}`);
     pollAiAuthTask(r.taskId);
   } catch (e) {
     appendAiAuthLog(`[auth] 错误: ${e.message}`, 'error');
+    if (statusEl) statusEl.textContent = '出错，请重试';
   }
 }
 

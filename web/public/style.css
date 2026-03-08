@@ -253,7 +253,6 @@ select.input option{font-weight:400;color:var(--text);padding:4px 8px}
   gap:3px;
 }
 .sidebar-footer .dim{white-space:normal;line-height:1.4}
-.sidebar-footer #sidebar-status{font-size:11px;line-height:1.4}
 .sidebar-footer .gw-label.online{color:#30d158}
 .sidebar-footer .gw-label.offline{color:#ff453a}
 
