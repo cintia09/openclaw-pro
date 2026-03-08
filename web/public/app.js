@@ -671,23 +671,17 @@ async function refreshStatus(){
   if ($('kpi-memory')) $('kpi-memory').textContent = s.memory?.total ? `${s.memory.used}/${s.memory.total}MB (${s.memory.percent}%)` : '—';
   if ($('kpi-uptime')) $('kpi-uptime').textContent = s.uptime ? `运行：${formatUptime(s.uptime)}` : '—';
 
-  $('sidebar-status').textContent = s.gateway ? '● ONLINE' : '● OFFLINE';
-
-  // Update sidebar version
-    const panelVer = formatVersionLabel(s.version) || '-';
-    const ocVer = formatVersionLabel(s.openclawVersion) || '-';
-    const combinedVerText = `面板 ${panelVer} · OpenClaw ${ocVer}`;
-    const footer = q('.sidebar-footer');
-    if ($('sidebar-version')) {
-      $('sidebar-version').textContent = combinedVerText;
-    }
-    if ($('sidebar-oc-version')) {
-      $('sidebar-oc-version').style.display = 'none';
-    } else if ($('sidebar-version')) {
-      $('sidebar-version').textContent = combinedVerText;
-    } else if (footer) {
-      footer.innerHTML = `<span class="dim" id="sidebar-version">${combinedVerText}</span><span class="dim" id="sidebar-status">${s.gateway ? '● ONLINE' : '● OFFLINE'}</span>`;
-    }
+  // Update sidebar footer
+  const panelVer = formatVersionLabel(s.version) || '-';
+  const ocVer = formatVersionLabel(s.openclawVersion) || '-';
+  if ($('sidebar-version')) $('sidebar-version').textContent = `面板 ${panelVer}`;
+  if ($('sidebar-oc-version')) $('sidebar-oc-version').textContent = `OpenClaw ${ocVer}`;
+  const statusEl = $('sidebar-status');
+  if (statusEl) {
+    const online = !!s.gateway;
+    const cls = online ? 'online' : 'offline';
+    statusEl.innerHTML = `<span class="gw-dot ${cls}">●</span> Gateway <span class="gw-label ${cls}">${online ? 'Online' : 'Offline'}</span>`;
+  }
     const elapsed = ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt;
     dlog('refreshStatus ok', 'elapsedMs=', Math.round(elapsed), 'gateway=', !!s.gateway, 'caddy=', !!s.caddy);
   } finally {
@@ -1156,24 +1150,15 @@ function setOpenClawStatusLine(baseText, progress){
 }
 
 async function loadGatewayStartupLogs(lines = 160){
+  // 启动日志不再显示在操作日志面板，仅更新内部 snapshot 跟踪状态
   try {
     const r = await api(`/api/openclaw/gateway/logs?lines=${Math.max(20, Math.min(lines, 1200))}`, { timeoutMs: 12000 });
     const snapshot = String(r?.logs || '').trim();
-    if (r?.success && snapshot && snapshot !== ocLastGatewaySnapshot) {
-      let delta = snapshot;
-      let label = '📋 最近启动日志：';
-      if (ocLastGatewaySnapshot && snapshot.startsWith(ocLastGatewaySnapshot)) {
-        delta = snapshot.slice(ocLastGatewaySnapshot.length).replace(/^\n+/, '');
-        label = '📋 启动日志增量：';
-      }
-      if (delta.trim()) {
-        appendOcLogLine(label);
-        appendOcLogBlock(delta);
-      }
+    if (r?.success && snapshot) {
       ocLastGatewaySnapshot = snapshot;
     }
   } catch (e) {
-    appendOcLogLine(`❌ 读取启动日志失败: ${e?.message || e}`);
+    // 静默失败，不刷日志
   }
 }
 
@@ -1490,14 +1475,12 @@ async function pollTask(taskId){
           if (rr.success) {
             appendOcLogLine('✅ Gateway 重启成功');
             if (rr.logs) {
-              appendOcLogBlock(rr.logs);
               ocLastGatewaySnapshot = String(rr.logs || '').trim() || ocLastGatewaySnapshot;
             }
             scheduleGatewayStartupLogPulls(220);
           } else {
             appendOcLogLine(`❌ Gateway 重启失败: ${rr.error || '请查看日志'}`);
             if (rr.logs) {
-              appendOcLogBlock(rr.logs);
               ocLastGatewaySnapshot = String(rr.logs || '').trim() || ocLastGatewaySnapshot;
             }
           }
@@ -1843,8 +1826,10 @@ $('btn-oc-start').addEventListener('click', async (event)=>{
       scheduleGatewayStartupLogPulls(220);
       toast('已触发重启', r.message || 'Gateway 正在重启，请稍候');
     } else {
-      const timeoutLike = /超时|timeout/i.test(String(r.error || ''));
-      if (timeoutLike) {
+      const errMsg = String(r.error || '');
+      const timeoutLike = /超时|timeout/i.test(errMsg);
+      const networkLike = /Load failed|Failed to fetch|NetworkError|fetch/i.test(errMsg);
+      if (timeoutLike || networkLike) {
         const status = await api('/api/openclaw', { timeoutMs: 8000 });
         const opType = String(status.operationType || '').trim();
         const backendRestarting = !!status.gatewayRestartRunning || opType === 'restarting_gateway';
@@ -1860,7 +1845,6 @@ $('btn-oc-start').addEventListener('click', async (event)=>{
       }
       appendOcLogLine(`❌ 重启失败: ${r.error || '请查看日志'}`);
       if (r.logs) {
-        appendOcLogBlock(r.logs);
         ocLastGatewaySnapshot = String(r.logs || '').trim() || ocLastGatewaySnapshot;
       }
       if (/Unrecognized key|Invalid config|配置无效/i.test(String(r.error || ''))) {
@@ -1933,32 +1917,24 @@ $('btn-oc-uninstall')?.addEventListener('click', async ()=>{
 
 // Provider 配置信息
 const AI_PROVIDERS = {
+  // ─── 常用 ───
   anthropic: {
-    name: 'Anthropic (Claude)',
-    apiKeyLabel: 'Anthropic API Key',
-    apiKeyPlaceholder: 'sk-ant-api03-...',
-    authType: 'apikey',
-    baseUrl: 'https://api.anthropic.com/v1',
-    needsBaseUrl: false,
+    name: 'Anthropic (Claude)', group: '常用',
+    apiKeyLabel: 'Anthropic API Key', apiKeyPlaceholder: 'sk-ant-api03-...',
+    authType: 'apikey', baseUrl: 'https://api.anthropic.com/v1',
     models: ['claude-sonnet-4-20250514', 'claude-opus-4-20250514', 'claude-3-5-sonnet-20241022']
   },
   openai: {
-    name: 'OpenAI (GPT)',
-    apiKeyLabel: 'OpenAI API Key',
-    apiKeyPlaceholder: 'sk-...',
-    authType: 'apikey',
-    baseUrl: 'https://api.openai.com/v1',
-    needsBaseUrl: false,
+    name: 'OpenAI (GPT)', group: '常用',
+    apiKeyLabel: 'OpenAI API Key', apiKeyPlaceholder: 'sk-...',
+    authType: 'apikey', baseUrl: 'https://api.openai.com/v1',
     models: ['gpt-4o', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo', 'o1', 'o1-mini']
   },
   'github-copilot': {
-    name: 'GitHub Copilot',
-    apiKeyLabel: 'OAuth Token',
-    apiKeyPlaceholder: '使用设备授权登录',
-    authType: 'oauth',
-    oauthType: 'device',
+    name: 'GitHub Copilot', group: '常用',
+    apiKeyLabel: 'OAuth Token', apiKeyPlaceholder: '使用设备授权登录',
+    authType: 'oauth', oauthType: 'device',
     baseUrl: 'https://api.githubcopilot.com',
-    needsBaseUrl: false,
     models: ['copilot/gpt-4o', 'copilot/gpt-4', 'copilot/claude-3.5-sonnet', 'copilot/o1'],
     oauthGuide: `<div style="color:#98989d;line-height:1.6">
       <p style="margin:4px 0"><b>GitHub Copilot 设备授权流程：</b></p>
@@ -1970,47 +1946,189 @@ const AI_PROVIDERS = {
     </div>`
   },
   gemini: {
-    name: 'Google Gemini',
-    apiKeyLabel: 'Google AI API Key',
-    apiKeyPlaceholder: 'AIza...',
-    authType: 'apikey',
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
-    needsBaseUrl: false,
+    name: 'Google Gemini', group: '常用',
+    apiKeyLabel: 'Gemini API Key', apiKeyPlaceholder: 'AIza...',
+    authType: 'apikey', baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
     models: ['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash']
   },
   openrouter: {
-    name: 'OpenRouter',
-    apiKeyLabel: 'OpenRouter API Key',
-    apiKeyPlaceholder: 'sk-or-...',
-    authType: 'apikey',
-    baseUrl: 'https://openrouter.ai/api/v1',
-    needsBaseUrl: false,
+    name: 'OpenRouter', group: '常用',
+    apiKeyLabel: 'OpenRouter API Key', apiKeyPlaceholder: 'sk-or-...',
+    authType: 'apikey', baseUrl: 'https://openrouter.ai/api/v1',
     models: ['anthropic/claude-sonnet-4', 'openai/gpt-4o', 'google/gemini-pro-1.5']
   },
   deepseek: {
-    name: 'DeepSeek',
-    apiKeyLabel: 'DeepSeek API Key',
-    apiKeyPlaceholder: 'sk-...',
-    authType: 'apikey',
-    baseUrl: 'https://api.deepseek.com/v1',
-    needsBaseUrl: false,
+    name: 'DeepSeek', group: '常用',
+    apiKeyLabel: 'DeepSeek API Key', apiKeyPlaceholder: 'sk-...',
+    authType: 'apikey', baseUrl: 'https://api.deepseek.com/v1',
     models: ['deepseek-chat', 'deepseek-coder', 'deepseek-reasoner']
   },
+  // ─── 国际 ───
+  mistral: {
+    name: 'Mistral AI', group: '国际',
+    apiKeyLabel: 'Mistral API Key', apiKeyPlaceholder: 'sk-...',
+    authType: 'apikey', baseUrl: 'https://api.mistral.ai/v1',
+    models: ['mistral-large-latest', 'mistral-medium-latest', 'codestral-latest']
+  },
+  xai: {
+    name: 'xAI (Grok)', group: '国际',
+    apiKeyLabel: 'xAI API Key', apiKeyPlaceholder: 'xai-...',
+    authType: 'apikey', baseUrl: 'https://api.x.ai/v1',
+    models: ['grok-4', 'grok-3', 'grok-3-fast']
+  },
+  groq: {
+    name: 'Groq', group: '国际',
+    apiKeyLabel: 'Groq API Key', apiKeyPlaceholder: 'gsk_...',
+    authType: 'apikey', baseUrl: 'https://api.groq.com/openai/v1',
+    models: ['llama-3.3-70b-versatile', 'mixtral-8x7b-32768', 'gemma2-9b-it']
+  },
+  together: {
+    name: 'Together AI', group: '国际',
+    apiKeyLabel: 'Together API Key', apiKeyPlaceholder: 'sk-...',
+    authType: 'apikey', baseUrl: 'https://api.together.xyz/v1',
+    models: ['moonshotai/Kimi-K2.5', 'deepseek-ai/DeepSeek-R1', 'meta-llama/Llama-3.3-70B-Instruct-Turbo']
+  },
+  huggingface: {
+    name: 'Hugging Face', group: '国际',
+    apiKeyLabel: 'HF Token', apiKeyPlaceholder: 'hf_...',
+    authType: 'apikey', baseUrl: 'https://router.huggingface.co/v1',
+    models: ['deepseek-ai/DeepSeek-R1', 'deepseek-ai/DeepSeek-V3.1', 'meta-llama/Llama-3.3-70B-Instruct']
+  },
+  perplexity: {
+    name: 'Perplexity', group: '国际',
+    apiKeyLabel: 'Perplexity API Key', apiKeyPlaceholder: 'pplx-...',
+    authType: 'apikey', baseUrl: 'https://api.perplexity.ai',
+    models: ['sonar-pro', 'sonar', 'sonar-reasoning-pro']
+  },
+  nvidia: {
+    name: 'NVIDIA NIM', group: '国际',
+    apiKeyLabel: 'NVIDIA API Key', apiKeyPlaceholder: 'nvapi-...',
+    authType: 'apikey', baseUrl: 'https://integrate.api.nvidia.com/v1',
+    models: ['meta/llama-3.3-70b-instruct', 'nvidia/llama-3.1-nemotron-70b-instruct']
+  },
+  cerebras: {
+    name: 'Cerebras', group: '国际',
+    apiKeyLabel: 'Cerebras API Key', apiKeyPlaceholder: 'csk-...',
+    authType: 'apikey', baseUrl: 'https://api.cerebras.ai/v1',
+    models: ['llama-3.3-70b', 'llama-3.1-8b']
+  },
+  venice: {
+    name: 'Venice AI', group: '国际',
+    apiKeyLabel: 'Venice API Key', apiKeyPlaceholder: 'sk-...',
+    authType: 'apikey', baseUrl: 'https://api.venice.ai/api/v1',
+    models: ['llama-3.3-70b', 'deepseek-r1-671b']
+  },
+  // ─── 中国 ───
   bailian: {
-    name: '阿里云百炼 (Bailian)',
-    apiKeyLabel: 'DashScope API Key',
-    apiKeyPlaceholder: 'sk-...',
-    authType: 'apikey',
-    baseUrl: 'https://coding.dashscope.aliyuncs.com/v1',
-    needsBaseUrl: false,
+    name: '阿里云百炼 (Bailian)', group: '中国',
+    apiKeyLabel: 'DashScope API Key', apiKeyPlaceholder: 'sk-...',
+    authType: 'apikey', baseUrl: 'https://coding.dashscope.aliyuncs.com/v1',
     models: ['qwen3.5-plus', 'qwen3-max-2026-01-23', 'qwen3-coder-next', 'qwen3-coder-plus', 'MiniMax-M2.5', 'glm-5', 'glm-4.7', 'kimi-k2.5']
   },
+  zai: {
+    name: '智谱 Z.AI (GLM)', group: '中国',
+    apiKeyLabel: 'Z.AI API Key', apiKeyPlaceholder: 'sk-...',
+    authType: 'apikey', baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    models: ['glm-5', 'glm-4.7']
+  },
+  moonshot: {
+    name: 'Moonshot (Kimi)', group: '中国',
+    apiKeyLabel: 'Moonshot API Key', apiKeyPlaceholder: 'sk-...',
+    authType: 'apikey', baseUrl: 'https://api.moonshot.ai/v1',
+    models: ['kimi-k2.5', 'moonshot-v1-128k', 'moonshot-v1-32k']
+  },
+  'kimi-coding': {
+    name: 'Kimi Coding', group: '中国',
+    apiKeyLabel: 'Kimi Coding API Key', apiKeyPlaceholder: 'sk-...',
+    authType: 'apikey', baseUrl: 'https://api.kimi.com/coding/',
+    models: ['k2p5']
+  },
+  minimax: {
+    name: 'MiniMax', group: '中国',
+    apiKeyLabel: 'MiniMax API Key', apiKeyPlaceholder: 'sk-...',
+    authType: 'apikey', baseUrl: 'https://api.minimax.io/anthropic',
+    models: ['MiniMax-M2.5', 'MiniMax-M1']
+  },
+  xiaomi: {
+    name: '小米 MiMo', group: '中国',
+    apiKeyLabel: 'Xiaomi API Key', apiKeyPlaceholder: 'sk-...',
+    authType: 'apikey', baseUrl: 'https://api.xiaomimimo.com/anthropic',
+    models: ['mimo-v2-flash']
+  },
+  qianfan: {
+    name: '百度千帆 (Qianfan)', group: '中国',
+    apiKeyLabel: 'Qianfan API Key', apiKeyPlaceholder: 'bce-v3/ALTAK-...',
+    authType: 'apikey', baseUrl: 'https://qianfan.baidubce.com/v2',
+    models: ['deepseek-v3.2', 'ernie-4.5-8k']
+  },
+  volcengine: {
+    name: '火山引擎 (Volcengine)', group: '中国',
+    apiKeyLabel: 'Volcengine API Key', apiKeyPlaceholder: 'sk-...',
+    authType: 'apikey', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+    needsBaseUrl: true,
+    models: ['ark-code-latest']
+  },
+  byteplus: {
+    name: 'BytePlus', group: '中国',
+    apiKeyLabel: 'BytePlus API Key', apiKeyPlaceholder: 'sk-...',
+    authType: 'apikey', baseUrl: 'https://ark.ap-southeast.bytepluses.com/api/v3',
+    needsBaseUrl: true,
+    models: ['ark-code-latest']
+  },
+  // ─── 网关 / 代理 ───
+  litellm: {
+    name: 'LiteLLM', group: '网关',
+    apiKeyLabel: 'LiteLLM API Key', apiKeyPlaceholder: 'sk-...',
+    authType: 'apikey', baseUrl: 'http://localhost:4000',
+    needsBaseUrl: true,
+    models: ['claude-opus-4-6', 'gpt-4o']
+  },
+  opencode: {
+    name: 'OpenCode Zen', group: '网关',
+    apiKeyLabel: 'OpenCode API Key', apiKeyPlaceholder: 'sk-...',
+    authType: 'apikey', baseUrl: 'https://opencode.ai/v1',
+    models: ['claude-opus-4-6', 'gpt-4o']
+  },
+  kilocode: {
+    name: 'Kilo Gateway', group: '网关',
+    apiKeyLabel: 'Kilocode API Key', apiKeyPlaceholder: 'sk-...',
+    authType: 'apikey', baseUrl: 'https://api.kilo.ai/api/gateway/',
+    models: ['anthropic/claude-opus-4.6']
+  },
+  synthetic: {
+    name: 'Synthetic', group: '网关',
+    apiKeyLabel: 'Synthetic API Key', apiKeyPlaceholder: 'sk-...',
+    authType: 'apikey', baseUrl: '',
+    needsBaseUrl: true,
+    models: ['hf:MiniMaxAI/MiniMax-M2.5']
+  },
+  // ─── 本地 ───
+  ollama: {
+    name: 'Ollama (本地)', group: '本地',
+    apiKeyLabel: 'Ollama API Key (可选)', apiKeyPlaceholder: '留空即可',
+    authType: 'apikey', baseUrl: 'http://localhost:11434',
+    needsBaseUrl: true,
+    models: []
+  },
+  lmstudio: {
+    name: 'LM Studio (本地)', group: '本地',
+    apiKeyLabel: 'API Key (可选)', apiKeyPlaceholder: 'lm-studio',
+    authType: 'apikey', baseUrl: 'http://127.0.0.1:1234/v1',
+    needsBaseUrl: true,
+    models: []
+  },
+  vllm: {
+    name: 'vLLM (本地)', group: '本地',
+    apiKeyLabel: 'vLLM API Key (可选)', apiKeyPlaceholder: '留空即可',
+    authType: 'apikey', baseUrl: 'http://localhost:8000/v1',
+    needsBaseUrl: true,
+    models: []
+  },
+  // ─── 自定义 ───
   custom: {
-    name: '自定义端点',
-    apiKeyLabel: 'API Key',
-    apiKeyPlaceholder: 'your-api-key',
-    authType: 'apikey',
-    baseUrl: '',
+    name: '自定义端点', group: '其他',
+    apiKeyLabel: 'API Key', apiKeyPlaceholder: 'your-api-key',
+    authType: 'apikey', baseUrl: '',
     needsBaseUrl: true,
     models: []
   }
@@ -2020,6 +2138,7 @@ const AI_PROVIDERS = {
 let aiConfiguredKeys = []; // [{id, provider, keyMasked, baseUrl, authType, models:[]}]
 let aiAvailableModels = [];
 let aiAuthTaskTimer = null;
+let lastFocusedModelInput = 'ai-model-primary';
 
 function providerFromModel(modelId = '') {
   const text = String(modelId || '').trim();
@@ -2082,6 +2201,14 @@ function updateAiProviderUI() {
       const baseurlInput = $('ai-baseurl');
       if (baseurlInput && !baseurlInput.value) baseurlInput.value = config.baseUrl || '';
     }
+  }
+
+  // 更新添加按钮文本：OAuth 模式不需要 API Key
+  const addBtn = $('btn-ai-add-key');
+  if (addBtn) {
+    addBtn.textContent = config.authType === 'oauth' ? '添加此授权' : '添加此 API Key';
+    // OAuth 模式隐藏添加按钮（授权完成后自动添加）
+    addBtn.hidden = config.authType === 'oauth';
   }
 
   updateFetchModelsButton();
@@ -2176,10 +2303,16 @@ function renderModelsList() {
   list.querySelectorAll('.model-item').forEach(item => {
     item.addEventListener('click', () => {
       const modelId = item.dataset.model;
-      const primaryInput = $('ai-model-primary');
-      if (primaryInput) {
-        primaryInput.value = modelId;
-        appendAiAuthLog(`[select] 已选择模型: ${modelId}`);
+      const target = $(lastFocusedModelInput) || $('ai-model-primary');
+      if (target) {
+        // 对 fallback 字段追加而非替换
+        if (lastFocusedModelInput.includes('fallback') && target.value.trim()) {
+          target.value = target.value.trim() + ', ' + modelId;
+        } else {
+          target.value = modelId;
+        }
+        const fieldLabel = target.closest('.field')?.querySelector('.label span')?.textContent || lastFocusedModelInput;
+        appendAiAuthLog(`[select] 已填充 ${fieldLabel}: ${modelId}`);
       }
     });
   });
@@ -2304,9 +2437,15 @@ function renderConfiguredModelsList(models) {
   list.querySelectorAll('.model-item').forEach(item => {
     item.addEventListener('click', () => {
       const modelId = item.dataset.model;
-      if ($('ai-model-primary')) {
-        $('ai-model-primary').value = modelId;
-        appendAiAuthLog(`[select] 已选择模型: ${modelId}`);
+      const target = $(lastFocusedModelInput) || $('ai-model-primary');
+      if (target) {
+        if (lastFocusedModelInput.includes('fallback') && target.value.trim()) {
+          target.value = target.value.trim() + ', ' + modelId;
+        } else {
+          target.value = modelId;
+        }
+        const fieldLabel = target.closest('.field')?.querySelector('.label span')?.textContent || lastFocusedModelInput;
+        appendAiAuthLog(`[select] 已填充 ${fieldLabel}: ${modelId}`);
       }
     });
   });
@@ -2358,6 +2497,22 @@ async function addAiKey() {
     toast('参数错误', '请输入 API Key');
     appendAiAuthLog('[add] 请输入 API Key', 'error');
     return;
+  }
+
+  // 检查是否已存在相同 provider 的 key（对 apikey 类型检查 key 重复，对 oauth 类型检查 provider 重复）
+  const existing = aiConfiguredKeys.find(k => k.provider === provider);
+  if (existing) {
+    if (config.authType === 'oauth') {
+      toast('已存在', `${config.name || provider} 已经配置了 OAuth 授权`);
+      appendAiAuthLog(`[add] ${config.name || provider} 已存在 OAuth 授权，请先删除旧的再添加`, 'error');
+      return;
+    }
+    // apikey 类型：provider 当前只支持一个 key（后端按 provider 覆盖），提醒用户
+    const ok = window.confirm(`${config.name || provider} 已有一个 API Key (${existing.keyMasked})。\n继续将覆盖旧 Key，确认？`);
+    if (!ok) {
+      toast('已取消', '未添加');
+      return;
+    }
   }
 
   appendAiAuthLog(`[add] 正在添加 ${config.name || provider} 的 API Key...`);
@@ -2491,10 +2646,25 @@ async function saveAIConfig() {
 async function pollAiAuthTask(taskId){
   if (aiAuthTaskTimer) clearInterval(aiAuthTaskTimer);
   let lastSeq = 0;
+  let oauthUrlOpened = false;
   const tick = async () => {
     const st = await api('/api/ai/auth/task/' + taskId + '?since=' + lastSeq);
     if (!st || st.error) return;
-    if (st.delta) appendColored($('ai-auth-log'), st.delta, 3000, true);
+    if (st.delta) {
+      appendColored($('ai-auth-log'), st.delta, 3000, true);
+      // 自动打开设备授权 URL
+      if (!oauthUrlOpened) {
+        const urlMatch = st.delta.match(/https?:\/\/[^\s)]+\/login\/device[^\s)']*/i)
+          || st.delta.match(/https?:\/\/[^\s)]+verification[^\s)']*/i)
+          || st.delta.match(/(https?:\/\/github\.com[^\s)']*)/i);
+        if (urlMatch) {
+          const url = urlMatch[0].replace(/[,.;:]+$/, '');
+          oauthUrlOpened = true;
+          appendAiAuthLog(`[auth] 正在打开授权页面: ${url}`);
+          window.open(url, '_blank', 'noopener');
+        }
+      }
+    }
     lastSeq = Number(st.seq || lastSeq || 0);
     if (st.status && st.status !== 'running') {
       if (aiAuthTaskTimer) clearInterval(aiAuthTaskTimer);
@@ -2502,6 +2672,16 @@ async function pollAiAuthTask(taskId){
       const success = st.status === 'success';
       toast(success ? '认证完成' : '认证失败', success ? '认证信息已写入' : '请查看日志');
       appendAiAuthLog(`[auth] OAuth 认证${success ? '成功' : '失败'}`, success ? 'success' : 'error');
+      if (success) {
+        // OAuth 成功后自动添加 provider 条目（如果还没有）
+        const provider = $('ai-provider')?.value || '';
+        if (provider && !aiConfiguredKeys.find(k => k.provider === provider)) {
+          try {
+            await api('/api/ai/keys', { method: 'POST', body: { provider, apiKey: null, baseUrl: null } });
+            appendAiAuthLog(`[auth] 已自动添加 ${provider} 配置条目`, 'success');
+          } catch {}
+        }
+      }
       await loadAIConfig();
     }
   };
@@ -2538,6 +2718,11 @@ $('btn-ai-add-key')?.addEventListener('click', addAiKey);
 $('ai-configured-select')?.addEventListener('change', onConfiguredKeySelected);
 $('btn-ai-configured-fetch')?.addEventListener('click', fetchConfiguredKeyModels);
 $('btn-ai-configured-delete')?.addEventListener('click', deleteConfiguredKey);
+
+// 记录最后聚焦的模型输入框
+['ai-model-primary','ai-model-primary-fallback','ai-model-sub','ai-model-sub-fallback'].forEach(id => {
+  $(id)?.addEventListener('focus', () => { lastFocusedModelInput = id; });
+});
 
 // 初始化
 updateAiProviderUI();

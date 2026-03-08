@@ -3345,6 +3345,31 @@ app.delete('/api/ai/keys', async (req, res) => {
       delete config.models.providers[provider];
     }
 
+    // 清除引用了该 provider 的模型配置
+    const defaults = config?.agents?.defaults || {};
+    const clearIfProvider = (modelStr) => {
+      const p = String(modelStr || '').split('/')[0];
+      return p === provider;
+    };
+    if (defaults.model?.primary && clearIfProvider(defaults.model.primary)) {
+      defaults.model.primary = '';
+      console.log(`[ai/keys] Cleared primary model (was using ${provider})`);
+    }
+    if (Array.isArray(defaults.model?.fallbacks)) {
+      const before = defaults.model.fallbacks.length;
+      defaults.model.fallbacks = defaults.model.fallbacks.filter(m => !clearIfProvider(m));
+      if (defaults.model.fallbacks.length < before) console.log(`[ai/keys] Removed ${before - defaults.model.fallbacks.length} primary fallback(s) for ${provider}`);
+    }
+    if (defaults.subModel && clearIfProvider(defaults.subModel)) {
+      defaults.subModel = '';
+      console.log(`[ai/keys] Cleared sub model (was using ${provider})`);
+    }
+    if (Array.isArray(defaults.subModelFallbacks)) {
+      const before = defaults.subModelFallbacks.length;
+      defaults.subModelFallbacks = defaults.subModelFallbacks.filter(m => !clearIfProvider(m));
+      if (defaults.subModelFallbacks.length < before) console.log(`[ai/keys] Removed ${before - defaults.subModelFallbacks.length} sub fallback(s) for ${provider}`);
+    }
+
     // 写回所有文件
     fs.writeFileSync(modelsPath, JSON.stringify(models, null, 2), { encoding: 'utf8', mode: 0o600 });
     fs.writeFileSync(authProfilesPath, JSON.stringify(authProfiles, null, 2), { encoding: 'utf8', mode: 0o600 });
@@ -3368,6 +3393,7 @@ app.post('/api/ai/models', async (req, res) => {
 
     // 对于某些 provider，返回内置模型列表
     const builtInModels = {
+      // 常用
       'anthropic': [
         { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4' },
         { id: 'claude-opus-4-20250514', name: 'Claude Opus 4' },
@@ -3393,6 +3419,55 @@ app.post('/api/ai/models', async (req, res) => {
         { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro' },
         { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash' }
       ],
+      'deepseek': [
+        { id: 'deepseek-chat', name: 'DeepSeek Chat' },
+        { id: 'deepseek-coder', name: 'DeepSeek Coder' },
+        { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner' }
+      ],
+      // 国际
+      'mistral': [
+        { id: 'mistral-large-latest', name: 'Mistral Large' },
+        { id: 'mistral-medium-latest', name: 'Mistral Medium' },
+        { id: 'codestral-latest', name: 'Codestral' }
+      ],
+      'xai': [
+        { id: 'grok-4', name: 'Grok 4' },
+        { id: 'grok-3', name: 'Grok 3' },
+        { id: 'grok-3-fast', name: 'Grok 3 Fast' }
+      ],
+      'groq': [
+        { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B' },
+        { id: 'mixtral-8x7b-32768', name: 'Mixtral 8x7B' },
+        { id: 'gemma2-9b-it', name: 'Gemma2 9B' }
+      ],
+      'together': [
+        { id: 'moonshotai/Kimi-K2.5', name: 'Kimi K2.5' },
+        { id: 'deepseek-ai/DeepSeek-R1', name: 'DeepSeek R1' },
+        { id: 'meta-llama/Llama-3.3-70B-Instruct-Turbo', name: 'Llama 3.3 70B' }
+      ],
+      'huggingface': [
+        { id: 'deepseek-ai/DeepSeek-R1', name: 'DeepSeek R1' },
+        { id: 'deepseek-ai/DeepSeek-V3.1', name: 'DeepSeek V3.1' },
+        { id: 'meta-llama/Llama-3.3-70B-Instruct', name: 'Llama 3.3 70B' }
+      ],
+      'perplexity': [
+        { id: 'sonar-pro', name: 'Sonar Pro' },
+        { id: 'sonar', name: 'Sonar' },
+        { id: 'sonar-reasoning-pro', name: 'Sonar Reasoning Pro' }
+      ],
+      'nvidia': [
+        { id: 'meta/llama-3.3-70b-instruct', name: 'Llama 3.3 70B' },
+        { id: 'nvidia/llama-3.1-nemotron-70b-instruct', name: 'Nemotron 70B' }
+      ],
+      'cerebras': [
+        { id: 'llama-3.3-70b', name: 'Llama 3.3 70B' },
+        { id: 'llama-3.1-8b', name: 'Llama 3.1 8B' }
+      ],
+      'venice': [
+        { id: 'llama-3.3-70b', name: 'Llama 3.3 70B' },
+        { id: 'deepseek-r1-671b', name: 'DeepSeek R1 671B' }
+      ],
+      // 中国
       'bailian': [
         { id: 'qwen3.5-plus', name: 'Qwen 3.5 Plus' },
         { id: 'qwen3-max-2026-01-23', name: 'Qwen 3 Max' },
@@ -3403,10 +3478,46 @@ app.post('/api/ai/models', async (req, res) => {
         { id: 'glm-4.7', name: 'GLM-4.7' },
         { id: 'kimi-k2.5', name: 'Kimi K2.5' }
       ],
-      'deepseek': [
-        { id: 'deepseek-chat', name: 'DeepSeek Chat' },
-        { id: 'deepseek-coder', name: 'DeepSeek Coder' },
-        { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner' }
+      'zai': [
+        { id: 'glm-5', name: 'GLM-5' },
+        { id: 'glm-4.7', name: 'GLM-4.7' }
+      ],
+      'moonshot': [
+        { id: 'kimi-k2.5', name: 'Kimi K2.5' },
+        { id: 'moonshot-v1-128k', name: 'Moonshot v1 128K' },
+        { id: 'moonshot-v1-32k', name: 'Moonshot v1 32K' }
+      ],
+      'kimi-coding': [
+        { id: 'k2p5', name: 'Kimi K2.5 Coding' }
+      ],
+      'minimax': [
+        { id: 'MiniMax-M2.5', name: 'MiniMax M2.5' },
+        { id: 'MiniMax-M1', name: 'MiniMax M1' }
+      ],
+      'xiaomi': [
+        { id: 'mimo-v2-flash', name: 'MiMo V2 Flash' }
+      ],
+      'qianfan': [
+        { id: 'deepseek-v3.2', name: 'DeepSeek V3.2' },
+        { id: 'ernie-4.5-8k', name: 'ERNIE 4.5 8K' }
+      ],
+      'volcengine': [
+        { id: 'ark-code-latest', name: 'Ark Code Latest' }
+      ],
+      'byteplus': [
+        { id: 'ark-code-latest', name: 'Ark Code Latest' }
+      ],
+      // 网关
+      'litellm': [
+        { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
+        { id: 'gpt-4o', name: 'GPT-4o' }
+      ],
+      'opencode': [
+        { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
+        { id: 'gpt-4o', name: 'GPT-4o' }
+      ],
+      'kilocode': [
+        { id: 'anthropic/claude-opus-4.6', name: 'Claude Opus 4.6' }
       ]
     };
 
@@ -3414,20 +3525,37 @@ app.post('/api/ai/models', async (req, res) => {
       return res.json({ success: true, models: builtInModels[provider] });
     }
 
-    // 对于 OpenRouter 和自定义端点，尝试获取模型列表
-    if ((provider === 'openrouter' || provider === 'custom') && apiKey) {
-      const endpoint = baseUrl || (provider === 'openrouter' ? 'https://openrouter.ai/api/v1' : '');
+    // 对于支持 /models 端点的 provider，尝试动态获取模型列表
+    const dynamicProviders = new Set([
+      'openrouter', 'custom', 'ollama', 'lmstudio', 'vllm', 'litellm',
+      'groq', 'together', 'nvidia', 'cerebras', 'perplexity', 'mistral',
+      'opencode', 'kilocode', 'deepseek', 'openai', 'xai', 'venice'
+    ]);
+    if (dynamicProviders.has(provider) && (apiKey || ['ollama', 'lmstudio', 'vllm'].includes(provider))) {
+      const endpoint = baseUrl || getDefaultBaseUrl(provider);
       if (endpoint) {
         try {
-          const response = await fetch(`${endpoint}/models`, {
-            headers: { 'Authorization': `Bearer ${apiKey}` }
-          });
+          // ollama 使用不同的 API 路径
+          const modelsUrl = provider === 'ollama'
+            ? `${endpoint}/api/tags`
+            : `${endpoint}/models`;
+          const headers = {};
+          if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+          const response = await fetch(modelsUrl, { headers });
           if (response.ok) {
             const data = await response.json();
-            const models = (data.data || []).map(m => ({
-              id: m.id,
-              name: m.name || m.id
-            }));
+            let models;
+            if (provider === 'ollama') {
+              models = (data.models || []).map(m => ({
+                id: m.name || m.model,
+                name: m.name || m.model
+              }));
+            } else {
+              models = (data.data || []).map(m => ({
+                id: m.id,
+                name: m.name || m.id
+              }));
+            }
             return res.json({ success: true, models });
           }
         } catch (e) {
@@ -3447,13 +3575,41 @@ app.post('/api/ai/models', async (req, res) => {
 // 辅助函数：获取默认 baseUrl
 function getDefaultBaseUrl(provider) {
   const urls = {
+    // 常用
     'anthropic': 'https://api.anthropic.com/v1',
     'openai': 'https://api.openai.com/v1',
     'github-copilot': 'https://api.githubcopilot.com',
     'gemini': 'https://generativelanguage.googleapis.com/v1beta',
     'openrouter': 'https://openrouter.ai/api/v1',
     'deepseek': 'https://api.deepseek.com/v1',
-    'bailian': 'https://coding.dashscope.aliyuncs.com/v1'
+    // 国际
+    'mistral': 'https://api.mistral.ai/v1',
+    'xai': 'https://api.x.ai/v1',
+    'groq': 'https://api.groq.com/openai/v1',
+    'together': 'https://api.together.xyz/v1',
+    'huggingface': 'https://router.huggingface.co/v1',
+    'perplexity': 'https://api.perplexity.ai',
+    'nvidia': 'https://integrate.api.nvidia.com/v1',
+    'cerebras': 'https://api.cerebras.ai/v1',
+    'venice': 'https://api.venice.ai/api/v1',
+    // 中国
+    'bailian': 'https://coding.dashscope.aliyuncs.com/v1',
+    'zai': 'https://open.bigmodel.cn/api/paas/v4',
+    'moonshot': 'https://api.moonshot.ai/v1',
+    'kimi-coding': 'https://api.kimi.com/coding/',
+    'minimax': 'https://api.minimax.io/anthropic',
+    'xiaomi': 'https://api.xiaomimimo.com/anthropic',
+    'qianfan': 'https://qianfan.baidubce.com/v2',
+    'volcengine': 'https://ark.cn-beijing.volces.com/api/v3',
+    'byteplus': 'https://ark.ap-southeast.bytepluses.com/api/v3',
+    // 网关
+    'litellm': 'http://localhost:4000',
+    'opencode': 'https://opencode.ai/v1',
+    'kilocode': 'https://api.kilo.ai/api/gateway/',
+    // 本地
+    'ollama': 'http://localhost:11434',
+    'lmstudio': 'http://127.0.0.1:1234/v1',
+    'vllm': 'http://localhost:8000/v1'
   };
   return urls[provider] || 'https://api.openai.com/v1';
 }
