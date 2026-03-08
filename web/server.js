@@ -1161,8 +1161,10 @@ function runOpenClawCliWithPtyInput(command, inputText = '', timeoutMs = 45000) 
       return;
     }
 
+    const defaultPath = '/root/.npm-global/bin:/usr/local/bin:/usr/bin:/bin';
+    const mergedPath = process.env.PATH ? `${process.env.PATH}:${defaultPath}` : defaultPath;
     const child = spawn('script', ['-qf', '-c', command, '/dev/null'], {
-      env: { ...process.env, TERM: 'xterm-256color' },
+      env: { ...process.env, TERM: 'xterm-256color', PATH: mergedPath },
       cwd: '/root'
     });
 
@@ -3203,10 +3205,16 @@ app.get('/api/ai/config', async (req, res) => {
 
     // 解析 fallbacks（清理后的值）
     const modelFallbacks = defaults.model?.fallbacks || [];
-    const fallbackObj = { primary: Array.isArray(modelFallbacks) ? modelFallbacks : [] };
+    // 解析 subagents.model fallbacks
+    const rawSubModel = defaults.subagents?.model;
+    const subFallbacks = (rawSubModel && typeof rawSubModel === 'object' && Array.isArray(rawSubModel.fallbacks))
+      ? rawSubModel.fallbacks : [];
+    const fallbackObj = {
+      primary: Array.isArray(modelFallbacks) ? modelFallbacks : [],
+      sub: subFallbacks
+    };
 
     // 解析 subagents.model（正确路径）
-    const rawSubModel = defaults.subagents?.model;
     const subModel = typeof rawSubModel === 'string' ? rawSubModel : (rawSubModel?.primary || '');
 
     res.json({
@@ -3273,7 +3281,13 @@ app.post('/api/ai/config', async (req, res) => {
     // subagents.model（正确路径：agents.defaults.subagents.model）
     if (subModel) {
       if (!config.agents.defaults.subagents) config.agents.defaults.subagents = {};
-      config.agents.defaults.subagents.model = subModel;
+      // 支持 fallbacks：如果有子代理 fallback，写成 { primary, fallbacks } 对象
+      const subFbArray = (fallbacks && Array.isArray(fallbacks.sub)) ? fallbacks.sub.filter(Boolean) : [];
+      if (subFbArray.length > 0) {
+        config.agents.defaults.subagents.model = { primary: subModel, fallbacks: subFbArray };
+      } else {
+        config.agents.defaults.subagents.model = subModel;
+      }
     }
     // 清理非法的顶级 subModel/subModelFallbacks
     if (config.agents?.defaults?.subModel) delete config.agents.defaults.subModel;
@@ -3636,6 +3650,42 @@ app.post('/api/ai/models', async (req, res) => {
         { id: 'anthropic/claude-opus-4.6', name: 'Claude Opus 4.6' }
       ]
     };
+
+    // github-copilot: 尝试通过真实 API 获取模型（需要 OAuth token）
+    if (provider === 'github-copilot') {
+      try {
+        const authProfilesPath = '/root/.openclaw/agents/main/agent/auth-profiles.json';
+        let authProfiles = {};
+        try { authProfiles = JSON.parse(fs.readFileSync(authProfilesPath, 'utf8')); } catch {}
+        const copilotAuth = authProfiles['github-copilot'];
+        const copilotToken = copilotAuth?.token || copilotAuth?.apiKey || '';
+        if (copilotToken) {
+          const modelsUrl = 'https://api.githubcopilot.com/models';
+          const response = await fetch(modelsUrl, {
+            headers: {
+              'Authorization': `Bearer ${copilotToken}`,
+              'Copilot-Integration-Id': 'vscode-chat',
+              'Editor-Version': 'vscode/1.96.0'
+            },
+            signal: AbortSignal.timeout(15000)
+          });
+          if (response.ok) {
+            const data = await response.json();
+            const models = (data.data || data.models || []).map(m => ({
+              id: `copilot/${m.id || m.name}`,
+              name: m.name || m.id
+            })).filter(m => m.id);
+            if (models.length > 0) {
+              return res.json({ success: true, models, source: 'api' });
+            }
+          }
+        }
+      } catch (e) {
+        console.log(`[ai/models] copilot API fetch failed: ${e.message}`);
+      }
+      // fallback 到内置列表
+      return res.json({ success: true, models: builtInModels['github-copilot'], source: 'builtin' });
+    }
 
     if (builtInModels[provider]) {
       return res.json({ success: true, models: builtInModels[provider] });

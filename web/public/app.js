@@ -2302,7 +2302,9 @@ async function fetchAvailableModels() {
   appendAiAuthLog(`[fetch] 正在获取 ${config.name || provider} 的模型列表...`);
 
   try {
-    if (config.models && config.models.length > 0) {
+    // OAuth 类型（如 copilot）总是通过后端 API 获取（需要 auth token）
+    // 其他类型如果有内置列表则直接使用
+    if (config.authType !== 'oauth' && config.models && config.models.length > 0) {
       aiAvailableModels = config.models.map(m => ({
         id: m.includes('/') ? m : `${provider}/${m}`,
         name: m
@@ -2438,8 +2440,8 @@ async function fetchConfiguredKeyModels() {
   appendAiAuthLog(`[fetch] 正在获取 ${pConfig.name || key.provider} 的模型列表...`);
 
   try {
-    // 使用内置模型列表
-    if (pConfig.models && pConfig.models.length > 0) {
+    // OAuth 类型总是通过后端 API 获取（需要真实 auth token 查询可用模型）
+    if (pConfig.authType !== 'oauth' && pConfig.models && pConfig.models.length > 0) {
       const models = pConfig.models.map(m => ({
         id: m.includes('/') ? m : `${key.provider}/${m}`,
         name: m
@@ -2734,6 +2736,9 @@ async function pollAiAuthTask(taskId){
             appendAiAuthLog(`[auth] 已自动添加 ${provider} 配置条目`, 'success');
           } catch {}
         }
+        // OAuth 成功后自动获取可用模型
+        appendAiAuthLog(`[auth] 正在获取可用模型列表...`);
+        try { await fetchAvailableModels(); } catch {}
       }
       await loadAIConfig();
     }
