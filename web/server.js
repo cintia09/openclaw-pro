@@ -3940,22 +3940,9 @@ app.post('/api/ai/config', async (req, res) => {
     writeOpenClawConfig(config);
     fs.writeFileSync(modelsPath, JSON.stringify(models, null, 2), { encoding: 'utf8', mode: 0o600 });
 
-    // 配置保存成功后，触发 gateway 重启以加载新配置
-    let gatewayRestarting = false;
-    try {
-      const opState = getOpenClawOperationState();
-      if (opState.type === 'idle') {
-        setOpenClawOperationState('restarting_gateway');
-        gatewayRestarting = true;
-        console.log('[ai/config] 模型配置已保存，已触发 gateway 重启');
-      } else {
-        console.log(`[ai/config] 模型配置已保存，gateway 重启跳过（当前操作: ${opState.type}）`);
-      }
-    } catch (restartErr) {
-      console.warn('[ai/config] 触发 gateway 重启失败:', restartErr.message);
-    }
-
-    res.json({ success: true, message: '模型配置已保存' + (gatewayRestarting ? '，Gateway 正在重启以加载新配置' : ''), gatewayRestarting });
+    // Gateway 会自动检测 config 变更并热加载，无需手动重启
+    console.log('[ai/config] 模型配置已保存，Gateway 将自动热加载');
+    res.json({ success: true, message: '模型配置已保存，Gateway 将自动热加载新配置' });
   } catch (err) {
     console.error('[ai/config] Error saving config:', err);
     res.status(500).json({ error: '保存配置失败: ' + (err?.message || '未知错误') });

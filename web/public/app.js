@@ -2598,10 +2598,7 @@ async function saveAIConfig() {
     }
 
     toast('保存成功', res.message || '模型配置已保存');
-    appendAiAuthLog('[save] 模型配置保存成功', 'success');
-    if (res.gatewayRestarting) {
-      appendAiAuthLog('[save] ♻ Gateway 正在重启以加载新配置，请稍候...', 'success');
-    }
+    appendAiAuthLog('[save] 模型配置保存成功，Gateway 将自动热加载', 'success');
     await loadAIConfig();
   } catch (e) {
     toast('保存失败', e.message);
