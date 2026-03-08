@@ -2526,16 +2526,6 @@ async function addAiKey() {
     return;
   }
 
-  // 检查是否已存在相同 provider 的 key
-  const existing = aiConfiguredKeys.find(k => k.provider === provider);
-  if (existing) {
-    const ok = window.confirm(`${config.name || provider} 已有一个 API Key (${existing.keyMasked})。\n继续将覆盖旧 Key，确认？`);
-    if (!ok) {
-      toast('已取消', '未添加');
-      return;
-    }
-  }
-
   // 先验证 API Key 有效性
   appendAiAuthLog(`[validate] 正在验证 ${config.name || provider} API Key...`);
   const addBtn = $('btn-ai-add-key');
@@ -2583,11 +2573,12 @@ async function addAiKey() {
     await loadAIConfig();
     // 自动切到已配置 Key 页面
     document.querySelector('#ai-key-tabs .tab[data-ai-tab="configured-keys"]')?.click();
-    // 自动选中刚添加的 key
+    // 自动选中刚添加的 key（选最后一个匹配的 provider）
     const sel = $('ai-configured-select');
     if (sel) {
-      const newIdx = aiConfiguredKeys.findIndex(k => k.provider === provider);
-      if (newIdx >= 0) { sel.value = String(newIdx); onConfiguredKeySelected(); }
+      let lastIdx = -1;
+      aiConfiguredKeys.forEach((k, i) => { if (k.provider === provider) lastIdx = i; });
+      if (lastIdx >= 0) { sel.value = String(lastIdx); onConfiguredKeySelected(); }
     }
     // 自动获取可用模型
     appendAiAuthLog(`[add] 正在获取可用模型列表...`);
@@ -2659,16 +2650,37 @@ async function loadAIConfig(){
 }
 
 async function saveAIConfig() {
-  const primaryModel = $('ai-model-primary')?.value?.trim() || '';
-  const primaryFallback = $('ai-model-primary-fallback')?.value?.trim() || '';
-  const subModel = $('ai-model-sub')?.value?.trim() || '';
-  const subFallback = $('ai-model-sub-fallback')?.value?.trim() || '';
+  let primaryModel = $('ai-model-primary')?.value?.trim() || '';
+  let primaryFallback = $('ai-model-primary-fallback')?.value?.trim() || '';
+  let subModel = $('ai-model-sub')?.value?.trim() || '';
+  let subFallback = $('ai-model-sub-fallback')?.value?.trim() || '';
 
   if (!primaryModel) {
     toast('参数错误', '请设置主代理模型');
     appendAiAuthLog('[save] 错误: 主代理模型未设置', 'error');
     return;
   }
+
+  // 自动补全 provider/ 前缀
+  const autoPrefix = (modelStr) => {
+    if (!modelStr) return modelStr;
+    if (modelStr.includes('/')) return modelStr;
+    // 从已配置 key 中找匹配的 provider，或使用当前选中的 provider
+    const selProvider = $('ai-provider')?.value || '';
+    const configuredProviders = aiConfiguredKeys.map(k => k.provider);
+    const provider = configuredProviders.length > 0 ? configuredProviders[0] : selProvider;
+    if (provider) return provider + '/' + modelStr;
+    return modelStr;
+  };
+  primaryModel = autoPrefix(primaryModel);
+  subModel = subModel ? autoPrefix(subModel) : '';
+  // 对 fallback 列表中的每个模型也自动补前缀
+  const autoPrefixList = (str) => {
+    if (!str) return str;
+    return str.split(',').map(s => autoPrefix(s.trim())).filter(Boolean).join(', ');
+  };
+  primaryFallback = autoPrefixList(primaryFallback);
+  subFallback = autoPrefixList(subFallback);
 
   appendAiAuthLog('[save] 开始保存模型配置...');
 
@@ -2711,7 +2723,7 @@ async function pollAiAuthTask(taskId){
     if (!st || st.error) return;
     if (st.delta) {
       appendColored($('ai-auth-log'), st.delta, 3000, true);
-      // 自动打开设备授权 URL
+      // 自动显示设备授权信息
       if (!oauthUrlOpened) {
         const urlMatch = st.delta.match(/https?:\/\/[^\s)]+\/login\/device[^\s)']*/i)
           || st.delta.match(/https?:\/\/[^\s)]+verification[^\s)']*/i)
@@ -2720,24 +2732,19 @@ async function pollAiAuthTask(taskId){
           const url = urlMatch[0].replace(/[,.;:]+$/, '');
           oauthUrlOpened = true;
           // 提取 user_code
-          const codeMatch = st.delta.match(/(?:授权码|Code)[:：]\s*([A-Z0-9]{4,}(?:-[A-Z0-9]{4,})?)/i);
+          const codeMatch = st.delta.match(/(?:授权码|code)[:：]\s*([A-Z0-9]{4,}(?:-[A-Z0-9]{4,})?)/i);
           const userCode = codeMatch ? codeMatch[1] : '';
-          appendAiAuthLog(`[auth] 请在新窗口中完成授权`);
-          // 尝试打开弹出窗口
-          const win = window.open(url, '_blank', 'noopener');
-          if (!win) {
-            // 弹出窗口被浏览器阻止，显示可点击链接
-            appendAiAuthLog(`[auth] ⚠️ 弹出窗口被阻止，请手动点击下方链接完成授权`);
-            const linkHtml = `<a href="${url}" target="_blank" rel="noopener" style="color:#58a6ff;text-decoration:underline;font-weight:bold;font-size:14px">👉 点击此处打开 GitHub 授权页面</a>`;
-            const codeHtml = userCode ? `<div style="margin-top:6px;font-size:16px;font-weight:bold;color:#f5f5f7;letter-spacing:2px">授权码: ${userCode}</div>` : '';
-            const logEl = $('ai-auth-log');
-            if (logEl) {
-              const div = document.createElement('div');
-              div.style.cssText = 'padding:10px 12px;margin:6px 0;background:#1a2332;border:1px solid #30363d;border-radius:8px';
-              div.innerHTML = linkHtml + codeHtml;
-              logEl.appendChild(div);
-              logEl.scrollTop = logEl.scrollHeight;
-            }
+          // 直接在授权区域内显示链接和授权码
+          const linkHtml = `<a href="${url}" target="_blank" rel="noopener" style="color:#58a6ff;text-decoration:underline;font-weight:bold;font-size:14px">👉 点击此处打开 GitHub 授权页面</a>`;
+          const codeHtml = userCode ? `<div style="margin-top:8px;font-size:18px;font-weight:bold;color:#f5f5f7;letter-spacing:3px;text-align:center;padding:8px;background:#2d333b;border-radius:6px">授权码: ${userCode}</div>` : '';
+          const hintHtml = `<div style="margin-top:6px;font-size:12px;color:#8b949e">请点击上方链接，在 GitHub 页面中输入授权码完成认证</div>`;
+          const logEl = $('ai-auth-log');
+          if (logEl) {
+            const div = document.createElement('div');
+            div.style.cssText = 'padding:12px 14px;margin:8px 0;background:#1a2332;border:1px solid #30363d;border-radius:8px';
+            div.innerHTML = linkHtml + codeHtml + hintHtml;
+            logEl.appendChild(div);
+            logEl.scrollTop = logEl.scrollHeight;
           }
         }
       }
@@ -2750,14 +2757,8 @@ async function pollAiAuthTask(taskId){
       toast(success ? '认证完成' : '认证失败', success ? '认证信息已写入' : '请查看日志');
       appendAiAuthLog(`[auth] OAuth 认证${success ? '成功' : '失败'}`, success ? 'success' : 'error');
       if (success) {
-        // OAuth 成功后自动添加 provider 条目（如果还没有）
+        // OAuth 成功后重新加载配置（服务端已自动添加 provider 条目）
         const provider = $('ai-provider')?.value || '';
-        if (provider && !aiConfiguredKeys.find(k => k.provider === provider)) {
-          try {
-            await api('/api/ai/keys', { method: 'POST', body: { provider, apiKey: null, baseUrl: null } });
-            appendAiAuthLog(`[auth] 已自动添加 ${provider} 配置条目`, 'success');
-          } catch {}
-        }
         await loadAIConfig();
         // 自动切到已配置 Key 页面
         document.querySelector('#ai-key-tabs .tab[data-ai-tab="configured-keys"]')?.click();

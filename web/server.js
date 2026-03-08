@@ -3171,6 +3171,25 @@ app.post('/api/ai/auth/oauth/login', async (req, res) => {
         fs.writeFileSync(authProfilesPath, JSON.stringify(authProfiles, null, 2), { encoding: 'utf8', mode: 0o600 });
         appendAiTaskLog(task, '[ai] 认证信息已保存到 auth-profiles.json\n');
 
+        // Step 4: 确保 models.json 中有 github-copilot provider 条目
+        const modelsPath = '/root/.openclaw/agents/main/agent/models.json';
+        let modelsData = { providers: {} };
+        try { modelsData = JSON.parse(fs.readFileSync(modelsPath, 'utf8')); } catch {}
+        if (!modelsData.providers) modelsData.providers = {};
+        if (!modelsData.providers['github-copilot']) {
+          modelsData.providers['github-copilot'] = {
+            baseUrl: 'https://api.githubcopilot.com',
+            apiKey: accessToken,
+            api: 'openai-completions',
+            models: []
+          };
+        } else {
+          modelsData.providers['github-copilot'].apiKey = accessToken;
+          modelsData.providers['github-copilot'].baseUrl = 'https://api.githubcopilot.com';
+        }
+        fs.writeFileSync(modelsPath, JSON.stringify(modelsData, null, 2), { encoding: 'utf8', mode: 0o600 });
+        appendAiTaskLog(task, '[ai] 已更新 models.json 中的 github-copilot 配置\n');
+
         task.status = 'success';
         task.exitCode = 0;
         appendAiTaskLog(task, '[ai] GitHub Copilot 授权完成 ✓\n');
@@ -3243,23 +3262,65 @@ app.get('/api/ai/config', async (req, res) => {
 
     const providers = Object.keys(models?.providers || {});
 
-    // 构建 configuredKeys 数组（每个 provider 的每个 key 对应一项）
+    // 构建 configuredKeys 数组（支持每个 provider 多个 key）
     const configuredKeys = [];
+    const processedProfiles = new Set();
+
+    // 遍历 auth-profiles.profiles 找所有 key（支持多 key: provider, provider:2, provider:3 等）
+    const profiles = authProfiles.profiles || {};
+    for (const [profileId, profile] of Object.entries(profiles)) {
+      if (!profile || !profile.provider) continue;
+      const pName = profile.provider;
+      const prov = models.providers?.[pName];
+      if (!prov) continue; // provider 不在 models.json 中，跳过
+
+      const isApiKey = profile.mode === 'api_key' || profile.type === 'api_key';
+      const isToken = profile.mode === 'token' || profile.type === 'token';
+      const isOAuth = profile.mode === 'oauth' || profile.mode === 'device' || isToken;
+      const rawKey = profile.apiKey || profile.key || profile.token || '';
+      const hasKey = !!rawKey && rawKey !== 'YOUR_API_KEY';
+
+      if (hasKey || isOAuth) {
+        // 检查这个 key 是否是当前活跃的（与 models.json 中的 apiKey 匹配）
+        const activeKey = prov?.apiKey || '';
+        const isActive = isApiKey ? (rawKey === activeKey) : true;
+
+        configuredKeys.push({
+          id: profileId,
+          provider: pName,
+          keyMasked: isApiKey ? maskApiKey(rawKey) : (isOAuth ? 'OAuth 已授权' : ''),
+          baseUrl: prov?.baseUrl || '',
+          authType: isOAuth ? 'oauth' : 'apikey',
+          models: (prov?.models || []).map(m => m.id || m),
+          isActive
+        });
+        processedProfiles.add(profileId);
+      }
+    }
+
+    // 同时检查旧格式顶级条目和 models.json 中有 key 但 profiles 中没有的 provider
     for (const pName of providers) {
       const prov = models.providers[pName];
       const rawKey = prov?.apiKey || '';
       const hasKey = !!rawKey && rawKey !== 'YOUR_API_KEY';
-      const authProfile = authProfiles[pName];
-      const isOAuth = authProfile?.mode === 'oauth' || authProfile?.mode === 'device';
 
-      if (hasKey || isOAuth) {
+      // 检查是否已被 profiles 覆盖
+      const alreadyHasProfile = configuredKeys.some(k => k.provider === pName);
+      if (alreadyHasProfile) continue;
+
+      // 检查旧格式 auth-profiles 顶级条目
+      const topLevelProfile = authProfiles[pName];
+      const isTopOAuth = topLevelProfile?.mode === 'oauth' || topLevelProfile?.mode === 'device' || topLevelProfile?.mode === 'token';
+
+      if (hasKey || isTopOAuth) {
         configuredKeys.push({
           id: pName,
           provider: pName,
-          keyMasked: hasKey ? maskApiKey(rawKey) : (isOAuth ? 'OAuth 已授权' : ''),
+          keyMasked: hasKey ? maskApiKey(rawKey) : (isTopOAuth ? 'OAuth 已授权' : ''),
           baseUrl: prov?.baseUrl || '',
-          authType: isOAuth ? 'oauth' : 'apikey',
-          models: (prov?.models || []).map(m => m.id || m)
+          authType: isTopOAuth ? 'oauth' : 'apikey',
+          models: (prov?.models || []).map(m => m.id || m),
+          isActive: true
         });
       }
     }
@@ -3573,22 +3634,63 @@ app.post('/api/ai/keys', async (req, res) => {
     }
 
     if (apiKey) {
+      // 设置为当前活跃 key
       models.providers[provider].apiKey = apiKey;
-      console.log(`[ai/keys] API key for ${provider} saved`);
+      console.log(`[ai/keys] API key for ${provider} saved (active)`);
+    }
 
-      // 同步 auth-profiles.json
-      let authProfiles = {};
-      try {
-        authProfiles = JSON.parse(fs.readFileSync(authProfilesPath, 'utf8'));
-      } catch { authProfiles = {}; }
+    // 同步 auth-profiles.json（支持多 key：每个 key 用唯一 profileId）
+    let authProfiles = {};
+    try {
+      authProfiles = JSON.parse(fs.readFileSync(authProfilesPath, 'utf8'));
+    } catch { authProfiles = {}; }
+    if (!authProfiles.profiles) {
+      const oldEntries = Object.entries(authProfiles).filter(([k]) => k !== 'version' && k !== 'profiles' && k !== 'lastGood' && k !== 'usageStats');
+      authProfiles = { version: 1, profiles: {} };
+      for (const [k, v] of oldEntries) {
+        if (v && typeof v === 'object') authProfiles.profiles[k] = v;
+      }
+    }
 
+    if (apiKey) {
+      // 检查是否已有相同 apiKey 的 profile（避免重复）
+      const existingProfileId = Object.keys(authProfiles.profiles || {}).find(pid => {
+        const p = authProfiles.profiles[pid];
+        return p?.provider === provider && p?.apiKey === apiKey;
+      });
+
+      if (!existingProfileId) {
+        // 生成新 profileId
+        // 第一个 key 用 provider 名，后续加 :N 后缀
+        let profileId = provider;
+        if (authProfiles.profiles[provider]) {
+          let n = 2;
+          while (authProfiles.profiles[`${provider}:${n}`]) n++;
+          profileId = `${provider}:${n}`;
+        }
+        authProfiles.profiles[profileId] = {
+          provider,
+          mode: 'api_key',
+          apiKey,
+          type: 'api_key',
+          key: apiKey,
+          addedAt: Date.now()
+        };
+        console.log(`[ai/keys] Added auth profile: ${profileId}`);
+      } else {
+        console.log(`[ai/keys] Key already exists as profile: ${existingProfileId}`);
+      }
+      // 同时更新旧格式顶级条目（兼容）
       authProfiles[provider] = {
         provider,
         mode: 'api_key',
-        apiKey
+        apiKey,
+        type: 'api_key',
+        key: apiKey
       };
-      fs.writeFileSync(authProfilesPath, JSON.stringify(authProfiles, null, 2), { encoding: 'utf8', mode: 0o600 });
     }
+
+    fs.writeFileSync(authProfilesPath, JSON.stringify(authProfiles, null, 2), { encoding: 'utf8', mode: 0o600 });
 
     // 同步 openclaw.json 中的 models.providers
     const configPath = '/root/.openclaw/openclaw.json';
@@ -3632,60 +3734,89 @@ app.delete('/api/ai/keys', async (req, res) => {
     const authProfilesPath = '/root/.openclaw/agents/main/agent/auth-profiles.json';
     const configPath = '/root/.openclaw/openclaw.json';
 
-    // 从 models.json 中移除 provider
-    let models = { providers: {} };
-    try {
-      models = JSON.parse(fs.readFileSync(modelsPath, 'utf8'));
-    } catch { models = { providers: {} }; }
-
-    if (models.providers?.[provider]) {
-      delete models.providers[provider];
-      console.log(`[ai/keys] Removed provider ${provider} from models.json`);
-    }
-
-    // 从 auth-profiles.json 中移除
+    // 读取 auth-profiles
     let authProfiles = {};
     try {
       authProfiles = JSON.parse(fs.readFileSync(authProfilesPath, 'utf8'));
     } catch { authProfiles = {}; }
 
-    if (authProfiles[provider]) {
-      delete authProfiles[provider];
-      console.log(`[ai/keys] Removed provider ${provider} from auth-profiles.json`);
+    // 删除指定的 profile（keyId 是 profileId）
+    const profileId = keyId || provider;
+    if (authProfiles.profiles?.[profileId]) {
+      delete authProfiles.profiles[profileId];
+      console.log(`[ai/keys] Removed profile ${profileId} from auth-profiles.json`);
+    }
+    if (authProfiles[profileId]) {
+      delete authProfiles[profileId];
     }
 
-    // 从 openclaw.json 中移除 models.providers[provider]
+    // 检查该 provider 是否还有其他 key
+    const remainingKeys = Object.entries(authProfiles.profiles || {}).filter(([pid, p]) => p?.provider === provider);
+    const hasRemainingKeys = remainingKeys.length > 0;
+
+    // 从 models.json 中处理
+    let models = { providers: {} };
+    try {
+      models = JSON.parse(fs.readFileSync(modelsPath, 'utf8'));
+    } catch { models = { providers: {} }; }
+
+    if (!hasRemainingKeys) {
+      // 没有剩余 key，移除 provider
+      if (models.providers?.[provider]) {
+        delete models.providers[provider];
+        console.log(`[ai/keys] Removed provider ${provider} from models.json (no remaining keys)`);
+      }
+      // 清除旧格式顶级条目
+      if (authProfiles[provider]) {
+        delete authProfiles[provider];
+      }
+    } else {
+      // 还有剩余 key，激活第一个
+      const [nextPid, nextProfile] = remainingKeys[0];
+      const nextKey = nextProfile.apiKey || nextProfile.key || nextProfile.token || '';
+      if (nextKey && models.providers?.[provider]) {
+        models.providers[provider].apiKey = nextKey;
+        console.log(`[ai/keys] Activated next key for ${provider}: profile ${nextPid}`);
+      }
+      // 更新旧格式顶级条目
+      if (nextProfile) {
+        authProfiles[provider] = { ...nextProfile };
+      }
+    }
+
+    // 从 openclaw.json 中处理
     let config = {};
     try {
       config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     } catch { config = {}; }
 
-    if (config.models?.providers?.[provider]) {
-      delete config.models.providers[provider];
-    }
+    if (!hasRemainingKeys) {
+      if (config.models?.providers?.[provider]) {
+        delete config.models.providers[provider];
+      }
 
-    // 清除引用了该 provider 的模型配置
-    const defaults = config?.agents?.defaults || {};
-    const clearIfProvider = (modelStr) => {
-      const p = String(modelStr || '').split('/')[0];
-      return p === provider;
-    };
-    if (defaults.model?.primary && clearIfProvider(defaults.model.primary)) {
-      defaults.model.primary = '';
-      console.log(`[ai/keys] Cleared primary model (was using ${provider})`);
-    }
-    if (Array.isArray(defaults.model?.fallbacks)) {
-      const before = defaults.model.fallbacks.length;
-      defaults.model.fallbacks = defaults.model.fallbacks.filter(m => !clearIfProvider(m));
-      if (defaults.model.fallbacks.length < before) console.log(`[ai/keys] Removed ${before - defaults.model.fallbacks.length} primary fallback(s) for ${provider}`);
-    }
-    // 清理 subagents.model（正确路径）
-    const subagentModelVal = defaults.subagents?.model;
-    if (subagentModelVal) {
-      const subStr = typeof subagentModelVal === 'string' ? subagentModelVal : subagentModelVal?.primary;
-      if (subStr && clearIfProvider(subStr)) {
-        delete defaults.subagents.model;
-        console.log(`[ai/keys] Cleared subagent model (was using ${provider})`);
+      // 清除引用了该 provider 的模型配置
+      const defaults = config?.agents?.defaults || {};
+      const clearIfProvider = (modelStr) => {
+        const p = String(modelStr || '').split('/')[0];
+        return p === provider;
+      };
+      if (defaults.model?.primary && clearIfProvider(defaults.model.primary)) {
+        defaults.model.primary = '';
+        console.log(`[ai/keys] Cleared primary model (was using ${provider})`);
+      }
+      if (Array.isArray(defaults.model?.fallbacks)) {
+        const before = defaults.model.fallbacks.length;
+        defaults.model.fallbacks = defaults.model.fallbacks.filter(m => !clearIfProvider(m));
+        if (defaults.model.fallbacks.length < before) console.log(`[ai/keys] Removed ${before - defaults.model.fallbacks.length} primary fallback(s) for ${provider}`);
+      }
+      const subagentModelVal = defaults.subagents?.model;
+      if (subagentModelVal) {
+        const subStr = typeof subagentModelVal === 'string' ? subagentModelVal : subagentModelVal?.primary;
+        if (subStr && clearIfProvider(subStr)) {
+          delete defaults.subagents.model;
+          console.log(`[ai/keys] Cleared subagent model (was using ${provider})`);
+        }
       }
     }
     // 写回所有文件（自动清理非法 key）
@@ -3854,6 +3985,7 @@ app.post('/api/ai/models', async (req, res) => {
           || authProfiles['github-copilot'];
         const copilotToken = copilotAuth?.token || copilotAuth?.apiKey || '';
         if (copilotToken) {
+          console.log(`[ai/models] Fetching copilot models with token ${copilotToken.substring(0, 8)}...`);
           const modelsUrl = 'https://api.githubcopilot.com/models';
           const response = await fetch(modelsUrl, {
             headers: {
@@ -3861,7 +3993,7 @@ app.post('/api/ai/models', async (req, res) => {
               'Copilot-Integration-Id': 'vscode-chat',
               'Editor-Version': 'vscode/1.96.0'
             },
-            signal: AbortSignal.timeout(15000)
+            signal: AbortSignal.timeout(10000)
           });
           if (response.ok) {
             const data = await response.json();
@@ -3870,14 +4002,20 @@ app.post('/api/ai/models', async (req, res) => {
               name: m.name || m.id
             })).filter(m => m.id);
             if (models.length > 0) {
+              console.log(`[ai/models] copilot API returned ${models.length} models`);
               return res.json({ success: true, models, source: 'api' });
             }
+          } else {
+            console.log(`[ai/models] copilot API returned HTTP ${response.status}`);
           }
+        } else {
+          console.log(`[ai/models] No copilot token found in auth-profiles`);
         }
       } catch (e) {
         console.log(`[ai/models] copilot API fetch failed: ${e.message}`);
       }
       // fallback 到内置列表
+      console.log(`[ai/models] Using builtin copilot model list`);
       return res.json({ success: true, models: builtInModels['github-copilot'], source: 'builtin' });
     }
 
