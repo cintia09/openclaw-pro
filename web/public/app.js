@@ -2289,7 +2289,7 @@ async function fetchAvailableModels() {
       method: 'POST',
       body: { provider, apiKey, baseUrl }
     });
-    if (res.error) {
+    if (res.error && !res.models) {
       appendAiAuthLog(`[fetch] 获取失败: ${res.error}`, 'error');
       return;
     }
@@ -2297,6 +2297,9 @@ async function fetchAvailableModels() {
     renderModelsList();
     const srcLabel = res.source === 'api' ? '(来自 API)' : res.source === 'builtin' ? '(内置列表)' : '';
     appendAiAuthLog(`[fetch] 成功获取 ${aiAvailableModels.length} 个模型 ${srcLabel}`, 'success');
+    if (res.error && res.source === 'builtin') {
+      appendAiAuthLog(`[fetch] ⚠️ ${res.error}`, 'error');
+    }
   } catch (e) {
     appendAiAuthLog(`[fetch] 错误: ${e.message}`, 'error');
   }
@@ -2420,13 +2423,16 @@ async function fetchConfiguredKeyModels() {
       method: 'POST',
       body: { provider: key.provider }
     });
-    if (res.error) {
+    if (res.error && !res.models) {
       appendAiAuthLog(`[fetch] 获取失败: ${res.error}`, 'error');
       return;
     }
     renderConfiguredModelsList(res.models || []);
     const srcLabel = res.source === 'api' ? '(来自 API)' : res.source === 'builtin' ? '(内置列表)' : '';
     appendAiAuthLog(`[fetch] 成功获取 ${(res.models || []).length} 个模型 ${srcLabel}`, 'success');
+    if (res.error && res.source === 'builtin') {
+      appendAiAuthLog(`[fetch] ⚠️ ${res.error}`, 'error');
+    }
   } catch (e) {
     appendAiAuthLog(`[fetch] 错误: ${e.message}`, 'error');
   }

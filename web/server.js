@@ -2029,8 +2029,29 @@ function proxyGatewayRequest(req, res) {
     if (responseHeaders.location) {
       responseHeaders.location = rewriteGatewayLocationHeader(responseHeaders.location, gatewayPort);
     }
-    res.writeHead(proxyRes.statusCode || 502, responseHeaders);
-    proxyRes.pipe(res);
+    // 对 HTML 响应注入 __OPENCLAW_CONTROL_UI_BASE_PATH__，确保 SPA 的 WebSocket 走 /gateway-proxy 代理
+    const ct = String(responseHeaders['content-type'] || '').toLowerCase();
+    if (ct.includes('text/html')) {
+      let body = Buffer.alloc(0);
+      proxyRes.on('data', (chunk) => { body = Buffer.concat([body, chunk]); });
+      proxyRes.on('end', () => {
+        try {
+          let html = body.toString('utf-8');
+          const inject = '<script>window.__OPENCLAW_CONTROL_UI_BASE_PATH__ = "/gateway-proxy";</script>';
+          html = html.replace('<head>', '<head>' + inject);
+          delete responseHeaders['content-length'];
+          responseHeaders['content-length'] = Buffer.byteLength(html);
+          res.writeHead(proxyRes.statusCode || 200, responseHeaders);
+          res.end(html);
+        } catch (e) {
+          if (!res.headersSent) res.writeHead(proxyRes.statusCode || 200, responseHeaders);
+          res.end(body);
+        }
+      });
+    } else {
+      res.writeHead(proxyRes.statusCode || 502, responseHeaders);
+      proxyRes.pipe(res);
+    }
   });
 
   proxyReq.on('timeout', () => {
@@ -2443,9 +2464,20 @@ app.get('/api/update/check', async (req, res) => {
       }
     }
 
+    // 当部署版本比 GitHub release 更新（pre-release / 未发布 release）时，
+    // 将 latestVersion 修正为 currentVersion，避免面板显示过时的 release 版本号
+    let displayLatestVersion = latestVersion;
+    if (!hasUpdate && currentNorm && latestNorm && currentNorm !== 'unknown' && currentNorm !== 'dev') {
+      const cmp = compareSemver(currentNorm, latestNorm);
+      if (cmp > 0) {
+        // 当前版本高于 GitHub release → 显示当前版本作为最新
+        displayLatestVersion = currentVersion;
+      }
+    }
+
     const result = {
       currentVersion,
-      latestVersion,
+      latestVersion: displayLatestVersion,
       hasUpdate,
       publishedAt,
       releaseUrl,
@@ -2521,7 +2553,7 @@ app.get('/api/update/check', async (req, res) => {
 
     // hasUpdate 仅由 release 版本变化触发；不会因为 Dockerfile 变化单独触发更新提示。
 
-    updateCache = { data: { latestVersion, hasUpdate: result.hasUpdate, publishedAt, releaseUrl, releaseName, requiresFullUpdate: result.requiresFullUpdate, dockerfileChanged: result.dockerfileChanged }, checkedAt: Date.now() };
+    updateCache = { data: { latestVersion: displayLatestVersion, hasUpdate: result.hasUpdate, publishedAt, releaseUrl, releaseName, requiresFullUpdate: result.requiresFullUpdate, dockerfileChanged: result.dockerfileChanged }, checkedAt: Date.now() };
     res.json(result);
   } catch (e) {
     res.json({ currentVersion, latestVersion: null, error: e.message });
@@ -3991,13 +4023,22 @@ app.post('/api/ai/models', async (req, res) => {
           const tokenRes = await fetch(COPILOT_TOKEN_URL, {
             headers: {
               'Authorization': `Bearer ${githubToken}`,
-              'Accept': 'application/json'
+              'Accept': 'application/json',
+              'User-Agent': 'GitHubCopilotChat/0.22.2024'
             },
             signal: AbortSignal.timeout(15000)
           });
           if (!tokenRes.ok) {
-            console.log(`[ai/models] Copilot token exchange failed: HTTP ${tokenRes.status}`);
-            // token 过期或无效，fallback 到内置列表
+            let copilotErrorMsg = `Copilot token exchange failed: HTTP ${tokenRes.status}`;
+            let copilotErrorDetail = '';
+            try {
+              const errBody = await tokenRes.json();
+              copilotErrorDetail = errBody?.error_details?.message || errBody?.message || '';
+              if (copilotErrorDetail) copilotErrorMsg += ` — ${copilotErrorDetail}`;
+            } catch {}
+            console.log(`[ai/models] ${copilotErrorMsg}`);
+            // 返回内置列表但同时携带错误信息
+            return res.json({ success: true, models: builtInModels['github-copilot'], source: 'builtin', error: copilotErrorDetail || `HTTP ${tokenRes.status}` });
           } else {
             const tokenData = await tokenRes.json();
             const copilotApiToken = tokenData.token;
