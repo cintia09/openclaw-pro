@@ -1301,11 +1301,16 @@ function mergeLogBlocksByTimeline(blocksText, { foldWatchdog = true, maxLines = 
       if (Number.isFinite(ts)) taskStartTs.set(markerMatch[2], ts);
     }
     let inferredTs = extractLogTimestampMs(normalized);
-    const progressMatch = normalized.match(/task=([^\s]+).*elapsed=(\d+)s/i);
-    if (!inferredTs && progressMatch?.[1]) {
-      const baseTs = taskStartTs.get(progressMatch[1]);
-      if (Number.isFinite(baseTs)) {
-        inferredTs = baseTs + (Number(progressMatch[2] || 0) * 1000);
+    // C10: extract task= and elapsed= independently (they may appear in either order)
+    if (!inferredTs) {
+      const taskIdMatch = normalized.match(/\btask=([^\s]+)/i);
+      const elapsedMatch = normalized.match(/\belapsed=(\d+)s/i)
+        || normalized.match(/安装进行中[.…]*\s*(\d+)s/);
+      if (taskIdMatch?.[1] && elapsedMatch?.[1]) {
+        const baseTs = taskStartTs.get(taskIdMatch[1]);
+        if (Number.isFinite(baseTs)) {
+          inferredTs = baseTs + (Number(elapsedMatch[1]) * 1000);
+        }
       }
     }
     if (!inferredTs && source && lastTsBySource.has(source)) {
@@ -1404,7 +1409,10 @@ function collapseInstallLogLines(text) {
         out.push(line);
         if (count === 2) out.push(lines[j - 1]);
       } else {
-        out.push(`[state] 安装进行中... ${elapsed}s (${count} 条进度已折叠)`);
+        // C10: preserve task= so mergeLogBlocksByTimeline can infer correct timestamp
+        const taskIdFromLine = String(lines[i] || '').match(/\btask=([^\s]+)/i);
+        const taskSuffix = taskIdFromLine?.[1] ? ` task=${taskIdFromLine[1]}` : '';
+        out.push(`[state] 安装进行中... ${elapsed}s${taskSuffix} (${count} 条进度已折叠)`);
       }
       i = j - 1;
       continue;
