@@ -1253,7 +1253,7 @@ function readLatestInstallTaskLogSection(lines = 200) {
       if (!t) return false;
       if (/^=====\s*\[[^\]]+\]\s*task\s+/i.test(t)) return true;
       if (/^\[openclaw\]|^\[gateway\]|^\[progress\]|^\[watchdog\]/i.test(t)) return true;
-      if (/^(npm ERR!|npm WARN|pnpm |curl:|tar:|unzip:|node:|Error:|fatal:)/i.test(t)) return true;
+      if (/^(npm ERR!|pnpm |curl:|tar:|unzip:|node:|Error:|fatal:)/i.test(t)) return true;
       if (/\b(exit=\d+|signal=|timeout|超时|failed|失败|not found|EADDRINUSE|ECONN|ETIMEDOUT|EAI_AGAIN)\b/i.test(t)) return true;
       if (/^echo\s+"\[openclaw\]/.test(t)) return false;
       if (/^(set\s+-e|[A-Z_][A-Z0-9_]*=|if\s|elif\s|else$|fi$|then$|do$|done$|while\s|for\s|case\s|esac$|\{\s*$|\}\s*$|local\s|return\s+\d+)/.test(t)) return false;
@@ -1261,7 +1261,59 @@ function readLatestInstallTaskLogSection(lines = 200) {
       return true;
     })
     .join('\n');
-  return keepLastLines(cleaned || section, lines);
+  /* ---- simplify install/update logs (like gateway restart logs) ---- */
+  const simplified = collapseInstallLogLines(cleaned || section);
+  return keepLastLines(simplified, lines);
+}
+
+/**
+ * Simplify install/update log output for the web panel:
+ * - Collapse consecutive [state] progress lines (keep first+last, summarise)
+ * - Remove verbose internal lines (command prepared, log file, preflight, npm warn deprecated)
+ * - Keep errors, key milestones and task begin/end markers
+ */
+function collapseInstallLogLines(text) {
+  const lines = String(text || '').split('\n');
+  const out = [];
+  const verbosePatterns = [
+    /^\[openclaw\]\s+command prepared\b/i,
+    /^\[openclaw\]\s+log file:/i,
+    /^\[openclaw\]\s+preflight:/i,
+    /^\[openclaw\]\s+安装脚本开始执行/i,
+    /^npm warn deprecated/i,
+    /^npm WARN deprecated/i,
+    /^\[state\]\s+operation=\S+\s+status=begin\b/i,
+  ];
+  const progressPattern = /^\[state\]\s+operation=\S+\s+status=running\s+elapsed=(\d+)s/i;
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const t = String(line || '').trim();
+    if (!t) continue;
+    /* skip verbose noise */
+    if (verbosePatterns.some((p) => p.test(t))) continue;
+    /* collapse consecutive progress lines */
+    const pm = t.match(progressPattern);
+    if (pm) {
+      let j = i + 1;
+      while (j < lines.length && progressPattern.test(String(lines[j] || '').trim())) {
+        j += 1;
+      }
+      const count = j - i;
+      const lastLine = String(lines[j - 1] || '').trim();
+      const lastMatch = lastLine.match(progressPattern);
+      const elapsed = lastMatch ? lastMatch[1] : pm[1];
+      if (count <= 2) {
+        out.push(line);
+        if (count === 2) out.push(lines[j - 1]);
+      } else {
+        out.push(`[state] 安装进行中... ${elapsed}s (${count} 条进度已折叠)`);
+      }
+      i = j - 1;
+      continue;
+    }
+    out.push(line);
+  }
+  return out.join('\n');
 }
 
 function resolveGatewayLogFileForStreaming() {
@@ -6963,10 +7015,11 @@ function formatTaskLogBlock(title, task, lines = 200) {
   const safeLines = Math.max(20, Math.min(lines, TASK_LOG_BLOCK_MAX_LINES));
   const tail = text.split('\n').slice(-safeLines).map(sanitizeLogLine).filter(Boolean).join('\n').trim();
   if (!tail) return '';
+  const simplified = collapseInstallLogLines(tail);
   const status = String(task.status || 'unknown');
   const startedAt = task.startedAt ? formatLocalTimeWithOffset(task.startedAt) : '';
   const header = `[${title}] status=${status}${startedAt ? ` startedAt=${startedAt}` : ''}`;
-  return `${header}\n${tail}`;
+  return `${header}\n${simplified}`;
 }
 
 app.get('/api/logs', (req, res) => {
