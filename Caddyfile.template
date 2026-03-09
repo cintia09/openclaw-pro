@@ -18,7 +18,11 @@ ${DOMAIN} {
 
     # API（管理面板后端）
     handle /api/* {
-        reverse_proxy 127.0.0.1:3000
+        reverse_proxy 127.0.0.1:3000 {
+            transport http {
+                read_timeout 120s
+            }
+        }
     }
 
     # OpenClaw Gateway (strip /gateway prefix)

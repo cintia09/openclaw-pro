@@ -1185,7 +1185,7 @@ async function refreshOpenClaw(opts = {}){
     syncOpenClawButtons();
   }
   const retries = Math.max(0, Number(opts.retries ?? 0));
-  const openclawStatusTimeoutMs = Math.max(2000, Number(opts.timeoutMs ?? 5000));
+  const openclawStatusTimeoutMs = Math.max(2000, Number(opts.timeoutMs ?? 15000));
   let d = null;
   let lastErr = '';
 
@@ -1370,7 +1370,7 @@ async function pollTask(taskId){
   const initialPhase = ocInstallPhase;
 
   const tick = async () => {
-    const st = await api('/api/openclaw/install/' + taskId + '?since=' + lastSeq);
+    const st = await api('/api/openclaw/install/' + taskId + '?since=' + lastSeq, { timeoutMs: 20000 });
     if (!st || st.error) {
       errorStreak += 1;
       if (errorStreak >= 8) {
@@ -1443,7 +1443,7 @@ async function pollTask(taskId){
         while (Date.now() - pollStart < 5 * 60 * 1000) {
           await new Promise(r => setTimeout(r, 3000));
           try {
-            const ps = await api('/api/openclaw', { timeoutMs: 8000 });
+            const ps = await api('/api/openclaw', { timeoutMs: 15000 });
             const stillStarting = !!(ps.gatewayStarting) || ps.operationState?.type === 'restarting_gateway';
             if (ps.gatewayRunning && !stillStarting) { gwUp = true; break; }
           } catch {}
@@ -1839,7 +1839,7 @@ $('btn-oc-start').addEventListener('click', async (event)=>{
       const timeoutLike = /超时|timeout/i.test(errMsg);
       const networkLike = /Load failed|Failed to fetch|NetworkError|fetch/i.test(errMsg);
       if (timeoutLike || networkLike) {
-        const status = await api('/api/openclaw', { timeoutMs: 8000 });
+        const status = await api('/api/openclaw', { timeoutMs: 15000 });
         const opType = String(status.operationType || '').trim();
         const backendRestarting = !!status.gatewayRestartRunning || opType === 'restarting_gateway';
         if (backendRestarting) {
@@ -1882,7 +1882,7 @@ $('btn-oc-start').addEventListener('click', async (event)=>{
     while (Date.now() - pollStart < pollTimeout) {
       await new Promise(r => setTimeout(r, pollInterval));
       try {
-        const st = await api('/api/openclaw', { timeoutMs: 8000 });
+        const st = await api('/api/openclaw', { timeoutMs: 15000 });
         const stillRestarting = !!(st.gatewayStarting) || st.operationState?.type === 'restarting_gateway';
         if (st.gatewayRunning && !stillRestarting) {
           gwUp = true;
