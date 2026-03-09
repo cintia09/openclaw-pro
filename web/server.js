@@ -159,7 +159,7 @@ dns.setDefaultResultOrder('verbatim');
 async function fetchWithFallback(url, options = {}) {
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), options.timeout || 15000);
+    const timeout = setTimeout(() => controller.abort(), options.timeout || 30000);
     const resp = await fetch(url, { ...options, signal: controller.signal });
     clearTimeout(timeout);
     return resp;
@@ -2410,7 +2410,7 @@ function proxyGatewayRequest(req, res) {
     method: req.method,
     path: upstreamPath,
     headers,
-    timeout: 15000
+    timeout: 30000
   }, (proxyRes) => {
     const responseHeaders = { ...proxyRes.headers };
     if (responseHeaders.location) {
@@ -3463,7 +3463,7 @@ app.post('/api/ai/auth/oauth/login', async (req, res) => {
           method: 'POST',
           headers: { 'Accept': 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
           body: new URLSearchParams({ client_id: CLIENT_ID, scope: 'read:user' }),
-          signal: AbortSignal.timeout(15000)
+          signal: AbortSignal.timeout(30000)
         });
         if (!dcRes.ok) throw new Error(`GitHub device code 请求失败: HTTP ${dcRes.status}`);
         const dcData = await dcRes.json();
@@ -3491,7 +3491,7 @@ app.post('/api/ai/auth/oauth/login', async (req, res) => {
                 device_code: dcData.device_code,
                 grant_type: 'urn:ietf:params:oauth:grant-type:device_code'
               }),
-              signal: AbortSignal.timeout(15000)
+              signal: AbortSignal.timeout(30000)
             });
             const tokenData = await tokenRes.json();
             if (tokenData.access_token) {
@@ -4087,7 +4087,7 @@ app.post('/api/ai/keys/validate', async (req, res) => {
     const response = await fetch(fetchUrl, {
       method: 'GET',
       headers,
-      signal: AbortSignal.timeout(15000)
+      signal: AbortSignal.timeout(30000)
     });
 
     if (response.ok) {
@@ -4524,7 +4524,7 @@ app.post('/api/ai/models', async (req, res) => {
               'Accept': 'application/json',
               'User-Agent': 'GitHubCopilotChat/0.22.2024'
             },
-            signal: AbortSignal.timeout(15000)
+            signal: AbortSignal.timeout(30000)
           });
           if (!tokenRes.ok) {
             let copilotErrorMsg = `Copilot token exchange failed: HTTP ${tokenRes.status}`;
@@ -4627,7 +4627,7 @@ app.post('/api/ai/models', async (req, res) => {
             let fetchUrl = modelsUrl;
             if (provider === 'gemini') fetchUrl = `${modelsUrl}?key=${effectiveApiKey}`;
 
-            const response = await fetch(fetchUrl, { headers, signal: AbortSignal.timeout(15000) });
+            const response = await fetch(fetchUrl, { headers, signal: AbortSignal.timeout(30000) });
             if (response.ok) {
               const data = await response.json();
               let models;

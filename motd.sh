@@ -97,10 +97,8 @@ fi
 
 if [ -n "$DOMAIN" ]; then
     echo -e "${CYAN}║${NC}  🌐 Web管理: ${BLUE}https://${DOMAIN}:${HTTPS_PORT}${NC}"
-    echo -e "${CYAN}║${NC}  📋 Gateway: ${BLUE}https://${DOMAIN}:${HTTPS_PORT}/gateway${NC}"
 else
     echo -e "${CYAN}║${NC}  🌐 Web管理: ${BLUE}http://localhost:${WEB_PORT}${NC}"
-    echo -e "${CYAN}║${NC}  📋 Gateway: ${BLUE}http://localhost:${GW_PORT}${NC}"
 fi
 echo -e "${CYAN}║${NC}  🔐 SSH登录: ${BLUE}ssh ${SSH_USER}@<host> -p ${SSH_PORT}${NC}"
 
@@ -175,3 +173,10 @@ elif [ -t 0 ] && [ "$IS_SUDOER" = "true" ]; then
     # 普通用户但有 sudo 权限
     echo -e "${YELLOW}提示: 执行 ${CYAN}sudo -i${NC}${YELLOW} 切换到 root 用户使用配置菜单${NC}"
 fi
+
+# Docker 进入容器命令提示
+echo -e "${CYAN}┌──────────────────────────────────────────────────┐${NC}"
+echo -e "${CYAN}│${NC}  🐳 ${BOLD}Docker 进入容器${NC}:                                ${CYAN}│${NC}"
+echo -e "${CYAN}│${NC}     ${YELLOW}docker exec -it openclaw-pro bash${NC}            ${CYAN}│${NC}"
+echo -e "${CYAN}└──────────────────────────────────────────────────┘${NC}"
+echo ""

@@ -58,7 +58,7 @@ function parseWsLogLine(line) {
 // API helper
 // ------------------------
 async function api(url, opts={}){
-  const timeoutMs = Number(opts.timeoutMs || 15000);
+  const timeoutMs = Number(opts.timeoutMs || 60000);
   const { timeoutMs: _ignoreTimeoutMs, ...fetchOpts } = opts;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -1553,7 +1553,7 @@ $('btn-oc-repair-config')?.addEventListener('click', async ()=>{
   syncOpenClawButtons();
   appendOcLogLine('[restore] 正在读取配置备份列表...');
   try {
-    const list = await api('/api/openclaw/config/backups', { timeoutMs: 15000 });
+    const list = await api('/api/openclaw/config/backups', { timeoutMs: 30000 });
     if (!list || list.error || !Array.isArray(list.backups)) {
       throw new Error(list?.error || '备份列表读取失败');
     }
@@ -1630,7 +1630,7 @@ $('btn-oc-repair-config')?.addEventListener('click', async ()=>{
     const body = { name: selected.name };
     if (filesToRestore.length > 0) body.files = filesToRestore;
     appendOcLogLine(`[restore] 正在恢复备份: ${selected.name}` + (filesToRestore.length > 0 ? ` (${filesToRestore.join(', ')})` : ''));
-    const r = await api('/api/openclaw/config/restore', { method:'POST', body, timeoutMs: 15000 });
+    const r = await api('/api/openclaw/config/restore', { method:'POST', body, timeoutMs: 30000 });
     if (!r || r.error || !r.success) {
       throw new Error(r?.error || '恢复失败');
     }
