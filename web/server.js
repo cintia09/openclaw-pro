@@ -5531,7 +5531,10 @@ const OPENCLAW_OPERATION_MAX_SEC = {
   restarting_gateway: 480,
   repairing_config: 900
 };
-const OPENCLAW_RESTART_RECONCILE_GRACE_SEC = 5;
+// C9: Grace period must exceed watchdog CHECK_INTERVAL (10s) to avoid race condition
+// where the reconcile clears the restarting_gateway lock before the watchdog polls it.
+// Previously 5s — caused the watchdog to never see restart requests (DFMEA O4).
+const OPENCLAW_RESTART_RECONCILE_GRACE_SEC = 30;
 
 function ensureOpenClawRuntimeStateDirs() {
   try {
@@ -5608,7 +5611,9 @@ function getOpenClawOperationState() {
     const current = state && typeof state === 'object' ? { ...state } : { type: 'idle', taskId: '', startedAt: 0, pid: process.pid };
     if (current.type !== 'restarting_gateway') return current;
 
-    // Short grace period: let the watchdog pick up the lock, but don't keep the UI stuck for tens of seconds.
+    // C9: Grace period must be long enough for the watchdog (CHECK_INTERVAL=10s) to
+    // read operation.lock and initiate the actual kill+restart cycle. Only after this
+    // window should we reconcile against live gateway health and clear the state.
     const elapsedSec = Math.max(0, Math.floor((Date.now() - Number(current.startedAt || 0)) / 1000));
     if (elapsedSec < OPENCLAW_RESTART_RECONCILE_GRACE_SEC) return current;
 

@@ -608,11 +608,13 @@ ensure_gateway_proxy_compat_config() {
       | .gateway.controlUi = (.gateway.controlUi // {})
       | .gateway.trustedProxies = ((.gateway.trustedProxies // []) + $trusted | unique)
       | .gateway.controlUi.allowedOrigins = ((.gateway.controlUi.allowedOrigins // []) + $allowed | unique)
+      | .gateway.controlUi.dangerouslyDisableDeviceAuth = true
+      | .gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback = true
     ' "$cfg_file" > "$tmp_file" 2>/dev/null; then
         if ! cmp -s "$cfg_file" "$tmp_file"; then
             cp "$cfg_file" "$cfg_file.before-proxy-compat.$(date +%Y%m%d-%H%M%S).bak" 2>/dev/null || true
             mv "$tmp_file" "$cfg_file"
-            echo "[start-services] Updated openclaw.json: added gateway.trustedProxies + gateway.controlUi.allowedOrigins"
+            echo "[start-services] Updated openclaw.json: proxy compat + dangerouslyDisableDeviceAuth=true"
             # 更新 mtime 缓存为新文件的 mtime
             _PROXY_COMPAT_LAST_MTIME=$(stat -c %Y "$cfg_file" 2>/dev/null || echo "0")
         else
