@@ -156,6 +156,20 @@ ensure_local_no_proxy() {
 }
 ensure_local_no_proxy
 
+enable_node_env_proxy_if_configured() {
+    if [ -n "${http_proxy:-}" ] || [ -n "${HTTP_PROXY:-}" ] || [ -n "${https_proxy:-}" ] || [ -n "${HTTPS_PROXY:-}" ]; then
+        export NODE_USE_ENV_PROXY=1
+        case " ${NODE_OPTIONS:-} " in
+            *" --disable-warning=UNDICI-EHPA "*) ;;
+            *)
+                export NODE_OPTIONS="--disable-warning=UNDICI-EHPA${NODE_OPTIONS:+ ${NODE_OPTIONS}}"
+                ;;
+        esac
+        echo "[start-services] NODE_USE_ENV_PROXY enabled"
+    fi
+}
+enable_node_env_proxy_if_configured
+
 # 确保 pnpm 在运行时可用（/root 挂载可能覆盖 /root/.npm-global）
 ensure_pnpm_runtime() {
     if command -v pnpm >/dev/null 2>&1; then

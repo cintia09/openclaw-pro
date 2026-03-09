@@ -4170,6 +4170,21 @@ function Main {
                 }
             }
 
+            $proxyEnvMap = [ordered]@{
+                "http_proxy" = $(if ($env:http_proxy) { $env:http_proxy } elseif ($env:HTTP_PROXY) { $env:HTTP_PROXY } else { $null })
+                "HTTP_PROXY" = $(if ($env:HTTP_PROXY) { $env:HTTP_PROXY } elseif ($env:http_proxy) { $env:http_proxy } else { $null })
+                "https_proxy" = $(if ($env:https_proxy) { $env:https_proxy } elseif ($env:HTTPS_PROXY) { $env:HTTPS_PROXY } else { $null })
+                "HTTPS_PROXY" = $(if ($env:HTTPS_PROXY) { $env:HTTPS_PROXY } elseif ($env:https_proxy) { $env:https_proxy } else { $null })
+                "no_proxy" = $(if ($env:no_proxy) { $env:no_proxy } elseif ($env:NO_PROXY) { $env:NO_PROXY } else { $null })
+                "NO_PROXY" = $(if ($env:NO_PROXY) { $env:NO_PROXY } elseif ($env:no_proxy) { $env:no_proxy } else { $null })
+            }
+            foreach ($proxyName in $proxyEnvMap.Keys) {
+                $proxyValue = $proxyEnvMap[$proxyName]
+                if (-not [string]::IsNullOrWhiteSpace($proxyValue)) {
+                    $runArgs += @("-e", "${proxyName}=$proxyValue")
+                }
+            }
+
             $runArgs += @("--restart", "unless-stopped")
             # 如果使用 IP 自签证书（internal），不要在宿主机上映射 HTTP 80
             $filteredPortArgs = @()

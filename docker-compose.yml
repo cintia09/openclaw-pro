@@ -25,6 +25,12 @@ services:
       - ../home-docker:/root
     environment:
       - TZ=${TZ:-Asia/Shanghai}
+      - http_proxy=${http_proxy:-${HTTP_PROXY:-}}
+      - HTTP_PROXY=${HTTP_PROXY:-${http_proxy:-}}
+      - https_proxy=${https_proxy:-${HTTPS_PROXY:-}}
+      - HTTPS_PROXY=${HTTPS_PROXY:-${https_proxy:-}}
+      - no_proxy=${no_proxy:-${NO_PROXY:-}}
+      - NO_PROXY=${NO_PROXY:-${no_proxy:-}}
     # 端口按需配置：
     # 内网模式（无HTTPS）：
     #   ports:

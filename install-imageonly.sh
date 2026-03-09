@@ -1009,6 +1009,12 @@ create_and_start(){
   if [ -n "$host_user" ] && [ "$host_user" != "root" ]; then
     env_args+=(-e "HOST_USER=${host_user}" -e "HOST_UID=${host_uid}" -e "HOST_GID=${host_gid}")
   fi
+  for proxy_var in http_proxy HTTP_PROXY https_proxy HTTPS_PROXY no_proxy NO_PROXY; do
+    proxy_val="$(printenv "$proxy_var" 2>/dev/null || true)"
+    if [ -n "$proxy_val" ]; then
+      env_args+=(-e "${proxy_var}=${proxy_val}")
+    fi
+  done
 
   info "创建容器..."
   docker create --name "$CONTAINER_NAME" \
