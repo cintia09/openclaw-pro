@@ -5589,7 +5589,13 @@ function writeOperationLock(state) {
       return;
     }
     // C6: 使用原子写入防止竞态读到半写数据 (DFMEA O2)
-    writeJsonFileAtomic(OPENCLAW_OPERATION_LOCK_FILE, state, 0o600);
+    // C9: 使用紧凑 JSON，因为 watchdog 的 grep 模式不匹配美化格式
+    const lockDir = path.dirname(OPENCLAW_OPERATION_LOCK_FILE);
+    fs.mkdirSync(lockDir, { recursive: true });
+    const tmpPath = `${OPENCLAW_OPERATION_LOCK_FILE}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(state), { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(tmpPath, OPENCLAW_OPERATION_LOCK_FILE);
+    try { fs.chmodSync(OPENCLAW_OPERATION_LOCK_FILE, 0o600); } catch {}
   } catch {}
 }
 

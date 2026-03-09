@@ -754,7 +754,8 @@ current_operation_type() {
         echo "idle"
         return 0
     fi
-    op=$(grep -o '"type":"[^"]*"' "$lock_file" 2>/dev/null | head -1 | cut -d':' -f2 | tr -d '"')
+    # C9: 兼容紧凑 JSON ("type":"xxx") 和美化 JSON ("type": "xxx")
+    op=$(grep -oP '"type"\s*:\s*"\K[^"]+' "$lock_file" 2>/dev/null | head -1)
     [ -n "$op" ] || op="idle"
     echo "$op"
 }
