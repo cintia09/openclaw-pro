@@ -1412,14 +1412,7 @@ async function pollTask(taskId){
       return;
     }
 
-    const autoScroll = shouldAutoScroll(logEl);
-
-    if (logEl && st.delta) {
-      appendColored(logEl, st.delta, UI_OC_LOG_MAX_LINES, autoScroll);
-    } else if (logEl && !lastSeq && st.log) {
-      // First render fallback
-      setColored(logEl, st.log, UI_OC_LOG_MAX_LINES, autoScroll);
-    }
+    // C11: 操作日志窗口只显示关键里程碑，详细输出保留在后端日志
     lastSeq = Number(st.seq || lastSeq || 0);
 
     const now = Date.now();
