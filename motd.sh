@@ -48,7 +48,8 @@ CADDY_STATUS=$(check_service "caddy run")
 
 # 读取配置（普通用户需要 sudo 读取）
 DOMAIN=""
-if [ -f "$CONFIG_FILE" ]; then
+_cfg_exists() { if [ "$CURRENT_USER" = "root" ]; then [ -f "$1" ]; else sudo test -f "$1" 2>/dev/null; fi; }
+if _cfg_exists "$CONFIG_FILE"; then
     if [ "$CURRENT_USER" = "root" ]; then
         DOMAIN=$(jq -r '.domain // empty' "$CONFIG_FILE" 2>/dev/null)
     else
@@ -67,7 +68,7 @@ printf "${CYAN}║${NC}  %-10s %b %28s ${CYAN}║${NC}\n" "Caddy:" "$CADDY_STATU
 echo -e "${CYAN}╠══════════════════════════════════════════════════╣${NC}"
 
 # 读取端口配置
-if [ -f "$CONFIG_FILE" ]; then
+if _cfg_exists "$CONFIG_FILE"; then
     if [ "$CURRENT_USER" = "root" ]; then
         GW_PORT=$(jq -r '.port // 18789' "$CONFIG_FILE" 2>/dev/null)
         WEB_PORT=$(jq -r '.web_port // 3000' "$CONFIG_FILE" 2>/dev/null)
@@ -89,7 +90,7 @@ fi
 
 # 获取 SSH 用户（从持久化状态）
 SSH_USER_FILE="/root/.openclaw/users/ssh_user"
-if [ -f "$SSH_USER_FILE" ]; then
+if _cfg_exists "$SSH_USER_FILE"; then
     SSH_USER=$(sudo cat "$SSH_USER_FILE" 2>/dev/null | head -1)
 fi
 [ -z "$SSH_USER" ] && SSH_USER=$(awk -F: '$3>=1000 && $1!="nobody" {print $1; exit}' /etc/passwd 2>/dev/null)
