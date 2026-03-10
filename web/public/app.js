@@ -340,6 +340,7 @@ const ROUTES = [
   { id: 'openclaw-engine', title: 'OpenClaw 控制台' },
   { id: 'openclaw-ai', title: '接入模型配置' },
   { id: 'messaging', title: '消息平台' },
+  { id: 'browser', title: '远端浏览器控制' },
   { id: 'trading', title: '交易系统' },
   { id: 'plugins', title: '插件市场' },
   { id: 'terminal', title: '终端' },
@@ -377,6 +378,7 @@ function setActiveRoute(route){
   if (route === 'openclaw-engine') { refreshOpenClaw(); }
   if (route === 'openclaw-ai') { loadAIConfig(); }
   if (route === 'messaging') loadMessagingConfig();
+  if (route === 'browser') loadBrowserConfig();
   if (route === 'trading') refreshTrading();
   if (route === 'plugins') refreshPlugins();
   if (route === 'terminal') {
@@ -2801,37 +2803,65 @@ $('btn-ai-configured-delete')?.addEventListener('click', deleteConfiguredKey);
 // 初始化
 updateAiProviderUI();
 // ------------------------
+// Messaging – load / save (refactored to match openclaw.json schema)
+// Feishu: channels.feishu.accounts.main.{appId,appSecret,botName,...}
+// Discord: channels.discord.{token,guildId,groupPolicy,streaming,historyLimit,dmHistoryLimit}
+// ------------------------
 async function loadMessagingConfig(){
   const cfg = await api('/api/config');
   if (cfg.error) return;
   const c = cfg.channels || {};
 
   const setBoolSelect = (id, v) => { if ($(id)) $(id).value = String(!!v); };
+  const setVal = (id, v) => { if ($(id)) $(id).value = v ?? ''; };
 
-  setBoolSelect('feishu-enabled', c.feishu?.enabled);
-  $('feishu-appid').value = c.feishu?.appId || '';
-  $('feishu-secret').value = c.feishu?.appSecret || '';
-  $('feishu-token').value = c.feishu?.verificationToken || '';
-  $('feishu-encrypt').value = c.feishu?.encryptKey || '';
+  // -- 飞书 (nested: accounts.main) with flat fallback --
+  const fs = c.feishu || {};
+  const fsMain = fs.accounts?.main || {};
+  setBoolSelect('feishu-enabled', fs.enabled);
+  setVal('feishu-appid',   fsMain.appId   || fs.appId   || '');
+  setVal('feishu-secret',  fsMain.appSecret || fs.appSecret || '');
+  setVal('feishu-botname', fsMain.botName || fs.botName || '');
+  setVal('feishu-dmpolicy', fsMain.dmPolicy || fs.dmPolicy || 'open');
+  setVal('feishu-token',   fsMain.verificationToken || fs.verificationToken || '');
+  setVal('feishu-encrypt', fsMain.encryptKey || fs.encryptKey || '');
 
+  // -- Telegram --
   setBoolSelect('telegram-enabled', c.telegram?.enabled);
-  $('telegram-token').value = c.telegram?.token || '';
-  $('telegram-users').value = c.telegram?.allowedUsers || '';
+  setVal('telegram-token', c.telegram?.token);
+  setVal('telegram-users', c.telegram?.allowedUsers);
 
-  setBoolSelect('discord-enabled', c.discord?.enabled);
-  $('discord-token').value = c.discord?.token || '';
-  $('discord-guild').value = c.discord?.guildId || '';
+  // -- Discord (new fields) --
+  const dc = c.discord || {};
+  setBoolSelect('discord-enabled', dc.enabled);
+  setVal('discord-token', dc.token);
+  setVal('discord-guild', dc.guildId);
+  setVal('discord-grouppolicy', dc.groupPolicy || 'allowlist');
+  setVal('discord-streaming',   dc.streaming   || 'partial');
+  setVal('discord-historylimit', dc.historyLimit ?? 30);
+  setVal('discord-dmhistorylimit', dc.dmHistoryLimit ?? 50);
 
+  // -- Signal --
   setBoolSelect('signal-enabled', c.signal?.enabled);
-  $('signal-cli').value = c.signal?.cliPath || '';
-  $('signal-phone').value = c.signal?.phone || '';
+  setVal('signal-cli',   c.signal?.cliPath);
+  setVal('signal-phone', c.signal?.phone);
 
+  // -- WhatsApp --
   setBoolSelect('whatsapp-enabled', c.whatsapp?.enabled);
-  $('whatsapp-url').value = c.whatsapp?.apiUrl || '';
-  $('whatsapp-key').value = c.whatsapp?.apiKey || '';
+  setVal('whatsapp-url', c.whatsapp?.apiUrl);
+  setVal('whatsapp-key', c.whatsapp?.apiKey);
+
+  if ($('btn-msg-restart')) $('btn-msg-restart').style.display = 'none';
 }
 
-$('btn-msg-load').addEventListener('click', loadMessagingConfig);
+$('btn-msg-load')?.addEventListener('click', loadMessagingConfig);
+
+// 重启 Gateway 生效
+$('btn-msg-restart')?.addEventListener('click', async ()=>{
+  const r = await api('/api/openclaw/start', { method:'POST' });
+  toast(r.success ? 'Gateway 已重启' : '重启失败', r.error || '');
+  if (r.success && $('btn-msg-restart')) $('btn-msg-restart').style.display = 'none';
+});
 
 qa('[data-save-msg]').forEach(btn => {
   btn.addEventListener('click', async ()=>{
@@ -2841,18 +2871,29 @@ qa('[data-save-msg]').forEach(btn => {
     update.channels[platform] = { enabled };
 
     if (platform === 'feishu'){
-      update.channels.feishu.appId = $('feishu-appid').value;
-      update.channels.feishu.appSecret = $('feishu-secret').value;
-      update.channels.feishu.verificationToken = $('feishu-token').value;
-      update.channels.feishu.encryptKey = $('feishu-encrypt').value;
+      // Write nested structure: accounts.main
+      update.channels.feishu.accounts = { main: {
+        appId:             $('feishu-appid').value,
+        appSecret:         $('feishu-secret').value,
+        botName:           $('feishu-botname').value,
+        dmPolicy:          $('feishu-dmpolicy')?.value || 'open',
+        verificationToken: $('feishu-token').value,
+        encryptKey:        $('feishu-encrypt').value,
+      }};
+    }
+    if (platform === 'discord'){
+      Object.assign(update.channels.discord, {
+        token:           $('discord-token').value,
+        guildId:         $('discord-guild').value,
+        groupPolicy:     $('discord-grouppolicy')?.value || 'allowlist',
+        streaming:       $('discord-streaming')?.value || 'partial',
+        historyLimit:    Number($('discord-historylimit')?.value) || 30,
+        dmHistoryLimit:  Number($('discord-dmhistorylimit')?.value) || 50,
+      });
     }
     if (platform === 'telegram'){
       update.channels.telegram.token = $('telegram-token').value;
       update.channels.telegram.allowedUsers = $('telegram-users').value;
-    }
-    if (platform === 'discord'){
-      update.channels.discord.token = $('discord-token').value;
-      update.channels.discord.guildId = $('discord-guild').value;
     }
     if (platform === 'signal'){
       update.channels.signal.cliPath = $('signal-cli').value;
@@ -2864,9 +2905,137 @@ qa('[data-save-msg]').forEach(btn => {
     }
 
     const r = await api('/api/config', { method:'POST', body:update });
-    toast(r.success ? '保存成功' : '保存失败', r.error || '');
+    if (r.success) {
+      toast('保存成功', '需重启 Gateway 生效');
+      if ($('btn-msg-restart')) $('btn-msg-restart').style.display = '';
+    } else {
+      toast('保存失败', r.error || '');
+    }
   });
 });
+
+// ------------------------
+// 远端浏览器控制
+// ------------------------
+let _browserPairs = [];   // local working copy
+let _browserDirty = false; // track unsaved changes
+
+async function loadBrowserConfig(){
+  _browserDirty = false;
+  const d = await api('/api/browser/config');
+  if (d.error){ toast('加载浏览器配置失败', d.error); return; }
+
+  // status cards
+  const gwOk = d.gatewayBrowser?.listening;
+  $('browser-gw-status').textContent = gwOk ? '✅ 已启用' : '❌ 未启用';
+  $('browser-gw-status').style.color = gwOk ? '#3fb950' : '#f85149';
+  $('browser-sandbox-status').textContent = d.sandboxEnabled ? '✅ 已启用' : '⚠️ 未启用';
+  $('browser-sandbox-status').style.color = d.sandboxEnabled ? '#3fb950' : '#d29922';
+
+  _browserPairs = (d.pairs || []).map((p,i) => ({ ...p, _id: i }));
+  $('browser-pair-count').textContent = _browserPairs.length;
+  renderBrowserPairs();
+  if ($('btn-browser-save')) $('btn-browser-save').style.display = 'none';
+}
+
+function renderBrowserPairs(){
+  const el = $('browser-pairs-list');
+  if (!el) return;
+  if (!_browserPairs.length){
+    el.innerHTML = '<div class="muted" style="padding:12px">暂无配对设备</div>';
+    return;
+  }
+  el.innerHTML = _browserPairs.map((p,i) => `
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
+      <b style="min-width:100px">${esc(p.name||'未命名')}</b>
+      <span class="muted">${esc(p.host)}:${p.port||9222}</span>
+      <span class="badge ${p._lastOk ? 'badge-green' : ''}" style="font-size:11px">${p._lastOk ? '✅ 连通' : '—'}</span>
+      <span style="flex:1"></span>
+      <button class="btn btn-sm" onclick="testSinglePair(${i})">测试</button>
+      <button class="btn btn-sm btn-danger" onclick="removeBrowserPair(${i})">删除</button>
+    </div>
+  `).join('');
+}
+
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+async function testSinglePair(idx){
+  const p = _browserPairs[idx];
+  if (!p) return;
+  const r = await api('/api/browser/test', { method:'POST', body:{ host:p.host, port:p.port } });
+  p._lastOk = r.reachable;
+  renderBrowserPairs();
+  toast(r.reachable ? '连接成功' : '连接失败', r.reachable ? (r.browser||'') : (r.error||''));
+}
+window.testSinglePair = testSinglePair; // expose for inline onclick
+
+function removeBrowserPair(idx){
+  _browserPairs.splice(idx, 1);
+  $('browser-pair-count').textContent = _browserPairs.length;
+  _browserDirty = true;
+  renderBrowserPairs();
+  if ($('btn-browser-save')) $('btn-browser-save').style.display = '';
+}
+window.removeBrowserPair = removeBrowserPair;
+
+// Test new connection
+$('btn-browser-test')?.addEventListener('click', async ()=>{
+  const host = $('browser-new-host')?.value.trim();
+  const port = Number($('browser-new-port')?.value) || 9222;
+  if (!host){ toast('请填写 IP 地址'); return; }
+
+  const res = $('browser-test-result');
+  if (res){ res.style.display = ''; res.textContent = '测试中…'; }
+
+  const r = await api('/api/browser/test', { method:'POST', body:{ host, port } });
+  if (res){
+    res.textContent = r.reachable
+      ? `✅ 连接成功 — ${r.browser||''} (WebSocket: ${r.webSocketDebuggerUrl||'N/A'})`
+      : `❌ 连接失败 — ${r.error||'无法连接'}`;
+    res.style.color = r.reachable ? '#3fb950' : '#f85149';
+  }
+});
+
+// Add pair
+$('btn-browser-add')?.addEventListener('click', ()=>{
+  const name = $('browser-new-name')?.value.trim();
+  const host = $('browser-new-host')?.value.trim();
+  const port = Number($('browser-new-port')?.value) || 9222;
+  if (!host){ toast('请填写 IP 地址'); return; }
+
+  _browserPairs.push({ name: name || host, host, port, _id: Date.now() });
+  $('browser-pair-count').textContent = _browserPairs.length;
+  _browserDirty = true;
+  renderBrowserPairs();
+
+  // clear inputs
+  if ($('browser-new-name')) $('browser-new-name').value = '';
+  if ($('browser-new-host')) $('browser-new-host').value = '';
+  if ($('browser-new-port')) $('browser-new-port').value = '9222';
+  if ($('browser-test-result')) $('browser-test-result').style.display = 'none';
+  if ($('btn-browser-save')) $('btn-browser-save').style.display = '';
+});
+
+// Save & restart
+$('btn-browser-save')?.addEventListener('click', async ()=>{
+  const pairs = _browserPairs.map(p => ({ name:p.name, host:p.host, port:p.port }));
+  const r = await api('/api/browser/config', { method:'POST', body:{ pairs, browserEnabled: pairs.length > 0, sandboxEnabled: pairs.length > 0 } });
+  if (!r.success){ toast('保存失败', r.error||''); return; }
+
+  toast('保存成功', '正在重启 Gateway…');
+  await api('/api/openclaw/start', { method:'POST' });
+  toast('Gateway 已重启');
+  _browserDirty = false;
+  if ($('btn-browser-save')) $('btn-browser-save').style.display = 'none';
+  // reload status
+  setTimeout(()=> loadBrowserConfig(), 2000);
+});
+
+// Refresh
+$('btn-browser-refresh')?.addEventListener('click', loadBrowserConfig);
+
+// Browser guide tabs
+bindTabs('browser-guide-tabs', 'data-tab', '#browser-guide-panels .msg-panel', 'data-panel');
 
 // ------------------------
 // Trading (legacy endpoints retained)

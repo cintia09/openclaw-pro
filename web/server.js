@@ -327,6 +327,7 @@ const WEB_PANEL_LOG_FILE = '/root/.openclaw/logs/web-panel.log';
 const OPENCLAW_INSTALL_LOG_FILE = '/root/.openclaw/logs/openclaw-install.log';
 const OPENCLAW_STATE_ROOT = '/root/.openclaw';
 const OPENCLAW_LOCK_DIR = `${OPENCLAW_STATE_ROOT}/locks`;
+const BROWSER_PAIRS_PATH = '/root/.openclaw/browser-pairs.json';
 
 const TRADING_DIR = '/root/trading-system';
 const STRATEGY_PARAMS_PATH = path.join(TRADING_DIR, 'strategy_params.json');
@@ -3533,6 +3534,8 @@ app.post('/api/config', async (req, res) => {
     // 合并 channels 配置到 openclaw.json（明文存储，openclaw 直接读取）
     if (updates.channels) {
       if (!config.channels) config.channels = {};
+      // 在合并前，剥离掩码值（防止 *** 覆盖真实密钥）
+      stripMaskedValues(updates.channels);
       deepMerge(config.channels, updates.channels);
     }
 
@@ -3548,6 +3551,135 @@ app.post('/api/config', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 
+});
+
+// 递归删除值匹配掩码模式 (***) 的字段，防止掩码值覆盖真实密钥
+function stripMaskedValues(obj) {
+  if (!obj || typeof obj !== 'object') return;
+  for (const [k, v] of Object.entries(obj)) {
+    if (typeof v === 'string' && /^\*{3,}/.test(v)) {
+      delete obj[k];
+    } else if (typeof v === 'object' && v !== null) {
+      stripMaskedValues(v);
+    }
+  }
+}
+
+// ============================================================
+// API: browser pairs (远端浏览器控制)
+// ============================================================
+const BROWSER_CONTROL_PORT = 18791;
+
+function readBrowserPairs() {
+  return readJson(BROWSER_PAIRS_PATH, { pairs: [] });
+}
+
+function writeBrowserPairs(data) {
+  writeJson(BROWSER_PAIRS_PATH, data);
+}
+
+app.get('/api/browser/config', async (req, res) => {
+  try {
+    const config = readJson(CONFIG_PATH, {});
+    const pairsData = readBrowserPairs();
+    const browserCfg = config.browser || {};
+    const sandboxEnabled = !!(config.agents?.defaults?.sandbox?.browser?.enabled);
+
+    // 探测 gateway browser control 状态
+    let gatewayBrowser = { listening: false, version: '' };
+    try {
+      const versionJson = runCommandText(
+        `curl -sf --max-time 3 http://127.0.0.1:${BROWSER_CONTROL_PORT}/json/version 2>/dev/null`,
+        5000
+      );
+      if (versionJson) {
+        const v = JSON.parse(versionJson);
+        gatewayBrowser = { listening: true, version: v.Browser || v.browser || '' };
+      }
+    } catch {}
+    if (!gatewayBrowser.listening) {
+      gatewayBrowser.listening = runCommandOk(
+        `curl -sf --max-time 2 -o /dev/null http://127.0.0.1:${BROWSER_CONTROL_PORT}/ 2>/dev/null`,
+        4000
+      );
+    }
+
+    res.json({
+      browser: browserCfg,
+      sandboxEnabled,
+      gatewayBrowser,
+      pairs: pairsData.pairs || []
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/browser/config', async (req, res) => {
+  try {
+    const { pairs, browserEnabled, sandboxEnabled } = req.body || {};
+
+    // 更新配对列表
+    if (Array.isArray(pairs)) {
+      const clean = pairs.filter(p => p && p.name && p.host).map(p => ({
+        id: p.id || `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        name: String(p.name).trim(),
+        host: String(p.host).trim(),
+        port: parseInt(p.port, 10) || 9222,
+        createdAt: p.createdAt || new Date().toISOString()
+      }));
+      writeBrowserPairs({ pairs: clean });
+    }
+
+    // 更新 openclaw.json — browser 段 + agents sandbox
+    const config = readJson(CONFIG_PATH, {});
+    if (typeof browserEnabled === 'boolean') {
+      if (!config.browser) config.browser = {};
+      config.browser.enabled = browserEnabled;
+    }
+    if (typeof sandboxEnabled === 'boolean') {
+      if (!config.agents) config.agents = {};
+      if (!config.agents.defaults) config.agents.defaults = {};
+      if (!config.agents.defaults.sandbox) config.agents.defaults.sandbox = {};
+      if (!config.agents.defaults.sandbox.browser) config.agents.defaults.sandbox.browser = {};
+      config.agents.defaults.sandbox.browser.enabled = sandboxEnabled;
+    }
+    writeOpenClawConfig(config);
+
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/browser/test', async (req, res) => {
+  try {
+    const { host, port } = req.body || {};
+    if (!host) return res.status(400).json({ error: 'host is required' });
+    const p = parseInt(port, 10) || 9222;
+    const url = `http://${host}:${p}/json/version`;
+
+    const versionJson = runCommandText(
+      `curl -sf --max-time 5 '${url.replace(/'/g, "\\'")}' 2>/dev/null`,
+      8000
+    );
+    if (!versionJson) {
+      return res.json({ reachable: false, error: `无法连接到 ${host}:${p}` });
+    }
+    try {
+      const v = JSON.parse(versionJson);
+      return res.json({
+        reachable: true,
+        browser: v.Browser || v.browser || 'Chrome',
+        userAgent: v['User-Agent'] || '',
+        webSocketDebuggerUrl: v.webSocketDebuggerUrl || ''
+      });
+    } catch {
+      return res.json({ reachable: false, error: '远端返回非 JSON 响应' });
+    }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 const aiAuthTasks = {};

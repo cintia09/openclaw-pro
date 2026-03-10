@@ -28,6 +28,7 @@
         <a href="#openclaw-ai" data-route="openclaw-ai"><span class="ico">◈</span><span>接入模型配置</span></a>
         <a href="#messaging" data-route="messaging"><span class="ico">⌁</span><span>消息平台</span></a>
         <a href="#plugins" data-route="plugins"><span class="ico">◌</span><span>插件市场</span></a>
+        <a href="#browser" data-route="browser"><span class="ico">🖥</span><span>远端浏览器控制</span></a>
 
         <div class="nav-group-label">应用中心</div>
         <a href="#trading" data-route="trading"><span class="ico">◒</span><span>交易系统</span></a>
@@ -370,92 +371,283 @@
         </div>
       </section>
 
-      <!-- Messaging -->
+      <!-- Messaging (重构版: 与 openclaw.json channels schema 对齐) -->
       <section class="page" id="page-messaging" data-title="消息平台">
         <div class="card">
           <div class="row" style="justify-content:space-between">
             <div>
               <div style="font-weight:900;font-size:18px">消息平台</div>
-              <div class="muted small" style="margin-top:4px">飞书 / Telegram / Discord / Signal / WhatsApp</div>
+              <div class="muted small" style="margin-top:4px">配置 OpenClaw 接入的消息平台 · 保存后需重启 Gateway 生效</div>
             </div>
             <div class="row">
-              <button class="btn" id="btn-msg-load">读取当前配置</button>
+              <button class="btn" id="btn-msg-load">刷新配置</button>
+              <button class="btn btn-warning" id="btn-msg-restart" style="display:none">重启 Gateway 生效</button>
             </div>
           </div>
           <div class="sep"></div>
           <div class="tabs" id="msg-tabs">
             <button class="tab active" data-tab="feishu">飞书</button>
-            <button class="tab" data-tab="telegram">Telegram</button>
             <button class="tab" data-tab="discord">Discord</button>
+            <button class="tab" data-tab="telegram">Telegram</button>
             <button class="tab" data-tab="signal">Signal</button>
             <button class="tab" data-tab="whatsapp">WhatsApp</button>
           </div>
 
           <div id="msg-panels">
+            <!-- === 飞书 === -->
             <div class="msg-panel" data-panel="feishu">
-              <div class="grid">
-                <div style="grid-column: span 4;">
-                  <div class="field">
-                    <div class="label"><span>启用</span></div>
-                    <select class="input" id="feishu-enabled">
-                      <option value="true">启用</option>
-                      <option value="false">关闭</option>
-                    </select>
-                  </div>
-                </div>
-                <div style="grid-column: span 8;"></div>
-                <div style="grid-column: span 6;" class="field"><div class="label"><span>App ID</span></div><input class="input" id="feishu-appid" /></div>
-                <div style="grid-column: span 6;" class="field"><div class="label"><span>App Secret</span></div><input class="input" type="password" id="feishu-secret" /></div>
-                <div style="grid-column: span 6;" class="field"><div class="label"><span>Verification Token</span></div><input class="input" id="feishu-token" /></div>
-                <div style="grid-column: span 6;" class="field"><div class="label"><span>Encrypt Key</span></div><input class="input" type="password" id="feishu-encrypt" /></div>
+              <div class="muted small" style="margin-bottom:12px;padding:8px 12px;background:#1a1a2e;border-radius:6px">
+                📖 <b>配置指引</b>：前往 <a href="https://open.feishu.cn/app" target="_blank" rel="noopener" style="color:#58a6ff">飞书开放平台</a> →
+                创建企业自建应用 → 添加「机器人」能力 → 在「凭证与基础信息」中获取 App ID 和 App Secret →
+                在「事件订阅」中配置回调 URL（格式: <code>https://你的域名/feishu/webhook</code>）
               </div>
+              <div class="grid">
+                <div style="grid-column: span 3;" class="field">
+                  <div class="label"><span>启用</span></div>
+                  <select class="input" id="feishu-enabled"><option value="true">启用</option><option value="false">关闭</option></select>
+                </div>
+                <div style="grid-column: span 3;" class="field">
+                  <div class="label"><span>私聊策略</span></div>
+                  <select class="input" id="feishu-dmpolicy"><option value="open">开放 (open)</option><option value="restricted">受限 (restricted)</option></select>
+                </div>
+                <div style="grid-column: span 6;" class="field">
+                  <div class="label"><span>机器人名称</span></div>
+                  <input class="input" id="feishu-botname" placeholder="如: 小豆豆" />
+                </div>
+                <div style="grid-column: span 6;" class="field"><div class="label"><span>App ID</span> <span class="muted small">必填</span></div><input class="input" id="feishu-appid" placeholder="cli_xxxxxx" /></div>
+                <div style="grid-column: span 6;" class="field"><div class="label"><span>App Secret</span> <span class="muted small">必填</span></div><input class="input" type="password" id="feishu-secret" /></div>
+              </div>
+              <details style="margin-top:10px">
+                <summary class="muted small" style="cursor:pointer">高级选项（Verification Token / Encrypt Key）</summary>
+                <div class="grid" style="margin-top:8px">
+                  <div style="grid-column: span 6;" class="field"><div class="label"><span>Verification Token</span></div><input class="input" id="feishu-token" /></div>
+                  <div style="grid-column: span 6;" class="field"><div class="label"><span>Encrypt Key</span></div><input class="input" type="password" id="feishu-encrypt" /></div>
+                </div>
+              </details>
               <div class="sep"></div>
-              <div class="row"><button class="btn btn-primary" data-save-msg="feishu">保存</button></div>
+              <div class="row"><button class="btn btn-primary" data-save-msg="feishu">保存飞书配置</button></div>
             </div>
 
+            <!-- === Discord === -->
+            <div class="msg-panel" data-panel="discord" hidden>
+              <div class="muted small" style="margin-bottom:12px;padding:8px 12px;background:#1a1a2e;border-radius:6px">
+                📖 <b>配置指引</b>：前往 <a href="https://discord.com/developers/applications" target="_blank" rel="noopener" style="color:#58a6ff">Discord Developer Portal</a> →
+                New Application → Bot → 「Reset Token」获取 Bot Token →
+                开启 Message Content Intent → 生成邀请链接将 Bot 添加到服务器
+              </div>
+              <div class="grid">
+                <div style="grid-column: span 3;" class="field">
+                  <div class="label"><span>启用</span></div>
+                  <select class="input" id="discord-enabled"><option value="true">启用</option><option value="false">关闭</option></select>
+                </div>
+                <div style="grid-column: span 3;" class="field">
+                  <div class="label"><span>群组策略</span></div>
+                  <select class="input" id="discord-grouppolicy"><option value="allowlist">白名单 (allowlist)</option><option value="open">开放 (open)</option></select>
+                </div>
+                <div style="grid-column: span 3;" class="field">
+                  <div class="label"><span>流式回复</span></div>
+                  <select class="input" id="discord-streaming"><option value="partial">partial</option><option value="full">full</option><option value="off">off</option></select>
+                </div>
+                <div style="grid-column: span 3;"></div>
+                <div style="grid-column: span 6;" class="field"><div class="label"><span>Bot Token</span> <span class="muted small">必填</span></div><input class="input" type="password" id="discord-token" /></div>
+                <div style="grid-column: span 6;" class="field"><div class="label"><span>Server ID (Guild ID)</span></div><input class="input" id="discord-guild" placeholder="右键服务器 → 复制 ID" /></div>
+                <div style="grid-column: span 4;" class="field"><div class="label"><span>群组历史条数</span></div><input class="input" type="number" id="discord-historylimit" value="30" min="1" max="200" /></div>
+                <div style="grid-column: span 4;" class="field"><div class="label"><span>私聊历史条数</span></div><input class="input" type="number" id="discord-dmhistorylimit" value="50" min="1" max="200" /></div>
+              </div>
+              <div class="sep"></div>
+              <div class="row"><button class="btn btn-primary" data-save-msg="discord">保存 Discord 配置</button></div>
+            </div>
+
+            <!-- === Telegram === -->
             <div class="msg-panel" data-panel="telegram" hidden>
+              <div class="muted small" style="margin-bottom:12px;padding:8px 12px;background:#1a1a2e;border-radius:6px">
+                📖 <b>配置指引</b>：在 Telegram 中搜索 <a href="https://t.me/BotFather" target="_blank" rel="noopener" style="color:#58a6ff">@BotFather</a> →
+                发送 /newbot → 按提示创建机器人 → 获取 Bot Token。
+                Allowed User IDs 可通过 @userinfobot 获取你的 User ID。
+              </div>
               <div class="grid">
                 <div style="grid-column: span 4;" class="field"><div class="label"><span>启用</span></div><select class="input" id="telegram-enabled"><option value="true">启用</option><option value="false">关闭</option></select></div>
                 <div style="grid-column: span 8;"></div>
-                <div style="grid-column: span 6;" class="field"><div class="label"><span>Bot Token</span></div><input class="input" type="password" id="telegram-token" /></div>
-                <div style="grid-column: span 6;" class="field"><div class="label"><span>Allowed User IDs</span></div><input class="input" id="telegram-users" placeholder="逗号分隔" /></div>
+                <div style="grid-column: span 6;" class="field"><div class="label"><span>Bot Token</span> <span class="muted small">必填</span></div><input class="input" type="password" id="telegram-token" /></div>
+                <div style="grid-column: span 6;" class="field"><div class="label"><span>Allowed User IDs</span></div><input class="input" id="telegram-users" placeholder="逗号分隔，如 123456,789012" /></div>
               </div>
               <div class="sep"></div>
-              <div class="row"><button class="btn btn-primary" data-save-msg="telegram">保存</button></div>
+              <div class="row"><button class="btn btn-primary" data-save-msg="telegram">保存 Telegram 配置</button></div>
             </div>
 
-            <div class="msg-panel" data-panel="discord" hidden>
-              <div class="grid">
-                <div style="grid-column: span 4;" class="field"><div class="label"><span>启用</span></div><select class="input" id="discord-enabled"><option value="true">启用</option><option value="false">关闭</option></select></div>
-                <div style="grid-column: span 8;"></div>
-                <div style="grid-column: span 6;" class="field"><div class="label"><span>Bot Token</span></div><input class="input" type="password" id="discord-token" /></div>
-                <div style="grid-column: span 6;" class="field"><div class="label"><span>Guild ID</span></div><input class="input" id="discord-guild" /></div>
-              </div>
-              <div class="sep"></div>
-              <div class="row"><button class="btn btn-primary" data-save-msg="discord">保存</button></div>
-            </div>
-
+            <!-- === Signal === -->
             <div class="msg-panel" data-panel="signal" hidden>
+              <div class="muted small" style="margin-bottom:12px;padding:8px 12px;background:#1a1a2e;border-radius:6px">
+                📖 <b>配置指引</b>：需要先安装 <a href="https://github.com/AsamK/signal-cli" target="_blank" rel="noopener" style="color:#58a6ff">signal-cli</a>，
+                然后用 <code>signal-cli -a +手机号 register</code> 注册，
+                再用 <code>signal-cli -a +手机号 verify 验证码</code> 完成验证。
+              </div>
               <div class="grid">
                 <div style="grid-column: span 4;" class="field"><div class="label"><span>启用</span></div><select class="input" id="signal-enabled"><option value="true">启用</option><option value="false">关闭</option></select></div>
                 <div style="grid-column: span 8;"></div>
                 <div style="grid-column: span 6;" class="field"><div class="label"><span>Signal CLI 路径</span></div><input class="input" id="signal-cli" placeholder="/usr/local/bin/signal-cli" /></div>
-                <div style="grid-column: span 6;" class="field"><div class="label"><span>手机号</span></div><input class="input" id="signal-phone" placeholder="+86..." /></div>
+                <div style="grid-column: span 6;" class="field"><div class="label"><span>手机号</span></div><input class="input" id="signal-phone" placeholder="+8613800138000" /></div>
               </div>
               <div class="sep"></div>
-              <div class="row"><button class="btn btn-primary" data-save-msg="signal">保存</button></div>
+              <div class="row"><button class="btn btn-primary" data-save-msg="signal">保存 Signal 配置</button></div>
             </div>
 
+            <!-- === WhatsApp === -->
             <div class="msg-panel" data-panel="whatsapp" hidden>
+              <div class="muted small" style="margin-bottom:12px;padding:8px 12px;background:#1a1a2e;border-radius:6px">
+                📖 <b>配置指引</b>：需要 WhatsApp Business API 或兼容网关（如 <a href="https://waha.devlike.pro/" target="_blank" rel="noopener" style="color:#58a6ff">WAHA</a>）。
+                填入网关的 API 地址和密钥即可。
+              </div>
               <div class="grid">
                 <div style="grid-column: span 4;" class="field"><div class="label"><span>启用</span></div><select class="input" id="whatsapp-enabled"><option value="true">启用</option><option value="false">关闭</option></select></div>
                 <div style="grid-column: span 8;"></div>
-                <div style="grid-column: span 6;" class="field"><div class="label"><span>API URL</span></div><input class="input" id="whatsapp-url" /></div>
+                <div style="grid-column: span 6;" class="field"><div class="label"><span>API URL</span></div><input class="input" id="whatsapp-url" placeholder="http://localhost:3000" /></div>
                 <div style="grid-column: span 6;" class="field"><div class="label"><span>API Key</span></div><input class="input" type="password" id="whatsapp-key" /></div>
               </div>
               <div class="sep"></div>
-              <div class="row"><button class="btn btn-primary" data-save-msg="whatsapp">保存</button></div>
+              <div class="row"><button class="btn btn-primary" data-save-msg="whatsapp">保存 WhatsApp 配置</button></div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Browser Control (远端浏览器控制) -->
+      <section class="page" id="page-browser" data-title="远端浏览器控制">
+        <div class="grid">
+          <!-- 状态卡片 -->
+          <div class="card" style="grid-column: span 12;">
+            <div class="row" style="justify-content:space-between">
+              <div>
+                <div style="font-weight:900;font-size:18px">🖥 远端浏览器控制</div>
+                <div class="muted small" style="margin-top:4px">通过 Chrome DevTools Protocol 控制局域网内其他机器的 Chrome 浏览器</div>
+              </div>
+              <div class="row">
+                <button class="btn" id="btn-browser-refresh">刷新</button>
+              </div>
+            </div>
+            <div class="sep"></div>
+            <div class="grid">
+              <div style="grid-column: span 4;" class="field">
+                <div class="label"><span>Browser Control 服务</span></div>
+                <div class="big" id="browser-gw-status">—</div>
+              </div>
+              <div style="grid-column: span 4;" class="field">
+                <div class="label"><span>已配对设备</span></div>
+                <div class="big" id="browser-pair-count">0</div>
+              </div>
+              <div style="grid-column: span 4;" class="field">
+                <div class="label"><span>浏览器沙盒</span></div>
+                <div class="big" id="browser-sandbox-status">—</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 已配对设备列表 -->
+          <div class="card" style="grid-column: span 12;">
+            <div style="font-weight:900;font-size:16px">已配对设备</div>
+            <div class="sep"></div>
+            <div id="browser-pairs-list" style="min-height:40px">
+              <div class="muted" style="text-align:center;padding:20px">暂无配对设备</div>
+            </div>
+          </div>
+
+          <!-- 添加新配对 -->
+          <div class="card" style="grid-column: span 12;">
+            <div style="font-weight:900;font-size:16px">添加新配对</div>
+            <div class="sep"></div>
+            <div class="grid">
+              <div style="grid-column: span 4;" class="field">
+                <div class="label"><span>设备名称</span></div>
+                <input class="input" id="browser-new-name" placeholder="如: Mac Mini 书房" />
+              </div>
+              <div style="grid-column: span 4;" class="field">
+                <div class="label"><span>IP 地址</span></div>
+                <input class="input" id="browser-new-host" placeholder="192.168.1.100" />
+              </div>
+              <div style="grid-column: span 2;" class="field">
+                <div class="label"><span>端口</span></div>
+                <input class="input" type="number" id="browser-new-port" value="9222" />
+              </div>
+              <div style="grid-column: span 2;" class="field" style="display:flex;align-items:flex-end">
+                <button class="btn" id="btn-browser-test">测试连接</button>
+              </div>
+            </div>
+            <div id="browser-test-result" style="margin-top:8px;display:none" class="muted small"></div>
+            <div class="sep"></div>
+            <div class="row">
+              <button class="btn btn-primary" id="btn-browser-add">添加配对</button>
+              <button class="btn btn-warning" id="btn-browser-save" style="display:none">保存并重启 Gateway</button>
+            </div>
+          </div>
+
+          <!-- 配置指引 -->
+          <div class="card" style="grid-column: span 12;">
+            <details>
+              <summary style="font-weight:900;font-size:16px;cursor:pointer">📖 远程 Chrome 配置指引（点击展开）</summary>
+              <div class="sep"></div>
+              <div class="muted small" style="margin-bottom:12px;padding:8px 12px;background:#2a1a1a;border-radius:6px;color:#ff9f0a">
+                ⚠️ <b>安全提醒</b>：<code>--remote-debugging-address=0.0.0.0</code> 会将调试端口暴露到所有网络接口，
+                <b>请仅在局域网环境使用</b>，切勿暴露到公网。
+              </div>
+              <div class="tabs" id="browser-guide-tabs">
+                <button class="tab active" data-tab="guide-macos">macOS</button>
+                <button class="tab" data-tab="guide-windows">Windows</button>
+                <button class="tab" data-tab="guide-linux">Linux</button>
+              </div>
+              <div id="browser-guide-panels">
+                <div class="msg-panel" data-panel="guide-macos">
+                  <div style="margin-top:10px">
+                    <b>步骤 1: 启动带远程调试的 Chrome</b>
+                    <pre style="background:#1a1a1d;padding:10px;border-radius:6px;margin:8px 0;overflow-x:auto;user-select:all;font-size:12px">/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+  --remote-debugging-port=9222 \
+  --remote-debugging-address=0.0.0.0 \
+  --user-data-dir=$HOME/chrome-debug-profile</pre>
+                    <b>步骤 2: 设置开机自启（可选）</b>
+                    <div class="muted small" style="margin-top:4px">
+                      创建 <code>~/Library/LaunchAgents/com.chrome.debug.plist</code>，内容参考
+                      <a href="https://developer.apple.com/documentation/xpc/creating-launch-daemons-and-agents" target="_blank" rel="noopener" style="color:#58a6ff">Apple 文档</a>。
+                      Key: ProgramArguments 填入上述 Chrome 启动参数。
+                    </div>
+                  </div>
+                </div>
+                <div class="msg-panel" data-panel="guide-windows" hidden>
+                  <div style="margin-top:10px">
+                    <b>步骤 1: 启动带远程调试的 Chrome</b>
+                    <pre style="background:#1a1a1d;padding:10px;border-radius:6px;margin:8px 0;overflow-x:auto;user-select:all;font-size:12px">"C:\Program Files\Google\Chrome\Application\chrome.exe" ^
+  --remote-debugging-port=9222 ^
+  --remote-debugging-address=0.0.0.0 ^
+  --user-data-dir=%USERPROFILE%\chrome-debug-profile</pre>
+                    <b>步骤 2: 设置开机自启（可选）</b>
+                    <div class="muted small" style="margin-top:4px">
+                      按 Win+R → 输入 <code>shell:startup</code> → 在打开的文件夹中创建快捷方式，
+                      目标填入上述命令。或使用「任务计划程序」创建启动任务。
+                    </div>
+                  </div>
+                </div>
+                <div class="msg-panel" data-panel="guide-linux" hidden>
+                  <div style="margin-top:10px">
+                    <b>步骤 1: 启动带远程调试的 Chrome</b>
+                    <pre style="background:#1a1a1d;padding:10px;border-radius:6px;margin:8px 0;overflow-x:auto;user-select:all;font-size:12px">google-chrome-stable \
+  --remote-debugging-port=9222 \
+  --remote-debugging-address=0.0.0.0 \
+  --no-sandbox \
+  --user-data-dir=$HOME/chrome-debug-profile</pre>
+                    <b>步骤 2: 设置为 systemd 服务（可选）</b>
+                    <pre style="background:#1a1a1d;padding:10px;border-radius:6px;margin:8px 0;overflow-x:auto;font-size:12px"># /etc/systemd/system/chrome-debug.service
+[Unit]
+Description=Chrome Remote Debug
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/google-chrome-stable --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 --no-sandbox --headless --user-data-dir=/root/chrome-debug
+Restart=always
+
+[Install]
+WantedBy=multi-user.target</pre>
+                  </div>
+                </div>
+              </div>
+            </details>
           </div>
         </div>
       </section>
