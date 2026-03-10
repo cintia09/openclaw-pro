@@ -35,11 +35,33 @@ echo "$(date '+%Y-%m-%d %H:%M:%S') | 用户: $CURRENT_USER | IP: ${SSH_CLIENT%% 
 
 # 检查服务状态
 check_service() {
+    # 首先尝试通过进程名检测
     if pgrep -f "$1" | grep -qv $$ 2>/dev/null; then
         printf "${GREEN}● 在线${NC}"
-    else
-        printf "${RED}● 离线${NC}"
+        return 0
     fi
+    # 备用：通过端口检测（对于 Gateway）
+    if [[ "$1" == *"gateway"* ]]; then
+        if curl --noproxy '*' -s -o /dev/null --connect-timeout 1 --max-time 2 http://127.0.0.1:18789/health 2>/dev/null; then
+            printf "${GREEN}● 在线${NC}"
+            return 0
+        fi
+    fi
+    # 备用：通过端口检测（对于 Web）
+    if [[ "$1" == *"server.js"* ]]; then
+        if curl -s -o /dev/null --connect-timeout 1 --max-time 2 http://127.0.0.1:3000/ 2>/dev/null; then
+            printf "${GREEN}● 在线${NC}"
+            return 0
+        fi
+    fi
+    # 备用：通过端口检测（对于 Caddy）
+    if [[ "$1" == *"caddy"* ]]; then
+        if ss -ltn 2>/dev/null | grep -q ":443 " || netstat -ltn 2>/dev/null | grep -q ":443 "; then
+            printf "${GREEN}● 在线${NC}"
+            return 0
+        fi
+    fi
+    printf "${RED}● 离线${NC}"
 }
 
 GATEWAY_STATUS=$(check_service "openclaw-gatewa|openclaw\\.mjs gateway|openclaw .*gateway run")

@@ -698,6 +698,32 @@ function lookupModelCapabilities(providerName, modelId) {
     }
   }
 
+  // 4. 家族前缀匹配：提取模型家族前缀（纯字母部分），匹配同家族模型
+  // 例如 'qwen3.5-plus' → 'qwen'，'claude-sonnet-4' → 'claude'，匹配 OpenClaw 目录中任意同家族模型
+  const familyMatch = modelId.match(/^([a-z]+)/i);
+  if (familyMatch) {
+    const familyPrefix = familyMatch[1].toLowerCase();
+    // 在所有 provider 中查找同家族的任意模型（以该前缀开头）
+    for (const [prov, models] of Object.entries(_openclawModelCatalog)) {
+      for (const [id, model] of Object.entries(models)) {
+        // 检查模型ID是否以家族前缀开头（考虑多种命名格式：qwen-xxx, qwen/xxx, qwen_xxx）
+        const idLower = id.toLowerCase();
+        if (idLower.startsWith(familyPrefix + '-') ||
+            idLower.startsWith(familyPrefix + '/') ||
+            idLower.startsWith(familyPrefix + '_') ||
+            idLower === familyPrefix) {
+          // 找到同家族模型，标记为推测匹配
+          return {
+            ...model,
+            _inferred: true,
+            _matchedFamily: familyPrefix,
+            _originalId: modelId
+          };
+        }
+      }
+    }
+  }
+
   return null;
 }
 
@@ -712,14 +738,19 @@ function buildModelEntry(providerName, modelId) {
   const catalogEntry = lookupModelCapabilities(providerName, modelId);
 
   if (catalogEntry) {
+    const isInferred = catalogEntry._inferred;
     const safeApi = sanitizeApiValue(catalogEntry.api, providerName) || 'openai-completions';
     if (safeApi !== catalogEntry.api) {
       console.log(`[catalog] 模型 ${providerName}/${modelId} api 值 "${catalogEntry.api}" 不被 gateway 支持，映射为 "${safeApi}"`);
     }
-    console.log(`[catalog] 模型 ${providerName}/${modelId} 命中内置目录: reasoning=${catalogEntry.reasoning}, api=${safeApi}, ctx=${catalogEntry.contextWindow}`);
+    if (isInferred) {
+      console.log(`[catalog] 模型 ${providerName}/${modelId} 家族匹配成功 (${catalogEntry._matchedFamily})，推测使用同家族参数: reasoning=${catalogEntry.reasoning}, api=${safeApi}, ctx=${catalogEntry.contextWindow}`);
+    } else {
+      console.log(`[catalog] 模型 ${providerName}/${modelId} 命中内置目录: reasoning=${catalogEntry.reasoning}, api=${safeApi}, ctx=${catalogEntry.contextWindow}`);
+    }
     return {
       id: modelId,
-      name: catalogEntry.name || modelId,
+      name: isInferred ? modelId : (catalogEntry.name || modelId),
       api: safeApi,
       ...(catalogEntry.headers ? { headers: catalogEntry.headers } : {}),
       reasoning: catalogEntry.reasoning ?? false,
@@ -743,6 +774,73 @@ function buildModelEntry(providerName, modelId) {
     contextWindow: 128000,
     maxTokens: 4096
   };
+}
+
+/**
+ * 测试模型是否真实可用
+ * 向 provider 发起一个极简的 chat completion 请求验证模型是否存在
+ * 使用 execFileSync + curl 数组参数，继承代理环境变量且避免 shell 注入
+ * @param {string} provider - provider 名称
+ * @param {string} modelId - 模型 ID
+ * @param {string} apiKey - API Key
+ * @param {string} baseUrl - API 基础 URL
+ * @returns {Promise<{available: boolean, error?: string}>}
+ */
+async function testModelAvailability(provider, modelId, apiKey, baseUrl) {
+  const startTime = Date.now();
+  try {
+    const endpoint = baseUrl || getDefaultBaseUrl(provider);
+    if (!endpoint) {
+      return { available: false, error: '未找到 API 端点' };
+    }
+
+    const { execFileSync } = require('child_process');
+
+    const url = `${endpoint}/chat/completions`;
+    const authHeader = provider === 'anthropic' ? 'x-api-key' : 'Authorization';
+    const authValue = provider === 'anthropic' ? apiKey : `Bearer ${apiKey}`;
+
+    const body = JSON.stringify({
+      model: modelId,
+      messages: [{ role: 'user', content: 'Hi' }],
+      max_tokens: 5
+    });
+
+    // execFileSync 以数组传参，不经过 shell，杜绝命令注入
+    const args = [
+      '-sS', '--connect-timeout', '10', '--max-time', '20',
+      '-X', 'POST',
+      '-H', 'Content-Type: application/json',
+      '-H', `${authHeader}: ${authValue}`,
+      '-d', body,
+      '-w', '\n%{http_code}',
+      url
+    ];
+
+    const result = execFileSync('curl', args, {
+      encoding: 'utf8',
+      timeout: 30000,
+      env: process.env
+    });
+
+    const lines = result.trim().split('\n');
+    const httpCode = parseInt(lines[lines.length - 1], 10);
+    const responseBody = lines.slice(0, -1).join('\n');
+    const elapsed = Date.now() - startTime;
+
+    if (httpCode >= 200 && httpCode < 300) {
+      console.log(`[model-test] ${provider}/${modelId} 测试成功 (${elapsed}ms)`);
+      return { available: true };
+    }
+
+    console.log(`[model-test] ${provider}/${modelId} 测试失败: HTTP ${httpCode} (${elapsed}ms)`);
+    return { available: false, error: `HTTP ${httpCode}: ${responseBody.slice(0, 200)}` };
+
+  } catch (e) {
+    const elapsed = Date.now() - startTime;
+    console.log(`[model-test] ${provider}/${modelId} 测试异常: ${e.message} (${elapsed}ms)`);
+    return { available: false, error: e.message };
+  }
 }
 
 /**
@@ -4354,9 +4452,46 @@ app.post('/api/ai/config', async (req, res) => {
       // 检查模型是否在目录中被支持
       const [provName, modId] = model.split('/');
       const catalogHit = lookupModelCapabilities(provName, modId);
+
       if (!catalogHit) {
+        // 完全未找到 - 可能是全新模型或拼写错误
         errors.push(`${role} "${model}" 未在 OpenClaw 模型目录中找到，请确认模型名称是否正确`);
+      } else if (catalogHit._inferred) {
+        // 家族前缀匹配成功（推测匹配）- 需要进行运行时验证
+        console.log(`[ai/config] ${model} 家族匹配成功 (${catalogHit._matchedFamily})，将进行运行时验证...`);
+
+        // 获取该 provider 的 API Key 和 baseUrl
+        let modelApiKey = '';
+        let modelBaseUrl = '';
+        try {
+          const modelsCfg = readAiModels();
+          modelApiKey = modelsCfg.providers?.[provName]?.apiKey || '';
+          modelBaseUrl = modelsCfg.providers?.[provName]?.baseUrl || '';
+        } catch {}
+
+        // 如果没有找到 key，尝试从 auth-profiles 获取
+        if (!modelApiKey) {
+          for (const [, profile] of Object.entries(authProfiles.profiles || {})) {
+            if (profile.provider === provName) {
+              modelApiKey = getAuthProfileSecret(profile) || '';
+              break;
+            }
+          }
+        }
+
+        if (!modelApiKey || modelApiKey === 'YOUR_API_KEY') {
+          errors.push(`${role} "${model}" 需要进行运行时验证，但 ${provName} 没有配置有效的 API Key`);
+        } else {
+          // 异步测试模型可用性
+          const testResult = await testModelAvailability(provName, modId, modelApiKey, modelBaseUrl);
+          if (!testResult.available) {
+            errors.push(`${role} "${model}" 运行时验证失败: ${testResult.error || '模型不可用'}`);
+          } else {
+            console.log(`[ai/config] ${model} 运行时验证成功，允许配置`);
+          }
+        }
       }
+      // 精确匹配成功 (catalogHit && !catalogHit._inferred) - 无需额外验证
     }
     if (errors.length > 0) {
       return res.status(400).json({ error: errors.join('；') });
