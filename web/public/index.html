@@ -450,7 +450,11 @@
                 </div>
                 <div style="grid-column: span 3;"></div>
                 <div style="grid-column: span 6;" class="field"><div class="label"><span>Bot Token</span> <span class="muted small">必填</span></div><input class="input" type="password" id="discord-token" /></div>
-                <div style="grid-column: span 6;" class="field"><div class="label"><span>Server ID (Guild ID)</span></div><input class="input" id="discord-guild" placeholder="右键服务器 → 复制 ID" /></div>
+                <div style="grid-column: span 6;" class="field">
+                  <div class="label"><span>服务器 ID 列表 (Guild IDs)</span></div>
+                  <textarea class="input" id="discord-guilds" rows="3" placeholder="每行一个，或逗号分隔\n例如:\n123456789012345678\n987654321098765432"></textarea>
+                  <div class="muted small" style="margin-top:4px">将写入 channels.discord.guilds（多服务器模式）</div>
+                </div>
                 <div style="grid-column: span 4;" class="field"><div class="label"><span>群组历史条数</span></div><input class="input" type="number" id="discord-historylimit" value="30" min="1" max="200" /></div>
                 <div style="grid-column: span 4;" class="field"><div class="label"><span>私聊历史条数</span></div><input class="input" type="number" id="discord-dmhistorylimit" value="50" min="1" max="200" /></div>
               </div>
@@ -508,6 +512,10 @@
               <div class="row"><button class="btn btn-primary" data-save-msg="whatsapp">保存 WhatsApp 配置</button></div>
             </div>
           </div>
+
+          <div class="sep"></div>
+          <div style="font-weight:700;font-size:13px;margin-bottom:6px">操作日志</div>
+          <div class="terminal" id="msg-log" style="height:160px;font-size:11.5px"></div>
         </div>
       </section>
 
@@ -519,7 +527,7 @@
             <div class="row" style="justify-content:space-between">
               <div>
                 <div style="font-weight:900;font-size:18px">🖥 远端浏览器控制</div>
-                <div class="muted small" style="margin-top:4px">通过 Chrome DevTools Protocol 控制局域网内其他机器的 Chrome 浏览器</div>
+                <div class="muted small" style="margin-top:4px">通过 Chrome 插件连接局域网内的浏览器，AI 代理可远程操控</div>
               </div>
               <div class="row">
                 <button class="btn" id="btn-browser-refresh">刷新</button>
@@ -532,8 +540,8 @@
                 <div class="big" id="browser-gw-status">—</div>
               </div>
               <div style="grid-column: span 4;" class="field">
-                <div class="label"><span>已配对设备</span></div>
-                <div class="big" id="browser-pair-count">0</div>
+                <div class="label"><span>在线浏览器</span></div>
+                <div class="big" id="browser-online-count">0</div>
               </div>
               <div style="grid-column: span 4;" class="field">
                 <div class="label"><span>浏览器沙盒</span></div>
@@ -542,110 +550,118 @@
             </div>
           </div>
 
-          <!-- 已配对设备列表 -->
+          <!-- 已在线的浏览器 -->
           <div class="card" style="grid-column: span 12;">
-            <div style="font-weight:900;font-size:16px">已配对设备</div>
+            <div style="font-weight:900;font-size:16px">🟢 已连接的浏览器</div>
             <div class="sep"></div>
-            <div id="browser-pairs-list" style="min-height:40px">
-              <div class="muted" style="text-align:center;padding:20px">暂无配对设备</div>
+            <div id="browser-online-list" style="min-height:40px">
+              <div class="muted" style="text-align:center;padding:20px">暂无在线浏览器</div>
             </div>
           </div>
 
-          <!-- 添加新配对 -->
+          <!-- 配对码管理 -->
           <div class="card" style="grid-column: span 12;">
-            <div style="font-weight:900;font-size:16px">添加新配对</div>
+            <div style="font-weight:900;font-size:16px">🔑 配对码管理</div>
+            <div class="muted small" style="margin-top:4px">生成配对码后，在远端浏览器的 OpenClaw Bridge 插件中输入该配对码即可建立连接</div>
+            <div class="sep"></div>
+            <div id="browser-pair-codes-list" style="min-height:40px">
+              <div class="muted" style="text-align:center;padding:12px">暂无配对码</div>
+            </div>
             <div class="sep"></div>
             <div class="grid">
-              <div style="grid-column: span 4;" class="field">
-                <div class="label"><span>设备名称</span></div>
-                <input class="input" id="browser-new-name" placeholder="如: Mac Mini 书房" />
+              <div style="grid-column: span 6;" class="field">
+                <div class="label"><span>设备备注名</span></div>
+                <input class="input" id="browser-new-name" placeholder="如: 书房 Mac Mini" />
               </div>
-              <div style="grid-column: span 4;" class="field">
-                <div class="label"><span>IP 地址</span></div>
-                <input class="input" id="browser-new-host" placeholder="192.168.1.100" />
+              <div style="grid-column: span 6;" class="field" style="display:flex;align-items:flex-end">
+                <button class="btn btn-primary" id="btn-browser-gen-code">生成新配对码</button>
               </div>
-              <div style="grid-column: span 2;" class="field">
-                <div class="label"><span>端口</span></div>
-                <input class="input" type="number" id="browser-new-port" value="9222" />
-              </div>
-              <div style="grid-column: span 2;" class="field" style="display:flex;align-items:flex-end">
-                <button class="btn" id="btn-browser-test">测试连接</button>
-              </div>
-            </div>
-            <div id="browser-test-result" style="margin-top:8px;display:none" class="muted small"></div>
-            <div class="sep"></div>
-            <div class="row">
-              <button class="btn btn-primary" id="btn-browser-add">添加配对</button>
-              <button class="btn btn-warning" id="btn-browser-save" style="display:none">保存并重启 Gateway</button>
             </div>
           </div>
 
-          <!-- 配置指引 -->
+          <!-- 配置 -->
+          <div class="card" style="grid-column: span 12;">
+            <div style="font-weight:900;font-size:16px">⚙️ 配置</div>
+            <div class="sep"></div>
+            <div class="grid">
+              <div style="grid-column: span 6;" class="field">
+                <div class="label"><span>Browser Control 开关</span></div>
+                <select class="input" id="browser-enabled-select">
+                  <option value="true">启用</option>
+                  <option value="false">关闭</option>
+                </select>
+              </div>
+              <div style="grid-column: span 6;" class="field">
+                <div class="label"><span>浏览器沙盒</span></div>
+                <select class="input" id="browser-sandbox-select">
+                  <option value="true">启用</option>
+                  <option value="false">关闭</option>
+                </select>
+              </div>
+            </div>
+            <div class="row" style="margin-top:8px">
+              <button class="btn btn-primary" id="btn-browser-save-config">保存配置</button>
+              <button class="btn btn-warning" id="btn-browser-restart" style="display:none">重启 Gateway 生效</button>
+            </div>
+          </div>
+
+          <!-- 安装指引 -->
           <div class="card" style="grid-column: span 12;">
             <details>
-              <summary style="font-weight:900;font-size:16px;cursor:pointer">📖 远程 Chrome 配置指引（点击展开）</summary>
+              <summary style="font-weight:900;font-size:16px;cursor:pointer">📖 Chrome 插件安装与使用指引（点击展开）</summary>
               <div class="sep"></div>
-              <div class="muted small" style="margin-bottom:12px;padding:8px 12px;background:#2a1a1a;border-radius:6px;color:#ff9f0a">
-                ⚠️ <b>安全提醒</b>：<code>--remote-debugging-address=0.0.0.0</code> 会将调试端口暴露到所有网络接口，
-                <b>请仅在局域网环境使用</b>，切勿暴露到公网。
-              </div>
-              <div class="tabs" id="browser-guide-tabs">
-                <button class="tab active" data-tab="guide-macos">macOS</button>
-                <button class="tab" data-tab="guide-windows">Windows</button>
-                <button class="tab" data-tab="guide-linux">Linux</button>
-              </div>
-              <div id="browser-guide-panels">
-                <div class="msg-panel" data-panel="guide-macos">
-                  <div style="margin-top:10px">
-                    <b>步骤 1: 启动带远程调试的 Chrome</b>
-                    <pre style="background:#1a1a1d;padding:10px;border-radius:6px;margin:8px 0;overflow-x:auto;user-select:all;font-size:12px">/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
-  --remote-debugging-port=9222 \
-  --remote-debugging-address=0.0.0.0 \
-  --user-data-dir=$HOME/chrome-debug-profile</pre>
-                    <b>步骤 2: 设置开机自启（可选）</b>
-                    <div class="muted small" style="margin-top:4px">
-                      创建 <code>~/Library/LaunchAgents/com.chrome.debug.plist</code>，内容参考
-                      <a href="https://developer.apple.com/documentation/xpc/creating-launch-daemons-and-agents" target="_blank" rel="noopener" style="color:#58a6ff">Apple 文档</a>。
-                      Key: ProgramArguments 填入上述 Chrome 启动参数。
-                    </div>
-                  </div>
-                </div>
-                <div class="msg-panel" data-panel="guide-windows" hidden>
-                  <div style="margin-top:10px">
-                    <b>步骤 1: 启动带远程调试的 Chrome</b>
-                    <pre style="background:#1a1a1d;padding:10px;border-radius:6px;margin:8px 0;overflow-x:auto;user-select:all;font-size:12px">"C:\Program Files\Google\Chrome\Application\chrome.exe" ^
-  --remote-debugging-port=9222 ^
-  --remote-debugging-address=0.0.0.0 ^
-  --user-data-dir=%USERPROFILE%\chrome-debug-profile</pre>
-                    <b>步骤 2: 设置开机自启（可选）</b>
-                    <div class="muted small" style="margin-top:4px">
-                      按 Win+R → 输入 <code>shell:startup</code> → 在打开的文件夹中创建快捷方式，
-                      目标填入上述命令。或使用「任务计划程序」创建启动任务。
-                    </div>
-                  </div>
-                </div>
-                <div class="msg-panel" data-panel="guide-linux" hidden>
-                  <div style="margin-top:10px">
-                    <b>步骤 1: 启动带远程调试的 Chrome</b>
-                    <pre style="background:#1a1a1d;padding:10px;border-radius:6px;margin:8px 0;overflow-x:auto;user-select:all;font-size:12px">google-chrome-stable \
-  --remote-debugging-port=9222 \
-  --remote-debugging-address=0.0.0.0 \
-  --no-sandbox \
-  --user-data-dir=$HOME/chrome-debug-profile</pre>
-                    <b>步骤 2: 设置为 systemd 服务（可选）</b>
-                    <pre style="background:#1a1a1d;padding:10px;border-radius:6px;margin:8px 0;overflow-x:auto;font-size:12px"># /etc/systemd/system/chrome-debug.service
-[Unit]
-Description=Chrome Remote Debug
-After=network.target
 
-[Service]
-ExecStart=/usr/bin/google-chrome-stable --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 --no-sandbox --headless --user-data-dir=/root/chrome-debug
-Restart=always
-
-[Install]
-WantedBy=multi-user.target</pre>
-                  </div>
+              <div style="padding:4px 0">
+                <div style="font-weight:700;font-size:14px;margin-bottom:8px">工作原理</div>
+                <div class="muted small" style="line-height:1.7;margin-bottom:16px">
+                  远端浏览器安装 <b>OpenClaw Browser Bridge</b> 插件后，插件会通过 WebSocket <b>主动连接</b>到本服务器。
+                  相比传统的 <code>--remote-debugging-port</code> 方案，插件方式：<br>
+                  ✅ 不需要命令行启动 Chrome<br>
+                  ✅ 不需要在远端开放任何端口<br>
+                  ✅ 插件主动连接服务端，可穿越 NAT/防火墙<br>
+                  ✅ 使用配对码认证，更安全
                 </div>
+              </div>
+
+              <div style="font-weight:700;font-size:14px;margin-bottom:8px">安装步骤</div>
+              <div style="line-height:1.8;font-size:13px">
+                <div style="margin-bottom:12px">
+                  <b>步骤 1：获取插件</b><br>
+                  <span class="muted small">在本项目的 <code>web/browser-extension/</code> 目录中包含了完整的插件源码。</span>
+                </div>
+                <div style="margin-bottom:12px">
+                  <b>步骤 2：加载插件到 Chrome</b><br>
+                  <span class="muted small">
+                    ① 在远端机器的 Chrome 地址栏输入 <code style="user-select:all">chrome://extensions</code> 并回车<br>
+                    ② 打开右上角 <b>「开发者模式」</b>开关<br>
+                    ③ 点击 <b>「加载已解压的扩展程序」</b><br>
+                    ④ 选择 <code>web/browser-extension/</code> 文件夹<br>
+                    ⑤ 插件加载后，工具栏会出现绿色圆形图标
+                  </span>
+                </div>
+                <div style="margin-bottom:12px">
+                  <b>步骤 3：配置连接</b><br>
+                  <span class="muted small">
+                    ① 在上方「配对码管理」中点击 <b>「生成新配对码」</b>，获得 6 位配对码<br>
+                    ② 点击远端 Chrome 工具栏的插件图标，打开弹窗<br>
+                    ③ 填入本服务器地址（如 <code style="user-select:all" id="browser-guide-server-url">http://192.168.x.x:3000</code>）<br>
+                    ④ 填入配对码<br>
+                    ⑤ 点击「连接」，状态变为绿色即成功
+                  </span>
+                </div>
+                <div style="margin-bottom:12px">
+                  <b>步骤 4：验证</b><br>
+                  <span class="muted small">
+                    连接成功后，上方「已连接的浏览器」区域会显示该设备。
+                    点击「测试」按钮可以获取远端浏览器的标签页列表，确认控制链路正常。
+                  </span>
+                </div>
+              </div>
+
+              <div class="sep"></div>
+              <div class="muted small" style="padding:8px 12px;background:#1a2a1a;border-radius:6px;color:#3fb950;line-height:1.6">
+                💡 <b>安全说明</b>：插件与服务端之间使用配对码认证，连接仅在局域网内建立。
+                删除配对码会立即断开对应的浏览器连接。建议仅在可信的局域网环境中使用此功能。
               </div>
             </details>
           </div>

@@ -3531,11 +3531,28 @@ app.post('/api/config', async (req, res) => {
 
     const updates = req.body || {};
 
+    const savedChannels = [];
+
     // 合并 channels 配置到 openclaw.json（明文存储，openclaw 直接读取）
     if (updates.channels) {
       if (!config.channels) config.channels = {};
+      savedChannels.push(...Object.keys(updates.channels));
       // 在合并前，剥离掩码值（防止 *** 覆盖真实密钥）
       stripMaskedValues(updates.channels);
+      // 兼容历史错误字段并对齐 OpenClaw 当前 schema
+      normalizeDiscordChannelConfig(updates.channels);
+      normalizeDiscordChannelConfig(config.channels);
+
+      // 多服务器模式：当前端显式要求替换 guilds 时，先清空旧值再合并
+      const replaceGuilds = !!updates.channels?.discord?.__replaceGuilds;
+      if (replaceGuilds) {
+        if (!config.channels.discord || typeof config.channels.discord !== 'object') {
+          config.channels.discord = {};
+        }
+        config.channels.discord.guilds = {};
+        delete updates.channels.discord.__replaceGuilds;
+      }
+
       deepMerge(config.channels, updates.channels);
     }
 
@@ -3546,7 +3563,7 @@ app.post('/api/config', async (req, res) => {
       throw new Error(`Failed to write config: ${err.message}`);
     }
 
-    res.json({ success: true });
+    res.json({ success: true, savedChannels: Array.from(new Set(savedChannels)) });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -3557,7 +3574,13 @@ app.post('/api/config', async (req, res) => {
 function stripMaskedValues(obj) {
   if (!obj || typeof obj !== 'object') return;
   for (const [k, v] of Object.entries(obj)) {
-    if (typeof v === 'string' && /^\*{3,}/.test(v)) {
+    // UI 掩码值（*** 或 •••）不应覆盖真实密钥
+    const looksMasked = typeof v === 'string' && (
+      /^\*{3,}/.test(v) ||
+      /^•+$/.test(v) ||
+      v.includes('•••')
+    );
+    if (looksMasked) {
       delete obj[k];
     } else if (typeof v === 'object' && v !== null) {
       stripMaskedValues(v);
@@ -3565,17 +3588,68 @@ function stripMaskedValues(obj) {
   }
 }
 
+// 兼容旧版/错误字段，统一到 OpenClaw 当前 schema
+function normalizeDiscordChannelConfig(channelsObj) {
+  if (!channelsObj || typeof channelsObj !== 'object') return;
+  const discord = channelsObj.discord;
+  if (!discord || typeof discord !== 'object') return;
+
+  // 旧字段 guildId 不在官方 schema 中，迁移到 guilds
+  if (typeof discord.guildId === 'string' && discord.guildId.trim()) {
+    const gid = discord.guildId.trim();
+    if (!discord.guilds || typeof discord.guilds !== 'object') {
+      discord.guilds = {};
+    }
+    if (!discord.guilds[gid] || typeof discord.guilds[gid] !== 'object') {
+      discord.guilds[gid] = {};
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(discord, 'guildId')) {
+    delete discord.guildId;
+  }
+
+  // 账户级同样清理错误字段
+  if (discord.accounts && typeof discord.accounts === 'object') {
+    for (const accountCfg of Object.values(discord.accounts)) {
+      if (!accountCfg || typeof accountCfg !== 'object') continue;
+      if (typeof accountCfg.guildId === 'string' && accountCfg.guildId.trim()) {
+        const gid = accountCfg.guildId.trim();
+        if (!accountCfg.guilds || typeof accountCfg.guilds !== 'object') {
+          accountCfg.guilds = {};
+        }
+        if (!accountCfg.guilds[gid] || typeof accountCfg.guilds[gid] !== 'object') {
+          accountCfg.guilds[gid] = {};
+        }
+      }
+      if (Object.prototype.hasOwnProperty.call(accountCfg, 'guildId')) {
+        delete accountCfg.guildId;
+      }
+    }
+  }
+}
+
 // ============================================================
-// API: browser pairs (远端浏览器控制)
+// API: browser bridge (远端浏览器插件控制)
 // ============================================================
 const BROWSER_CONTROL_PORT = 18791;
 
 function readBrowserPairs() {
-  return readJson(BROWSER_PAIRS_PATH, { pairs: [] });
+  return readJson(BROWSER_PAIRS_PATH, { pairs: [], pairCodes: [] });
 }
 
 function writeBrowserPairs(data) {
   writeJson(BROWSER_PAIRS_PATH, data);
+}
+
+// 已连接的浏览器扩展: Map<pairCode, { ws, name, connectedAt, lastPing }>
+const browserBridgeClients = new Map();
+
+// 生成配对码 (6位大写字母数字)
+function generatePairCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 去掉易混淆字符 I,O,0,1
+  let code = '';
+  for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  return code;
 }
 
 app.get('/api/browser/config', async (req, res) => {
@@ -3604,34 +3678,74 @@ app.get('/api/browser/config', async (req, res) => {
       );
     }
 
+    // 在线扩展列表
+    const connectedBrowsers = [];
+    for (const [code, client] of browserBridgeClients) {
+      connectedBrowsers.push({
+        pairCode: code,
+        name: client.name || code,
+        connectedAt: client.connectedAt,
+        lastPing: client.lastPing
+      });
+    }
+
+    // 已注册的配对码
+    const pairCodes = pairsData.pairCodes || [];
+
     res.json({
       browser: browserCfg,
       sandboxEnabled,
       gatewayBrowser,
-      pairs: pairsData.pairs || []
+      pairCodes,
+      connectedBrowsers
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
+// 生成新配对码
+app.post('/api/browser/pair-code', async (req, res) => {
+  try {
+    const { name } = req.body || {};
+    const code = generatePairCode();
+    const pairsData = readBrowserPairs();
+    if (!pairsData.pairCodes) pairsData.pairCodes = [];
+    pairsData.pairCodes.push({
+      code,
+      name: String(name || '').trim() || '新设备',
+      createdAt: new Date().toISOString()
+    });
+    writeBrowserPairs(pairsData);
+    res.json({ success: true, code });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 删除配对码
+app.delete('/api/browser/pair-code/:code', async (req, res) => {
+  try {
+    const code = req.params.code;
+    const pairsData = readBrowserPairs();
+    pairsData.pairCodes = (pairsData.pairCodes || []).filter(p => p.code !== code);
+    writeBrowserPairs(pairsData);
+    // 如果已连接则断开
+    const client = browserBridgeClients.get(code);
+    if (client) {
+      try { client.ws.close(1000, 'pair code deleted'); } catch {}
+      browserBridgeClients.delete(code);
+    }
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 更新浏览器启用配置
 app.post('/api/browser/config', async (req, res) => {
   try {
-    const { pairs, browserEnabled, sandboxEnabled } = req.body || {};
-
-    // 更新配对列表
-    if (Array.isArray(pairs)) {
-      const clean = pairs.filter(p => p && p.name && p.host).map(p => ({
-        id: p.id || `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        name: String(p.name).trim(),
-        host: String(p.host).trim(),
-        port: parseInt(p.port, 10) || 9222,
-        createdAt: p.createdAt || new Date().toISOString()
-      }));
-      writeBrowserPairs({ pairs: clean });
-    }
-
-    // 更新 openclaw.json — browser 段 + agents sandbox
+    const { browserEnabled, sandboxEnabled } = req.body || {};
     const config = readJson(CONFIG_PATH, {});
     if (typeof browserEnabled === 'boolean') {
       if (!config.browser) config.browser = {};
@@ -3645,38 +3759,41 @@ app.post('/api/browser/config', async (req, res) => {
       config.agents.defaults.sandbox.browser.enabled = sandboxEnabled;
     }
     writeOpenClawConfig(config);
-
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
+// 向已连接的浏览器扩展发送测试命令
 app.post('/api/browser/test', async (req, res) => {
   try {
-    const { host, port } = req.body || {};
-    if (!host) return res.status(400).json({ error: 'host is required' });
-    const p = parseInt(port, 10) || 9222;
-    const url = `http://${host}:${p}/json/version`;
+    const { pairCode } = req.body || {};
+    if (!pairCode) return res.status(400).json({ error: '缺少 pairCode' });
+    const client = browserBridgeClients.get(pairCode);
+    if (!client) return res.json({ reachable: false, error: '该设备未在线' });
 
-    const versionJson = runCommandText(
-      `curl -sf --max-time 5 '${url.replace(/'/g, "\\'")}' 2>/dev/null`,
-      8000
-    );
-    if (!versionJson) {
-      return res.json({ reachable: false, error: `无法连接到 ${host}:${p}` });
-    }
-    try {
-      const v = JSON.parse(versionJson);
-      return res.json({
-        reachable: true,
-        browser: v.Browser || v.browser || 'Chrome',
-        userAgent: v['User-Agent'] || '',
-        webSocketDebuggerUrl: v.webSocketDebuggerUrl || ''
+    // 向扩展发送 list-targets 命令并等待回复
+    const requestId = `test-${Date.now()}`;
+    const p = new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        client._pendingRequests?.delete(requestId);
+        resolve({ reachable: false, error: '扩展响应超时' });
+      }, 8000);
+      if (!client._pendingRequests) client._pendingRequests = new Map();
+      client._pendingRequests.set(requestId, (data) => {
+        clearTimeout(timeout);
+        resolve(data);
       });
-    } catch {
-      return res.json({ reachable: false, error: '远端返回非 JSON 响应' });
+    });
+    try {
+      client.ws.send(JSON.stringify({ type: 'list-targets', requestId }));
+    } catch (e) {
+      return res.json({ reachable: false, error: '发送命令失败: ' + e.message });
     }
+    const result = await p;
+    if (result.reachable === false) return res.json(result);
+    return res.json({ reachable: true, targets: result.targets || [], name: client.name });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -7560,6 +7677,7 @@ app.post('/api/stt/install-local', (req, res) => {
 const server = http.createServer(app);
 let wss = null;
 let termWss = null;
+let browserBridgeWss = null;
 
 if (WebSocketServer) {
   wss = new WebSocketServer({ noServer: true });
@@ -7567,6 +7685,94 @@ if (WebSocketServer) {
   termWss = new WebSocketServer({ 
     noServer: true,
     perMessageDeflate: false
+  });
+  browserBridgeWss = new WebSocketServer({ noServer: true });
+
+  // ─── Browser Bridge WebSocket ─────────────────────────
+  browserBridgeWss.on('connection', (ws, req) => {
+    let parsedUrl;
+    try { parsedUrl = new URL(req.url, 'http://localhost'); } catch { parsedUrl = { searchParams: new URLSearchParams() }; }
+    const code = (parsedUrl.searchParams.get('code') || '').trim().toUpperCase();
+    const name = (parsedUrl.searchParams.get('name') || '').trim() || 'Chrome';
+
+    // 验证配对码
+    const pairsData = readBrowserPairs();
+    const validCodes = (pairsData.pairCodes || []).map(p => p.code);
+    if (!code || !validCodes.includes(code)) {
+      try { ws.close(4001, 'invalid pair code'); } catch {}
+      return;
+    }
+
+    // 如果该 code 已有连接，踢掉旧的
+    if (browserBridgeClients.has(code)) {
+      const old = browserBridgeClients.get(code);
+      try { old.ws.close(4002, 'replaced by new connection'); } catch {}
+    }
+
+    const client = {
+      ws,
+      name,
+      connectedAt: new Date().toISOString(),
+      lastPing: new Date().toISOString(),
+      _pendingRequests: new Map()
+    };
+    browserBridgeClients.set(code, client);
+    console.log(`[browser-bridge] 扩展已连接: code=${code}, name=${name}`);
+
+    ws.on('message', (data) => {
+      let msg;
+      try { msg = JSON.parse(data); } catch { return; }
+
+      // 心跳回复
+      if (msg.type === 'ping') {
+        client.lastPing = new Date().toISOString();
+        try { ws.send(JSON.stringify({ type: 'pong' })); } catch {}
+        return;
+      }
+
+      // targets 列表回复
+      if (msg.type === 'targets' && msg.requestId) {
+        const cb = client._pendingRequests.get(msg.requestId);
+        if (cb) {
+          client._pendingRequests.delete(msg.requestId);
+          cb({ reachable: true, targets: msg.targets || [] });
+        }
+        return;
+      }
+
+      // CDP 命令结果回复
+      if (msg.type === 'cdp-result' || msg.type === 'cdp-error') {
+        const cb = client._pendingRequests.get(msg.id);
+        if (cb) {
+          client._pendingRequests.delete(msg.id);
+          cb(msg);
+        }
+        return;
+      }
+
+      // attach/detach 结果
+      if (msg.type === 'attach-result' || msg.type === 'detach-result') {
+        const key = `${msg.type}-${msg.tabId}`;
+        const cb = client._pendingRequests.get(key);
+        if (cb) {
+          client._pendingRequests.delete(key);
+          cb(msg);
+        }
+        return;
+      }
+    });
+
+    ws.on('close', () => {
+      if (browserBridgeClients.get(code)?.ws === ws) {
+        browserBridgeClients.delete(code);
+        console.log(`[browser-bridge] 扩展已断开: code=${code}`);
+      }
+    });
+
+    ws.on('error', () => {});
+
+    // 发送欢迎消息
+    try { ws.send(JSON.stringify({ type: 'welcome', serverTime: new Date().toISOString() })); } catch {}
   });
 
   wss.on('connection', (ws, req) => {
@@ -7783,6 +7989,19 @@ server.on('upgrade', (req, socket, head) => {
       });
     } catch (e) {
       console.error(`[terminal-ws] handleUpgrade error:`, e.message);
+      socket.destroy();
+    }
+    return;
+  }
+
+  // 浏览器扩展 Bridge WebSocket (无需 session 认证，使用配对码认证)
+  if (WebSocketServer && browserBridgeWss && pathname === '/api/ws/browser-bridge') {
+    try {
+      browserBridgeWss.handleUpgrade(req, socket, head, (ws) => {
+        browserBridgeWss.emit('connection', ws, req);
+      });
+    } catch (e) {
+      console.error(`[browser-bridge] handleUpgrade error:`, e.message);
       socket.destroy();
     }
     return;

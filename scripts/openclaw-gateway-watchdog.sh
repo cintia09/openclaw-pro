@@ -407,6 +407,22 @@ gateway_health_ready() {
   return 1
 }
 
+gateway_reported_no_listeners() {
+  # Gateway 的运行时日志写入 /tmp/openclaw/ 而非 stdout，需要检查实际日志文件
+  local runtime_log="/tmp/openclaw/openclaw-$(date +%Y-%m-%d).log"
+  local log_to_check=""
+  if [ -s "$GATEWAY_LOG" ]; then
+    log_to_check="$GATEWAY_LOG"
+  elif [ -f "$runtime_log" ]; then
+    log_to_check="$runtime_log"
+  else
+    return 1
+  fi
+  # 仅匹配 "Port XXXXX is already in use" 等真正的端口绑定失败，
+  # 排除正常启动时的 "force: no listeners on port"（这是成功检查）
+  tail -n 20 "$log_to_check" 2>/dev/null | grep -Eiq 'Port [0-9]+ is already in use|EADDRINUSE'
+}
+
 is_gateway_process_alive() {
   if [[ -n "$LAST_PID" ]] && kill -0 "$LAST_PID" 2>/dev/null; then
     return 0
@@ -474,15 +490,55 @@ wait_for_ready() {
   local timeout=$1
   local elapsed=0
   local last_log=0
+  local healthy_streak=0
 
   while [[ $elapsed -lt $timeout ]]; do
+    if gateway_reported_no_listeners; then
+      log "Gateway reported no listeners on port $PORT; aborting startup wait early"
+      return 1
+    fi
+
     if is_port_listening; then
-      if has_new_gateway_pid && old_gateway_pids_gone && gateway_health_ready; then
+      local new_pid_ok=0
+      local old_gone_ok=0
+      local health_ok=0
+
+      if has_new_gateway_pid; then new_pid_ok=1; fi
+      if old_gateway_pids_gone; then old_gone_ok=1; fi
+      if gateway_health_ready; then health_ok=1; fi
+
+      if [[ $new_pid_ok -eq 1 && $old_gone_ok -eq 1 && $health_ok -eq 1 ]]; then
         return 0
       fi
+
+      # 兜底策略：某些环境会出现 PID 交接判定误伤（旧 PID 未及时回收或识别到守护壳进程）
+      # 若端口与健康检查持续稳定，视为重启成功，避免卡满 STARTUP_TIMEOUT。
+      if [[ $health_ok -eq 1 ]]; then
+        healthy_streak=$((healthy_streak + 1))
+      else
+        healthy_streak=0
+      fi
+
+      if [[ $healthy_streak -ge 4 && $elapsed -ge 20 ]]; then
+        local observed_pid
+        observed_pid=$(get_gateway_pid)
+        [[ -n "$observed_pid" ]] && LAST_PID="$observed_pid"
+        log "Port $PORT and /health are stable (${healthy_streak} checks); accepting restart handoff despite PID ambiguity (newPid=$new_pid_ok oldGone=$old_gone_ok pid=${observed_pid:-unknown})"
+        return 0
+      fi
+
       if [[ $((elapsed - last_log)) -ge 30 ]]; then
-        log "Port $PORT is listening but restart handoff not complete (need new pid + old pid gone + health ready), waiting..."
+        local old_cnt current_cnt
+        old_cnt=$(echo "$STARTUP_OLD_PIDS" | awk '{print NF}')
+        current_cnt=$(collect_gateway_pids | wc -l | tr -d ' ')
+        log "Port $PORT is listening but restart handoff not complete (newPid=${new_pid_ok} oldGone=${old_gone_ok} health=${health_ok} healthyStreak=${healthy_streak} oldPidCount=${old_cnt:-0} currentPidCount=${current_cnt:-0}), waiting..."
         last_log=$elapsed
+      fi
+    else
+      healthy_streak=0
+      if [[ $elapsed -ge 300 ]]; then
+        log "Gateway process alive but port $PORT still not listening after ${elapsed}s; aborting startup wait"
+        return 1
       fi
     fi
 

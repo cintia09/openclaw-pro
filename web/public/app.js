@@ -2204,6 +2204,23 @@ function appendAiAuthLog(line, type = 'info'){
   appendColored(logEl, `[${timestamp}] ${line}\n`, 5000, true);
 }
 
+function appendMsgLog(line){
+  const logEl = $('msg-log');
+  if (!logEl) return;
+  const timestamp = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  appendColored(logEl, `[${timestamp}] ${line}\n`, 3000, true);
+}
+
+function parseGuildIds(raw){
+  return Array.from(new Set(
+    String(raw || '')
+      .split(/[\n,，\s]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .filter((s) => /^\d+$/.test(s))
+  ));
+}
+
 // AI key tab switching
 document.querySelectorAll('#ai-key-tabs .tab').forEach(tab => {
   tab.addEventListener('click', () => {
@@ -2808,8 +2825,12 @@ updateAiProviderUI();
 // Discord: channels.discord.{token,guildId,groupPolicy,streaming,historyLimit,dmHistoryLimit}
 // ------------------------
 async function loadMessagingConfig(){
+  appendMsgLog('[load] 正在读取消息平台配置...');
   const cfg = await api('/api/config');
-  if (cfg.error) return;
+  if (cfg.error) {
+    appendMsgLog(`[load] 读取失败: ${cfg.error}`);
+    return;
+  }
   const c = cfg.channels || {};
 
   const setBoolSelect = (id, v) => { if ($(id)) $(id).value = String(!!v); };
@@ -2833,9 +2854,14 @@ async function loadMessagingConfig(){
 
   // -- Discord (new fields) --
   const dc = c.discord || {};
+  const guildKeys = Object.keys(dc.guilds || {}).filter((k) => k !== '*');
   setBoolSelect('discord-enabled', dc.enabled);
   setVal('discord-token', dc.token);
-  setVal('discord-guild', dc.guildId);
+  // 多服务器模式：优先展示标准 guilds，兼容历史 guildId
+  const guildText = guildKeys.length
+    ? guildKeys.join('\n')
+    : (dc.guildId ? String(dc.guildId) : '');
+  setVal('discord-guilds', guildText);
   setVal('discord-grouppolicy', dc.groupPolicy || 'allowlist');
   setVal('discord-streaming',   dc.streaming   || 'partial');
   setVal('discord-historylimit', dc.historyLimit ?? 30);
@@ -2852,20 +2878,24 @@ async function loadMessagingConfig(){
   setVal('whatsapp-key', c.whatsapp?.apiKey);
 
   if ($('btn-msg-restart')) $('btn-msg-restart').style.display = 'none';
+  appendMsgLog('[load] 配置读取完成');
 }
 
 $('btn-msg-load')?.addEventListener('click', loadMessagingConfig);
 
 // 重启 Gateway 生效
 $('btn-msg-restart')?.addEventListener('click', async ()=>{
+  appendMsgLog('[restart] 正在重启 Gateway...');
   const r = await api('/api/openclaw/start', { method:'POST' });
   toast(r.success ? 'Gateway 已重启' : '重启失败', r.error || '');
+  appendMsgLog(r.success ? '[restart] Gateway 重启成功' : `[restart] Gateway 重启失败: ${r.error || 'unknown'}`);
   if (r.success && $('btn-msg-restart')) $('btn-msg-restart').style.display = 'none';
 });
 
 qa('[data-save-msg]').forEach(btn => {
   btn.addEventListener('click', async ()=>{
     const platform = btn.getAttribute('data-save-msg');
+    appendMsgLog(`[save] 开始保存 ${platform} 配置...`);
     const update = { channels: {} };
     const enabled = ($(`${platform}-enabled`)?.value || 'false') === 'true';
     update.channels[platform] = { enabled };
@@ -2882,14 +2912,19 @@ qa('[data-save-msg]').forEach(btn => {
       }};
     }
     if (platform === 'discord'){
+      const guildIds = parseGuildIds($('discord-guilds')?.value || '');
       Object.assign(update.channels.discord, {
         token:           $('discord-token').value,
-        guildId:         $('discord-guild').value,
         groupPolicy:     $('discord-grouppolicy')?.value || 'allowlist',
         streaming:       $('discord-streaming')?.value || 'partial',
         historyLimit:    Number($('discord-historylimit')?.value) || 30,
         dmHistoryLimit:  Number($('discord-dmhistorylimit')?.value) || 50,
       });
+      // OpenClaw 官方 schema：使用 guilds（多服务器）
+      update.channels.discord.guilds = Object.fromEntries(guildIds.map((id) => [id, {}]));
+      // 标记后端执行完整替换，避免 deepMerge 残留旧服务器
+      update.channels.discord.__replaceGuilds = true;
+      appendMsgLog(`[save] Discord 服务器数: ${guildIds.length}`);
     }
     if (platform === 'telegram'){
       update.channels.telegram.token = $('telegram-token').value;
@@ -2906,136 +2941,173 @@ qa('[data-save-msg]').forEach(btn => {
 
     const r = await api('/api/config', { method:'POST', body:update });
     if (r.success) {
-      toast('保存成功', '需重启 Gateway 生效');
+      await loadMessagingConfig();
+      const saved = Array.isArray(r.savedChannels) && r.savedChannels.length
+        ? r.savedChannels.join(', ')
+        : platform;
+      toast('保存成功', `已写入 channels.${saved}，需重启 Gateway 生效`);
+      appendMsgLog(`[save] 保存成功: channels.${saved}`);
       if ($('btn-msg-restart')) $('btn-msg-restart').style.display = '';
     } else {
+      appendMsgLog(`[save] 保存失败: ${r.error || 'unknown'}`);
       toast('保存失败', r.error || '');
     }
   });
 });
 
 // ------------------------
-// 远端浏览器控制
+// 远端浏览器控制 (插件方式)
 // ------------------------
-let _browserPairs = [];   // local working copy
-let _browserDirty = false; // track unsaved changes
+let _browserPairCodes = [];
+let _browserOnline = [];
 
 async function loadBrowserConfig(){
-  _browserDirty = false;
   const d = await api('/api/browser/config');
   if (d.error){ toast('加载浏览器配置失败', d.error); return; }
 
-  // status cards
+  // 状态卡片
   const gwOk = d.gatewayBrowser?.listening;
   $('browser-gw-status').textContent = gwOk ? '✅ 已启用' : '❌ 未启用';
   $('browser-gw-status').style.color = gwOk ? '#3fb950' : '#f85149';
   $('browser-sandbox-status').textContent = d.sandboxEnabled ? '✅ 已启用' : '⚠️ 未启用';
   $('browser-sandbox-status').style.color = d.sandboxEnabled ? '#3fb950' : '#d29922';
 
-  _browserPairs = (d.pairs || []).map((p,i) => ({ ...p, _id: i }));
-  $('browser-pair-count').textContent = _browserPairs.length;
-  renderBrowserPairs();
-  if ($('btn-browser-save')) $('btn-browser-save').style.display = 'none';
+  // 开关下拉
+  if ($('browser-enabled-select')) $('browser-enabled-select').value = String(!!d.browser?.enabled);
+  if ($('browser-sandbox-select')) $('browser-sandbox-select').value = String(!!d.sandboxEnabled);
+
+  // 在线浏览器
+  _browserOnline = d.connectedBrowsers || [];
+  $('browser-online-count').textContent = _browserOnline.length;
+  renderBrowserOnline();
+
+  // 配对码
+  _browserPairCodes = d.pairCodes || [];
+  renderBrowserPairCodes();
+
+  if ($('btn-browser-restart')) $('btn-browser-restart').style.display = 'none';
+
+  // 指引中动态填入服务器地址
+  const guideUrl = $('browser-guide-server-url');
+  if (guideUrl) guideUrl.textContent = location.origin;
 }
 
-function renderBrowserPairs(){
-  const el = $('browser-pairs-list');
+function renderBrowserOnline(){
+  const el = $('browser-online-list');
   if (!el) return;
-  if (!_browserPairs.length){
-    el.innerHTML = '<div class="muted" style="padding:12px">暂无配对设备</div>';
+  if (!_browserOnline.length){
+    el.innerHTML = '<div class="muted" style="text-align:center;padding:20px">暂无在线浏览器</div>';
     return;
   }
-  el.innerHTML = _browserPairs.map((p,i) => `
-    <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
-      <b style="min-width:100px">${esc(p.name||'未命名')}</b>
-      <span class="muted">${esc(p.host)}:${p.port||9222}</span>
-      <span class="badge ${p._lastOk ? 'badge-green' : ''}" style="font-size:11px">${p._lastOk ? '✅ 连通' : '—'}</span>
+  el.innerHTML = _browserOnline.map((b, i) => `
+    <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
+      <span style="color:#3fb950;font-size:16px">●</span>
+      <b style="min-width:100px">${esc(b.name||'Chrome')}</b>
+      <span class="muted small">配对码: <code>${esc(b.pairCode)}</code></span>
+      <span class="muted small">连接于: ${new Date(b.connectedAt).toLocaleString()}</span>
       <span style="flex:1"></span>
-      <button class="btn btn-sm" onclick="testSinglePair(${i})">测试</button>
-      <button class="btn btn-sm btn-danger" onclick="removeBrowserPair(${i})">删除</button>
+      <button class="btn btn-sm" onclick="testBrowserBridge('${esc(b.pairCode)}')">测试</button>
     </div>
   `).join('');
 }
 
-function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-
-async function testSinglePair(idx){
-  const p = _browserPairs[idx];
-  if (!p) return;
-  const r = await api('/api/browser/test', { method:'POST', body:{ host:p.host, port:p.port } });
-  p._lastOk = r.reachable;
-  renderBrowserPairs();
-  toast(r.reachable ? '连接成功' : '连接失败', r.reachable ? (r.browser||'') : (r.error||''));
+function renderBrowserPairCodes(){
+  const el = $('browser-pair-codes-list');
+  if (!el) return;
+  if (!_browserPairCodes.length){
+    el.innerHTML = '<div class="muted" style="text-align:center;padding:12px">暂无配对码</div>';
+    return;
+  }
+  // 标记哪些在线
+  const onlineCodes = new Set(_browserOnline.map(b => b.pairCode));
+  el.innerHTML = _browserPairCodes.map(p => {
+    const online = onlineCodes.has(p.code);
+    return `
+    <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
+      <span style="color:${online ? '#3fb950' : '#666'};font-size:14px">${online ? '●' : '○'}</span>
+      <code style="font-size:15px;font-weight:700;letter-spacing:2px;user-select:all;color:#58a6ff">${esc(p.code)}</code>
+      <span style="min-width:80px">${esc(p.name||'')}</span>
+      <span class="muted small">${online ? '在线' : '离线'}</span>
+      <span class="muted small">创建: ${new Date(p.createdAt).toLocaleDateString()}</span>
+      <span style="flex:1"></span>
+      <button class="btn btn-sm" onclick="copyPairCode('${esc(p.code)}')" title="复制">📋</button>
+      <button class="btn btn-sm btn-danger" onclick="deletePairCode('${esc(p.code)}')">删除</button>
+    </div>`;
+  }).join('');
 }
-window.testSinglePair = testSinglePair; // expose for inline onclick
 
-function removeBrowserPair(idx){
-  _browserPairs.splice(idx, 1);
-  $('browser-pair-count').textContent = _browserPairs.length;
-  _browserDirty = true;
-  renderBrowserPairs();
-  if ($('btn-browser-save')) $('btn-browser-save').style.display = '';
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+
+async function testBrowserBridge(pairCode){
+  toast('正在测试…');
+  const r = await api('/api/browser/test', { method:'POST', body:{ pairCode } });
+  if (r.reachable){
+    const count = r.targets?.length || 0;
+    toast('✅ 连接正常', `${r.name || 'Chrome'} — 共 ${count} 个标签页`);
+  } else {
+    toast('❌ 测试失败', r.error || '');
+  }
 }
-window.removeBrowserPair = removeBrowserPair;
+window.testBrowserBridge = testBrowserBridge;
 
-// Test new connection
-$('btn-browser-test')?.addEventListener('click', async ()=>{
-  const host = $('browser-new-host')?.value.trim();
-  const port = Number($('browser-new-port')?.value) || 9222;
-  if (!host){ toast('请填写 IP 地址'); return; }
+function copyPairCode(code){
+  navigator.clipboard.writeText(code).then(
+    () => toast('已复制配对码', code),
+    () => toast('复制失败')
+  );
+}
+window.copyPairCode = copyPairCode;
 
-  const res = $('browser-test-result');
-  if (res){ res.style.display = ''; res.textContent = '测试中…'; }
+async function deletePairCode(code){
+  if (!confirm(`确定删除配对码 ${code}？如果该设备在线将被立即断开。`)) return;
+  const r = await api(`/api/browser/pair-code/${code}`, { method:'DELETE' });
+  if (r.success){
+    toast('已删除');
+    loadBrowserConfig();
+  } else {
+    toast('删除失败', r.error || '');
+  }
+}
+window.deletePairCode = deletePairCode;
 
-  const r = await api('/api/browser/test', { method:'POST', body:{ host, port } });
-  if (res){
-    res.textContent = r.reachable
-      ? `✅ 连接成功 — ${r.browser||''} (WebSocket: ${r.webSocketDebuggerUrl||'N/A'})`
-      : `❌ 连接失败 — ${r.error||'无法连接'}`;
-    res.style.color = r.reachable ? '#3fb950' : '#f85149';
+// 生成新配对码
+$('btn-browser-gen-code')?.addEventListener('click', async ()=>{
+  const name = $('browser-new-name')?.value.trim() || '';
+  const r = await api('/api/browser/pair-code', { method:'POST', body:{ name } });
+  if (r.success){
+    toast('配对码已生成', r.code);
+    if ($('browser-new-name')) $('browser-new-name').value = '';
+    loadBrowserConfig();
+  } else {
+    toast('生成失败', r.error || '');
   }
 });
 
-// Add pair
-$('btn-browser-add')?.addEventListener('click', ()=>{
-  const name = $('browser-new-name')?.value.trim();
-  const host = $('browser-new-host')?.value.trim();
-  const port = Number($('browser-new-port')?.value) || 9222;
-  if (!host){ toast('请填写 IP 地址'); return; }
-
-  _browserPairs.push({ name: name || host, host, port, _id: Date.now() });
-  $('browser-pair-count').textContent = _browserPairs.length;
-  _browserDirty = true;
-  renderBrowserPairs();
-
-  // clear inputs
-  if ($('browser-new-name')) $('browser-new-name').value = '';
-  if ($('browser-new-host')) $('browser-new-host').value = '';
-  if ($('browser-new-port')) $('browser-new-port').value = '9222';
-  if ($('browser-test-result')) $('browser-test-result').style.display = 'none';
-  if ($('btn-browser-save')) $('btn-browser-save').style.display = '';
+// 保存配置
+$('btn-browser-save-config')?.addEventListener('click', async ()=>{
+  const browserEnabled = ($('browser-enabled-select')?.value || 'false') === 'true';
+  const sandboxEnabled = ($('browser-sandbox-select')?.value || 'false') === 'true';
+  const r = await api('/api/browser/config', { method:'POST', body:{ browserEnabled, sandboxEnabled } });
+  if (r.success){
+    toast('配置已保存', '需重启 Gateway 生效');
+    if ($('btn-browser-restart')) $('btn-browser-restart').style.display = '';
+  } else {
+    toast('保存失败', r.error || '');
+  }
 });
 
-// Save & restart
-$('btn-browser-save')?.addEventListener('click', async ()=>{
-  const pairs = _browserPairs.map(p => ({ name:p.name, host:p.host, port:p.port }));
-  const r = await api('/api/browser/config', { method:'POST', body:{ pairs, browserEnabled: pairs.length > 0, sandboxEnabled: pairs.length > 0 } });
-  if (!r.success){ toast('保存失败', r.error||''); return; }
-
-  toast('保存成功', '正在重启 Gateway…');
-  await api('/api/openclaw/start', { method:'POST' });
-  toast('Gateway 已重启');
-  _browserDirty = false;
-  if ($('btn-browser-save')) $('btn-browser-save').style.display = 'none';
-  // reload status
-  setTimeout(()=> loadBrowserConfig(), 2000);
+// 重启 Gateway
+$('btn-browser-restart')?.addEventListener('click', async ()=>{
+  const r = await api('/api/openclaw/start', { method:'POST' });
+  toast(r.success ? 'Gateway 已重启' : '重启失败', r.error || '');
+  if (r.success){
+    if ($('btn-browser-restart')) $('btn-browser-restart').style.display = 'none';
+    setTimeout(()=> loadBrowserConfig(), 2000);
+  }
 });
 
-// Refresh
+// 刷新
 $('btn-browser-refresh')?.addEventListener('click', loadBrowserConfig);
-
-// Browser guide tabs
-bindTabs('browser-guide-tabs', 'data-tab', '#browser-guide-panels .msg-panel', 'data-panel');
 
 // ------------------------
 // Trading (legacy endpoints retained)
