@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>OpenClaw 管理面板</title>
-  <link rel="stylesheet" href="/style.css?v=1.2.05" />
+  <link rel="stylesheet" href="/style.css?v=1.2.06" />
   <link rel="stylesheet" href="/vendor/xterm/xterm.css" />
 </head>
 <body>
@@ -94,7 +94,7 @@
             <div class="row" style="justify-content:space-between">
               <div>
                 <div style="font-weight:900;font-size:18px">系统概览</div>
-                <div class="muted small" style="margin-top:4px">服务状态 / 运行时间 / 资源使用</div>
+                <div class="muted" style="margin-top:4px;font-size:13px">服务状态 / 运行时间 / 资源使用</div>
               </div>
               <div class="row">
                 <button class="btn" id="btn-refresh-status">刷新</button>
@@ -148,7 +148,7 @@
             <div class="row" style="justify-content:space-between">
               <div>
                 <div style="font-weight:900;font-size:18px">OpenClaw 控制台</div>
-                <div class="muted small" style="margin-top:4px">安装 / 版本 / Gateway 运行状态</div>
+                <div class="muted" style="margin-top:4px;font-size:13px">安装 / 版本 / Gateway 运行状态</div>
               </div>
               <div class="row">
                 <button class="btn" id="btn-oc-refresh">刷新</button>
@@ -181,7 +181,7 @@
                 <div class="row" style="margin-top:8px">
                   <button class="btn" id="btn-oc-config-export" title="导出当前配置为压缩包下载到本地">📤 配置导出</button>
                   <button class="btn" id="btn-oc-config-import" title="从本地压缩包导入配置（会自动备份当前配置）">📥 配置导入</button>
-                  <input type="file" id="config-import-file" accept=".tar.gz,.tgz" style="display:none" />
+                  <input type="file" id="config-import-file" accept=".tar.gz,.tgz,.tar" style="display:none" />
                 </div>
                 <div class="muted small" id="oc-update-status" style="margin-top:10px">更新状态：自动检查中</div>
                 <div class="muted small" style="margin-top:4px">当前：<span id="oc-current-ver">—</span> · 最新：<span id="oc-latest-ver">—</span></div>
@@ -192,7 +192,7 @@
             <div class="sep"></div>
             <div id="pairing-section">
               <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px">
-                <div style="font-weight:700;font-size:13px">🔗 设备配对审批</div>
+                <div style="font-weight:800;font-size:14px">🔗 设备配对审批</div>
                 <button class="btn" id="btn-pairing-refresh" style="font-size:12px;padding:2px 10px">刷新</button>
               </div>
               <div class="muted small" style="margin-bottom:8px">新设备首次连接 Gateway 时需要审批（包括 CLI、Web UI、消息平台 Bot 等所有客户端）</div>
@@ -203,7 +203,7 @@
             </div>
             <!-- 操作日志窗口 -->
             <div class="sep"></div>
-            <div style="font-weight:700;font-size:13px;margin-bottom:6px">操作日志</div>
+            <div style="font-weight:800;font-size:14px;margin-bottom:6px">操作日志</div>
             <div class="terminal" id="oc-log" style="height:240px;font-size:11.5px"></div>          </div>
         </div>
       </section>
@@ -215,7 +215,7 @@
             <div class="row" style="justify-content:space-between">
               <div>
                 <div style="font-weight:900;font-size:18px">接入模型配置</div>
-                <div class="muted small" style="margin-top:4px">配置 API Key / 认证、模型选择</div>
+                <div class="muted" style="margin-top:4px;font-size:13px">配置 API Key / 认证、模型选择</div>
               </div>
               <div class="row">
                 <button class="btn" id="btn-ai-load">刷新配置</button>
@@ -384,7 +384,7 @@
             </div>
 
             <div class="sep"></div>
-            <div style="font-weight:700;font-size:13px;margin-bottom:6px">操作日志</div>
+            <div style="font-weight:800;font-size:14px;margin-bottom:6px">操作日志</div>
             <div class="terminal" id="ai-auth-log" style="height:160px;font-size:11.5px"></div>
           </div>
         </div>
@@ -396,7 +396,7 @@
           <div class="row" style="justify-content:space-between">
             <div>
               <div style="font-weight:900;font-size:18px">消息平台</div>
-              <div class="muted small" style="margin-top:4px">配置 OpenClaw 接入的消息平台 · 保存后需重启 Gateway 生效</div>
+              <div class="muted" style="margin-top:4px;font-size:13px">配置 OpenClaw 接入的消息平台 · 保存后需重启 Gateway 生效</div>
             </div>
             <div class="row">
               <button class="btn" id="btn-msg-load">刷新配置</button>
@@ -538,7 +538,7 @@
           </div>
 
           <div class="sep"></div>
-          <div style="font-weight:700;font-size:13px;margin-bottom:6px">操作日志</div>
+          <div style="font-weight:800;font-size:14px;margin-bottom:6px">操作日志</div>
           <div class="terminal" id="msg-log" style="height:160px;font-size:11.5px"></div>
         </div>
       </section>
@@ -551,7 +551,7 @@
             <div class="row" style="justify-content:space-between">
               <div>
                 <div style="font-weight:900;font-size:18px">🖥 远端浏览器控制</div>
-                <div class="muted small" style="margin-top:4px">通过 Chrome 插件连接局域网内的浏览器，AI 代理可远程操控</div>
+                <div class="muted" style="margin-top:4px;font-size:13px">通过 Chrome 插件连接局域网内的浏览器，AI 代理可远程操控</div>
               </div>
               <div class="row">
                 <button class="btn" id="btn-browser-refresh">刷新</button>
@@ -699,7 +699,7 @@
             <div class="row" style="justify-content:space-between">
               <div>
                 <div style="font-weight:900;font-size:18px">交易系统</div>
-                <div class="muted small" style="margin-top:4px">独立容器应用 · OpenClaw 会定期自动更新代码</div>
+                <div class="muted" style="margin-top:4px;font-size:13px">独立容器应用 · OpenClaw 会定期自动更新代码</div>
               </div>
               <div class="row">
                 <button class="btn" id="btn-trading-refresh">刷新</button>
@@ -758,7 +758,7 @@
           <div class="row" style="justify-content:space-between;align-items:flex-start">
             <div>
               <div style="font-weight:900;font-size:18px">插件市场</div>
-              <div class="muted small" style="margin-top:4px">管理 Skills（知识包）和 Extensions（功能扩展），增强 OpenClaw 的能力</div>
+              <div class="muted" style="margin-top:4px;font-size:13px">管理 Skills（知识包）和 Extensions（功能扩展），增强 OpenClaw 的能力</div>
             </div>
             <button class="btn" id="btn-plugins-refresh">刷新</button>
           </div>
@@ -800,7 +800,7 @@
             <div id="skill-scan-results" style="display:none">
               <div style="margin-bottom:8px;padding:8px 12px;background:#1a1a2e;border-radius:8px">
                 <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:6px">
-                  <span style="font-weight:700;font-size:13px" id="skill-scan-title">扫描结果</span>
+                  <span style="font-weight:800;font-size:14px" id="skill-scan-title">扫描结果</span>
                   <div class="row" style="gap:6px">
                     <button class="btn" id="btn-skill-select-all" style="font-size:11px;padding:2px 8px">全选</button>
                     <button class="btn btn-primary" id="btn-skill-install-selected" style="font-size:12px;padding:3px 12px">安装选中</button>
@@ -932,7 +932,7 @@
           <div class="row" style="justify-content:space-between">
             <div>
               <div style="font-weight:900;font-size:18px">日志</div>
-              <div class="muted small" style="margin-top:4px">轮询查看 / 敏感字段已脱敏</div>
+              <div class="muted" style="margin-top:4px;font-size:13px">轮询查看 / 敏感字段已脱敏</div>
             </div>
             <div class="row">
               <button class="btn" id="btn-logs-refresh">刷新</button>

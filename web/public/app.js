@@ -1652,6 +1652,7 @@ async function approvePairing(requestId, btn) {
 $('btn-oc-config-export')?.addEventListener('click', async () => {
   const btn = $('btn-oc-config-export');
   if (btn) { btn.disabled = true; btn.textContent = '\u5BFC\u51FA\u4E2D...'; }
+  appendOcLogLine('[export] \u6B63\u5728\u6253\u5305\u914D\u7F6E\u6587\u4EF6...');
   try {
     const resp = await fetch('/api/openclaw/config/export', {
       credentials: 'same-origin'
@@ -1663,14 +1664,34 @@ $('btn-oc-config-export')?.addEventListener('click', async () => {
     const blob = await resp.blob();
     const cd = resp.headers.get('content-disposition') || '';
     const fnMatch = cd.match(/filename="?([^"]+)"?/);
-    const fileName = fnMatch ? fnMatch[1] : 'openclaw-config.tar.gz';
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = fileName;
-    a.click();
-    URL.revokeObjectURL(a.href);
-    toast('\u914D\u7F6E\u5BFC\u51FA', '\u5DF2\u4E0B\u8F7D\u914D\u7F6E\u538B\u7F29\u5305');
-    appendOcLogLine('[export] \u914D\u7F6E\u5DF2\u5BFC\u51FA: ' + fileName);
+    const defaultName = fnMatch ? fnMatch[1] : 'openclaw-config.tar.gz';
+    // Try File System Access API (lets user pick save location)
+    if (window.showSaveFilePicker) {
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: defaultName,
+          types: [{ description: 'tar.gz \u538B\u7F29\u5305', accept: { 'application/gzip': ['.tar.gz', '.tgz'] } }]
+        });
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        toast('\u914D\u7F6E\u5BFC\u51FA', '\u5DF2\u4FDD\u5B58\u914D\u7F6E\u538B\u7F29\u5305');
+        appendOcLogLine('[export] \u914D\u7F6E\u5DF2\u5BFC\u51FA: ' + handle.name);
+      } catch (PickerErr) {
+        if (PickerErr.name === 'AbortError') {
+          appendOcLogLine('[export] \u7528\u6237\u53D6\u6D88\u4FDD\u5B58');
+        } else throw PickerErr;
+      }
+    } else {
+      // Fallback: auto download
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = defaultName;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      toast('\u914D\u7F6E\u5BFC\u51FA', '\u5DF2\u4E0B\u8F7D\u914D\u7F6E\u538B\u7F29\u5305');
+      appendOcLogLine('[export] \u914D\u7F6E\u5DF2\u5BFC\u51FA: ' + defaultName);
+    }
   } catch (e) {
     toast('\u5BFC\u51FA\u5931\u8D25', e.message);
     appendOcLogLine('[export] \u5BFC\u51FA\u5931\u8D25: ' + e.message);
@@ -1688,10 +1709,12 @@ $('config-import-file')?.addEventListener('change', async (e) => {
   const file = e.target.files?.[0];
   if (!file) return;
   e.target.value = ''; // reset for re-select
-  if (!file.name.endsWith('.tar.gz') && !file.name.endsWith('.tgz')) {
-    toast('\u683C\u5F0F\u9519\u8BEF', '\u8BF7\u9009\u62E9 .tar.gz \u6216 .tgz \u6587\u4EF6');
+  if (!file.name.endsWith('.tar.gz') && !file.name.endsWith('.tgz') && !file.name.endsWith('.tar')) {
+    toast('\u683C\u5F0F\u9519\u8BEF', '\u8BF7\u9009\u62E9 .tar.gz\u3001.tgz \u6216 .tar \u6587\u4EF6');
     return;
   }
+  const importContentType = file.name.endsWith('.tar') && !file.name.endsWith('.tar.gz')
+    ? 'application/x-tar' : 'application/gzip';
   if (!confirm('\u5BFC\u5165\u914D\u7F6E\u5C06\u8986\u76D6\u5F53\u524D\u914D\u7F6E\uFF08\u4F1A\u81EA\u52A8\u5907\u4EFD\u5F53\u524D\u914D\u7F6E\uFF09\u3002\n\u5BFC\u5165\u540E\u9700\u70B9\u51FB\u201C\u91CD\u542F Gateway\u201D\u4F7F\u914D\u7F6E\u751F\u6548\u3002\n\n\u786E\u5B9A\u7EE7\u7EED\uFF1F')) return;
   const btn = $('btn-oc-config-import');
   if (btn) { btn.disabled = true; btn.textContent = '\u5BFC\u5165\u4E2D...'; }
@@ -1699,7 +1722,7 @@ $('config-import-file')?.addEventListener('change', async (e) => {
     const resp = await fetch('/api/openclaw/config/import', {
       method: 'POST',
       credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/gzip' },
+      headers: { 'Content-Type': importContentType },
       body: file
     });
     const r = await resp.json();
@@ -3435,27 +3458,28 @@ async function refreshPlugins() {
   const extSkills = skillsList.filter(s => s.source && s.source.startsWith('ext:'));
   const bundledSkills = skillsList.filter(s => s.source === 'bundled');
 
+  function skillGroupHtml(label, skills, collapsed) {
+    const arrow = collapsed ? '\u25B6' : '\u25BC';
+    const display = collapsed ? 'none' : '';
+    return `<div style="margin-top:12px;border-top:1px solid #333;padding-top:10px">
+      <div style="cursor:pointer;user-select:none;color:#8e8e93;font-size:13px" onclick="const c=this.nextElementSibling;const a=c.style.display==='none';c.style.display=a?'':'none';this.querySelector('span').textContent=a?'\u25BC':'\u25B6'">
+        <span>${arrow}</span> ${label} (${skills.length})
+      </div>
+      <div style="display:${display};margin-top:8px">${skills.map(skillCard).join('')}</div>
+    </div>`;
+  }
+
   let html = '';
   if (userSkills.length) {
-    html += userSkills.map(skillCard).join('');
+    html += skillGroupHtml('\u7528\u6237\u5B89\u88C5', userSkills, false);
   } else {
     html += '<div class="muted small" style="padding:12px 0">\u6682\u65E0\u7528\u6237\u5B89\u88C5\u7684 Skill\u3002</div>';
   }
   if (extSkills.length) {
-    html += `<div style="margin-top:12px;border-top:1px solid #333;padding-top:10px">
-      <div style="cursor:pointer;user-select:none;color:#8e8e93;font-size:13px" onclick="const c=this.nextElementSibling;const a=c.style.display==='none';c.style.display=a?'':'none';this.querySelector('span').textContent=a?'\u25BC':'\u25B6'">
-        <span>\u25B6</span> \u6269\u5C55 Skills (${extSkills.length})
-      </div>
-      <div style="display:none;margin-top:8px">${extSkills.map(skillCard).join('')}</div>
-    </div>`;
+    html += skillGroupHtml('\u6269\u5C55 Skills', extSkills, true);
   }
   if (bundledSkills.length) {
-    html += `<div style="margin-top:12px;border-top:1px solid #333;padding-top:10px">
-      <div style="cursor:pointer;user-select:none;color:#8e8e93;font-size:13px" onclick="const c=this.nextElementSibling;const a=c.style.display==='none';c.style.display=a?'':'none';this.querySelector('span').textContent=a?'\u25BC':'\u25B6'">
-        <span>\u25B6</span> \u5185\u7F6E Skills (${bundledSkills.length})
-      </div>
-      <div style="display:none;margin-top:8px">${bundledSkills.map(skillCard).join('')}</div>
-    </div>`;
+    html += skillGroupHtml('\u5185\u7F6E Skills', bundledSkills, true);
   }
   $('skills-list').innerHTML = html;
 

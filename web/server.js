@@ -7223,29 +7223,31 @@ app.get('/api/openclaw/config/export', (req, res) => {
 
     const tgzPath = `${tmpDir}.tar.gz`;
     const { execSync } = require('child_process');
-    execSync(`tar -czf ${JSON.stringify(tgzPath)} -C ${JSON.stringify(tmpDir)} .`);
+    execSync(`tar -czf ${JSON.stringify(tgzPath)} -C ${JSON.stringify(tmpDir)} .`, { stdio: 'pipe', timeout: 15000 });
     fs.rmSync(tmpDir, { recursive: true, force: true });
 
+    const stat = fs.statSync(tgzPath);
     const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
     res.setHeader('Content-Type', 'application/gzip');
+    res.setHeader('Content-Length', stat.size);
     res.setHeader('Content-Disposition', `attachment; filename="openclaw-config-${ts}.tar.gz"`);
     const stream = fs.createReadStream(tgzPath);
     stream.pipe(res);
-    stream.on('end', () => { try { fs.unlinkSync(tgzPath); } catch {} });
-    stream.on('error', () => { try { fs.unlinkSync(tgzPath); } catch {} });
+    res.on('close', () => { try { fs.unlinkSync(tgzPath); } catch {} });
   } catch (e) {
     console.error(`[config-export] \u5BFC\u51FA\u5931\u8D25: ${e?.message}`);
-    res.status(500).json({ error: e?.message || '\u914D\u7F6E\u5BFC\u51FA\u5931\u8D25' });
+    if (!res.headersSent) res.status(500).json({ error: e?.message || '\u914D\u7F6E\u5BFC\u51FA\u5931\u8D25' });
   }
 });
 
-// --- Config Import (upload .tar.gz) ---
+// --- Config Import (upload .tar.gz or .tar) ---
 app.post('/api/openclaw/config/import', (req, res) => {
   try {
     const contentType = req.headers['content-type'] || '';
-    if (!contentType.includes('application/gzip') && !contentType.includes('application/octet-stream') && !contentType.includes('application/x-gzip')) {
-      return res.status(400).json({ error: '\u8BF7\u4E0A\u4F20 .tar.gz \u6587\u4EF6' });
+    if (!contentType.includes('application/gzip') && !contentType.includes('application/octet-stream') && !contentType.includes('application/x-gzip') && !contentType.includes('application/x-tar')) {
+      return res.status(400).json({ error: '\u8BF7\u4E0A\u4F20 .tar.gz \u6216 .tar \u6587\u4EF6' });
     }
+    const isPlainTar = contentType.includes('application/x-tar');
     const chunks = [];
     req.on('data', chunk => chunks.push(chunk));
     req.on('end', () => {
@@ -7254,13 +7256,14 @@ app.post('/api/openclaw/config/import', (req, res) => {
         if (buf.length < 20) return res.status(400).json({ error: '\u6587\u4EF6\u592A\u5C0F\uFF0C\u65E0\u6548\u7684\u538B\u7F29\u5305' });
         if (buf.length > 10 * 1024 * 1024) return res.status(400).json({ error: '\u6587\u4EF6\u592A\u5927\uFF08\u6700\u5927 10MB\uFF09' });
 
-        const tmpTgz = `/tmp/openclaw-config-import-${Date.now()}.tar.gz`;
+        const tmpTgz = `/tmp/openclaw-config-import-${Date.now()}.tar${isPlainTar ? '' : '.gz'}`;
         const tmpDir = `/tmp/openclaw-config-import-${Date.now()}`;
         fs.writeFileSync(tmpTgz, buf);
         fs.mkdirSync(tmpDir, { recursive: true });
 
         const { execSync } = require('child_process');
-        execSync(`tar -xzf ${JSON.stringify(tmpTgz)} -C ${JSON.stringify(tmpDir)}`);
+        const tarFlag = isPlainTar ? '-xf' : '-xzf';
+        execSync(`tar ${tarFlag} ${JSON.stringify(tmpTgz)} -C ${JSON.stringify(tmpDir)}`, { stdio: 'pipe', timeout: 15000 });
         fs.unlinkSync(tmpTgz);
 
         // Verify it's a valid config export
