@@ -875,17 +875,18 @@ $pubKeyCandidates = $pubKeyCandidates | Where-Object { $_ } | Select-Object -Uni
 $injected = $false
 $userReady = $false
 if ($hostUser -and $hostUser -ne "root" -and $hostUser -ne "administrator") {
-    for ($retryUser = 1; $retryUser -le 12; $retryUser++) {
+    Write-Info "等待容器创建用户 $hostUser ..."
+    for ($retryUser = 1; $retryUser -le 30; $retryUser++) {
         & docker exec $CONTAINER_NAME bash -lc "id '$hostUser' >/dev/null 2>&1" 2>$null | Out-Null
         if ($LASTEXITCODE -eq 0) {
             $userReady = $true
             break
         }
-        Start-Sleep -Milliseconds 500
+        Start-Sleep -Seconds 1
     }
 
     if (-not $userReady) {
-        Write-Warn "容器内普通用户 $hostUser 尚未就绪，将尝试 root 密钥登录兜底"
+        Write-Warn "容器内普通用户 $hostUser 尚未就绪（已等待 30s），先将公钥注入 root，容器启动后会自动同步到 $hostUser"
     } else {
         foreach ($keyFile in $pubKeyCandidates) {
             if (-not (Test-Path $keyFile)) { continue }
@@ -912,7 +913,7 @@ if (-not $injected -and -not $userReady) {
         & docker exec $CONTAINER_NAME bash -lc "cat /root/.ssh/authorized_keys.tmp >> /root/.ssh/authorized_keys && sort -u -o /root/.ssh/authorized_keys /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && rm -f /root/.ssh/authorized_keys.tmp" 2>$null | Out-Null
         if ($LASTEXITCODE -eq 0) {
             $injected = $true
-            Write-Warn "普通用户未就绪，已回退为 root 密钥登录"
+            Write-Info "公钥已注入 root，容器健康检查会每 10s 自动同步到 $hostUser"
             break
         }
     }

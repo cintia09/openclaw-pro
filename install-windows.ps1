@@ -2061,12 +2061,12 @@ function Show-Completion {
             Write-Host "     登录用户: $sshUser" -ForegroundColor Green
             Write-Host "     登录命令: ssh ${sshUser}@<host> -p ${SshPort}" -ForegroundColor Cyan
             Write-Host "     容器内提权: 登录后执行 sudo -i" -ForegroundColor DarkGray
-        } else {
             if ($script:sshRootFallback) {
-                Write-Host "     登录用户: root（普通用户已创建或预期使用普通用户，但 SSH 公钥注入失败，当前回退）" -ForegroundColor Yellow
-            } else {
-                Write-Host "     登录用户: root（普通用户未就绪或创建失败）" -ForegroundColor Yellow
+                Write-Host "     ⚠️  公钥已暂存到 root，容器健康检查会每 10s 自动同步到 $sshUser" -ForegroundColor Yellow
+                Write-Host "        若无法立即登录，请等待 30-60 秒后重试" -ForegroundColor DarkGray
             }
+        } else {
+            Write-Host "     登录用户: root" -ForegroundColor Yellow
             Write-Host "     登录命令: ssh root@<host> -p ${SshPort}" -ForegroundColor Cyan
             Write-Host "     建议: 修复后重新运行安装脚本恢复普通用户登录" -ForegroundColor DarkGray
         }
@@ -4377,17 +4377,18 @@ function Main {
                     # 注入到普通用户（如果有）
                     $userReady = $false
                     if ($hostUser -and $hostUser -ne "root" -and $hostUser -ne "administrator") {
-                        for ($retryUser = 1; $retryUser -le 12; $retryUser++) {
+                        Write-Info "等待容器创建用户 $hostUser ..."
+                        for ($retryUser = 1; $retryUser -le 30; $retryUser++) {
                             & docker exec $containerName bash -lc "id '$hostUser' >/dev/null 2>&1" 2>$null | Out-Null
                             if ($LASTEXITCODE -eq 0) {
                                 $userReady = $true
                                 break
                             }
-                            Start-Sleep -Milliseconds 500
+                            Start-Sleep -Seconds 1
                         }
 
                         if (-not $userReady) {
-                            Write-Warn "容器内普通用户 $hostUser 尚未就绪，将尝试 root 密钥登录兜底"
+                            Write-Warn "容器内普通用户 $hostUser 尚未就绪（已等待 30s），先将公钥注入 root，容器启动后会自动同步到 $hostUser"
                         }
 
                         foreach ($keyFile in $pubKeyCandidates) {
@@ -4411,9 +4412,14 @@ function Main {
                     }
 
                     if (-not $injected -and -not $userReady) {
-                        # 降级：普通用户未就绪时，注入到 root（兼容旧行为）
+                        # 降级：普通用户未就绪时，注入到 root（start-services.sh 的健康检查会每 10s 自动同步到普通用户）
                         $script:sshRootFallback = $true
-                        $script:hostUserForSSH = "root"
+                        # 保持普通用户名：root SSH 已被 start-services.sh 禁用，密钥会自动同步到普通用户
+                        if ($hostUser -and $hostUser -ne "root" -and $hostUser -ne "administrator") {
+                            $script:hostUserForSSH = $hostUser
+                        } else {
+                            $script:hostUserForSSH = "root"
+                        }
                         foreach ($keyFile in $pubKeyCandidates) {
                             if (-not (Test-Path $keyFile)) { continue }
                             & docker exec $containerName bash -lc "chmod 700 /root 2>/dev/null || true; mkdir -p /root/.ssh && chmod 700 /root/.ssh" 2>$null | Out-Null
@@ -4423,7 +4429,7 @@ function Main {
                             if ($LASTEXITCODE -eq 0) {
                                 $script:sshInjectedKeyPath = $keyFile
                                 $injected = $true
-                                Write-Warn "普通用户未就绪，已回退为 root 密钥登录: $keyFile"
+                                Write-Info "公钥已注入 root，容器健康检查会自动同步到 $hostUser : $keyFile"
                                 break
                             }
                         }
@@ -4470,8 +4476,13 @@ function Main {
                                             $script:sshInjectedKeyPath = $pubPath
                                             $injected = $true
                                             $script:sshRootFallback = $true
-                                            $script:hostUserForSSH = "root"
-                                            Write-OK "已自动生成并注入宿主机 SSH 公钥: $pubPath"
+                                            # 保持普通用户名：root SSH 已禁用，密钥会自动同步
+                                            if ($hostUser -and $hostUser -ne "root" -and $hostUser -ne "administrator") {
+                                                $script:hostUserForSSH = $hostUser
+                                            } else {
+                                                $script:hostUserForSSH = "root"
+                                            }
+                                            Write-OK "已自动生成并注入宿主机 SSH 公钥（将同步到 $hostUser）: $pubPath"
                                         }
                                     }
                                 }
