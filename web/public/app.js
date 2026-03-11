@@ -1648,6 +1648,72 @@ async function approvePairing(requestId, btn) {
   }
 }
 
+// --- Config Export ---
+$('btn-oc-config-export')?.addEventListener('click', async () => {
+  const btn = $('btn-oc-config-export');
+  if (btn) { btn.disabled = true; btn.textContent = '\u5BFC\u51FA\u4E2D...'; }
+  try {
+    const resp = await fetch('/api/openclaw/config/export', {
+      credentials: 'same-origin'
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.error || '\u5BFC\u51FA\u5931\u8D25');
+    }
+    const blob = await resp.blob();
+    const cd = resp.headers.get('content-disposition') || '';
+    const fnMatch = cd.match(/filename="?([^"]+)"?/);
+    const fileName = fnMatch ? fnMatch[1] : 'openclaw-config.tar.gz';
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = fileName;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast('\u914D\u7F6E\u5BFC\u51FA', '\u5DF2\u4E0B\u8F7D\u914D\u7F6E\u538B\u7F29\u5305');
+    appendOcLogLine('[export] \u914D\u7F6E\u5DF2\u5BFC\u51FA: ' + fileName);
+  } catch (e) {
+    toast('\u5BFC\u51FA\u5931\u8D25', e.message);
+    appendOcLogLine('[export] \u5BFC\u51FA\u5931\u8D25: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '\uD83D\uDCE4 \u914D\u7F6E\u5BFC\u51FA'; }
+  }
+});
+
+// --- Config Import ---
+$('btn-oc-config-import')?.addEventListener('click', () => {
+  $('config-import-file')?.click();
+});
+
+$('config-import-file')?.addEventListener('change', async (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  e.target.value = ''; // reset for re-select
+  if (!file.name.endsWith('.tar.gz') && !file.name.endsWith('.tgz')) {
+    toast('\u683C\u5F0F\u9519\u8BEF', '\u8BF7\u9009\u62E9 .tar.gz \u6216 .tgz \u6587\u4EF6');
+    return;
+  }
+  if (!confirm('\u5BFC\u5165\u914D\u7F6E\u5C06\u8986\u76D6\u5F53\u524D\u914D\u7F6E\uFF08\u4F1A\u81EA\u52A8\u5907\u4EFD\u5F53\u524D\u914D\u7F6E\uFF09\u3002\n\u5BFC\u5165\u540E\u9700\u70B9\u51FB\u201C\u91CD\u542F Gateway\u201D\u4F7F\u914D\u7F6E\u751F\u6548\u3002\n\n\u786E\u5B9A\u7EE7\u7EED\uFF1F')) return;
+  const btn = $('btn-oc-config-import');
+  if (btn) { btn.disabled = true; btn.textContent = '\u5BFC\u5165\u4E2D...'; }
+  try {
+    const resp = await fetch('/api/openclaw/config/import', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/gzip' },
+      body: file
+    });
+    const r = await resp.json();
+    if (!resp.ok || r.error) throw new Error(r.error || '\u5BFC\u5165\u5931\u8D25');
+    toast('\u914D\u7F6E\u5BFC\u5165', '\u5DF2\u6062\u590D: ' + (r.restoredFiles || []).join(', '));
+    appendOcLogLine('[import] \u914D\u7F6E\u5DF2\u5BFC\u5165: ' + (r.restoredFiles || []).join(', ') + ' (\u5DF2\u5907\u4EFD\u5230 ' + (r.backupName || '') + ')');
+    appendOcLogLine('[import] \u8BF7\u70B9\u51FB\u201C\u91CD\u542F Gateway\u201D\u4F7F\u914D\u7F6E\u751F\u6548\u3002');
+  } catch (e) {
+    toast('\u5BFC\u5165\u5931\u8D25', e.message);
+    appendOcLogLine('[import] \u5BFC\u5165\u5931\u8D25: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '\uD83D\uDCE5 \u914D\u7F6E\u5BFC\u5165'; }
+  }
+});
 
 
 $('btn-oc-repair-config')?.addEventListener('click', async ()=>{
@@ -3282,8 +3348,8 @@ let _scanIsLocal = false; // whether current scan is from browser local
 function skillSourceBadge(source) {
   if (!source) return '';
   if (source === 'bundled') return '<span style="background:#e3f2fd;color:#1565c0;font-size:10px;padding:1px 5px;border-radius:3px;margin-left:6px">内置</span>';
-  if (source === 'managed') return '<span style="background:#e8f5e9;color:#2e7d32;font-size:10px;padding:1px 5px;border-radius:3px;margin-left:6px">手动</span>';
-  if (source.startsWith('ext:')) return `<span style="background:#fff3e0;color:#e65100;font-size:10px;padding:1px 5px;border-radius:3px;margin-left:6px">${escapeHtml(source.slice(4))}</span>`;
+  if (source === 'managed') return '<span style="background:#e8f5e9;color:#2e7d32;font-size:10px;padding:1px 5px;border-radius:3px;margin-left:6px">用户安装</span>';
+  if (source.startsWith('ext:')) return `<span style="background:#e8eaf6;color:#283593;font-size:10px;padding:1px 5px;border-radius:3px;margin-left:6px">扩展</span><span style="background:#fff3e0;color:#e65100;font-size:10px;padding:1px 5px;border-radius:3px;margin-left:3px">${escapeHtml(source.slice(4))}</span>`;
   return '';
 }
 
@@ -3302,7 +3368,7 @@ function skillCard(s) {
           ${s.description ? `<div class="muted small" style="margin-top:2px">${escapeHtml(s.description)}</div>` : ''}
           ${secDetail}
         </div>
-        ${s.source !== 'bundled' ? `<button class="btn" style="font-size:12px;padding:2px 10px;white-space:nowrap" data-skill-remove="${escapeHtml(s.name)}">\u79FB\u9664</button>` : ''}
+        ${s.source === 'managed' ? `<button class="btn" style="font-size:12px;padding:2px 10px;white-space:nowrap" data-skill-remove="${escapeHtml(s.name)}">\u79FB\u9664</button>` : ''}
       </div>
     </div>`;
 }
@@ -3310,7 +3376,7 @@ function skillCard(s) {
 function scanSkillCard(s, idx) {
   // Match with installed skills
   const installed = _installedSkills.find(i => i.name === s.dirName);
-  const hasUpdate = installed && s.contentHash && installed.contentHash && s.contentHash !== installed.contentHash;
+  const hasUpdate = installed && s.contentHash && installed.contentHash && s.contentHash !== installed.contentHash && s.dirName === installed.name;
   const isLocalScan = !!s._localScan;
   let statusBadge = '';
   if (installed && hasUpdate) {
@@ -3364,8 +3430,9 @@ async function refreshPlugins() {
   const extsList = d.extensions || [];
   _installedSkills = skillsList; // cache for comparison
 
-  // Separate managed/ext skills from bundled
-  const userSkills = skillsList.filter(s => s.source !== 'bundled');
+  // Separate managed skills from bundled and extension
+  const userSkills = skillsList.filter(s => s.source === 'managed');
+  const extSkills = skillsList.filter(s => s.source && s.source.startsWith('ext:'));
   const bundledSkills = skillsList.filter(s => s.source === 'bundled');
 
   let html = '';
@@ -3373,6 +3440,14 @@ async function refreshPlugins() {
     html += userSkills.map(skillCard).join('');
   } else {
     html += '<div class="muted small" style="padding:12px 0">\u6682\u65E0\u7528\u6237\u5B89\u88C5\u7684 Skill\u3002</div>';
+  }
+  if (extSkills.length) {
+    html += `<div style="margin-top:12px;border-top:1px solid #333;padding-top:10px">
+      <div style="cursor:pointer;user-select:none;color:#8e8e93;font-size:13px" onclick="const c=this.nextElementSibling;const a=c.style.display==='none';c.style.display=a?'':'none';this.querySelector('span').textContent=a?'\u25BC':'\u25B6'">
+        <span>\u25B6</span> \u6269\u5C55 Skills (${extSkills.length})
+      </div>
+      <div style="display:none;margin-top:8px">${extSkills.map(skillCard).join('')}</div>
+    </div>`;
   }
   if (bundledSkills.length) {
     html += `<div style="margin-top:12px;border-top:1px solid #333;padding-top:10px">
@@ -3423,11 +3498,24 @@ function clientParseSkillMd(content) {
     if (inFm) fmLines.push(l);
   }
   if (fmLines.length) {
-    for (const fl of fmLines) {
+    for (let fi = 0; fi < fmLines.length; fi++) {
+      const fl = fmLines[fi];
       const nm = fl.match(/^name:\s*(.+)/);
       if (nm) name = nm[1].trim().replace(/^['"]|['"]$/g, '');
-      const dm = fl.match(/^description:\s*(.+)/);
-      if (dm) description = dm[1].trim().replace(/^['"]|['"]$/g, '').slice(0, 200);
+      const dm = fl.match(/^description:\s*(.*)/);
+      if (dm) {
+        const val = dm[1].trim();
+        if (val === '|' || val === '>') {
+          const descLines = [];
+          for (let j = fi + 1; j < fmLines.length; j++) {
+            if (/^\s+/.test(fmLines[j])) descLines.push(fmLines[j].trim());
+            else break;
+          }
+          description = descLines.join(' ').slice(0, 200);
+        } else {
+          description = val.replace(/^['"]|['"]$/g, '').slice(0, 200);
+        }
+      }
     }
   }
   // Fallback: heading for name

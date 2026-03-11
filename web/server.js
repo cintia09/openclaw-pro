@@ -7190,6 +7190,139 @@ app.get('/api/openclaw/config/repair/:taskId', (req, res) => {
   res.json({ ...task, delta });
 });
 
+// --- Config Export (download as .tar.gz) ---
+app.get('/api/openclaw/config/export', (req, res) => {
+  try {
+    const OPENCLAW_BASE = path.dirname(CONFIG_PATH);
+    const FILE_MAP = {
+      'openclaw.json': CONFIG_PATH,
+      'auth-profiles.json': path.join(OPENCLAW_BASE, 'agents/main/agent/auth-profiles.json'),
+      'models.json': path.join(OPENCLAW_BASE, 'agents/main/agent/models.json'),
+      'jobs.json': path.join(OPENCLAW_BASE, 'cron/jobs.json')
+    };
+    // Create temp dir with config files
+    const tmpDir = `/tmp/openclaw-config-export-${Date.now()}`;
+    fs.mkdirSync(tmpDir, { recursive: true });
+    let fileCount = 0;
+    for (const [name, src] of Object.entries(FILE_MAP)) {
+      if (fs.existsSync(src)) {
+        fs.copyFileSync(src, path.join(tmpDir, name));
+        fileCount++;
+      }
+    }
+    if (fileCount === 0) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      return res.status(404).json({ error: '\u6CA1\u6709\u53EF\u5BFC\u51FA\u7684\u914D\u7F6E\u6587\u4EF6' });
+    }
+    // Add metadata
+    fs.writeFileSync(path.join(tmpDir, '_export-meta.json'), JSON.stringify({
+      exportTime: new Date().toISOString(),
+      files: Object.keys(FILE_MAP).filter(n => fs.existsSync(FILE_MAP[n])),
+      version: 'openclaw-pro-config-v1'
+    }, null, 2));
+
+    const tgzPath = `${tmpDir}.tar.gz`;
+    const { execSync } = require('child_process');
+    execSync(`tar -czf ${JSON.stringify(tgzPath)} -C ${JSON.stringify(tmpDir)} .`);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+
+    const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+    res.setHeader('Content-Type', 'application/gzip');
+    res.setHeader('Content-Disposition', `attachment; filename="openclaw-config-${ts}.tar.gz"`);
+    const stream = fs.createReadStream(tgzPath);
+    stream.pipe(res);
+    stream.on('end', () => { try { fs.unlinkSync(tgzPath); } catch {} });
+    stream.on('error', () => { try { fs.unlinkSync(tgzPath); } catch {} });
+  } catch (e) {
+    console.error(`[config-export] \u5BFC\u51FA\u5931\u8D25: ${e?.message}`);
+    res.status(500).json({ error: e?.message || '\u914D\u7F6E\u5BFC\u51FA\u5931\u8D25' });
+  }
+});
+
+// --- Config Import (upload .tar.gz) ---
+app.post('/api/openclaw/config/import', (req, res) => {
+  try {
+    const contentType = req.headers['content-type'] || '';
+    if (!contentType.includes('application/gzip') && !contentType.includes('application/octet-stream') && !contentType.includes('application/x-gzip')) {
+      return res.status(400).json({ error: '\u8BF7\u4E0A\u4F20 .tar.gz \u6587\u4EF6' });
+    }
+    const chunks = [];
+    req.on('data', chunk => chunks.push(chunk));
+    req.on('end', () => {
+      try {
+        const buf = Buffer.concat(chunks);
+        if (buf.length < 20) return res.status(400).json({ error: '\u6587\u4EF6\u592A\u5C0F\uFF0C\u65E0\u6548\u7684\u538B\u7F29\u5305' });
+        if (buf.length > 10 * 1024 * 1024) return res.status(400).json({ error: '\u6587\u4EF6\u592A\u5927\uFF08\u6700\u5927 10MB\uFF09' });
+
+        const tmpTgz = `/tmp/openclaw-config-import-${Date.now()}.tar.gz`;
+        const tmpDir = `/tmp/openclaw-config-import-${Date.now()}`;
+        fs.writeFileSync(tmpTgz, buf);
+        fs.mkdirSync(tmpDir, { recursive: true });
+
+        const { execSync } = require('child_process');
+        execSync(`tar -xzf ${JSON.stringify(tmpTgz)} -C ${JSON.stringify(tmpDir)}`);
+        fs.unlinkSync(tmpTgz);
+
+        // Verify it's a valid config export
+        const extracted = fs.readdirSync(tmpDir).filter(f => f.endsWith('.json'));
+        if (extracted.length === 0) {
+          fs.rmSync(tmpDir, { recursive: true, force: true });
+          return res.status(400).json({ error: '\u538B\u7F29\u5305\u4E2D\u6CA1\u6709\u914D\u7F6E\u6587\u4EF6' });
+        }
+
+        const OPENCLAW_BASE = path.dirname(CONFIG_PATH);
+        const FILE_TARGETS = {
+          'openclaw.json': CONFIG_PATH,
+          'auth-profiles.json': path.join(OPENCLAW_BASE, 'agents/main/agent/auth-profiles.json'),
+          'models.json': path.join(OPENCLAW_BASE, 'agents/main/agent/models.json'),
+          'jobs.json': path.join(OPENCLAW_BASE, 'cron/jobs.json')
+        };
+
+        // Backup current config first
+        const backupName = 'snapshot-' + new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14).replace(/(\d{8})(\d{6})/, '$1-$2');
+        const backupDir = path.join(OPENCLAW_CONFIG_BACKUP_DIR, backupName);
+        fs.mkdirSync(backupDir, { recursive: true });
+        for (const [name, target] of Object.entries(FILE_TARGETS)) {
+          if (fs.existsSync(target)) {
+            try { fs.copyFileSync(target, path.join(backupDir, name)); } catch {}
+          }
+        }
+
+        // Restore from import
+        const restoredFiles = [];
+        for (const fileName of extracted) {
+          if (fileName.startsWith('_')) continue; // Skip metadata
+          const target = FILE_TARGETS[fileName];
+          if (!target) continue;
+          const srcFile = path.join(tmpDir, fileName);
+          // Validate JSON
+          try { JSON.parse(fs.readFileSync(srcFile, 'utf8')); } catch {
+            continue; // Skip invalid JSON
+          }
+          fs.mkdirSync(path.dirname(target), { recursive: true });
+          fs.copyFileSync(srcFile, target);
+          restoredFiles.push(fileName);
+        }
+
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+
+        if (restoredFiles.length === 0) {
+          return res.status(400).json({ error: '\u538B\u7F29\u5305\u4E2D\u6CA1\u6709\u53EF\u6062\u590D\u7684\u914D\u7F6E\u6587\u4EF6' });
+        }
+
+        console.log(`[config-import] \u5BFC\u5165\u5B8C\u6210: ${restoredFiles.join(', ')}, \u5DF2\u5907\u4EFD\u5230 ${backupName}`);
+        res.json({ success: true, restoredFiles, backupName });
+      } catch (e) {
+        console.error(`[config-import] \u5BFC\u5165\u5931\u8D25: ${e?.message}`);
+        res.status(500).json({ error: e?.message || '\u914D\u7F6E\u5BFC\u5165\u5931\u8D25' });
+      }
+    });
+  } catch (e) {
+    console.error(`[config-import] \u5BFC\u5165\u5931\u8D25: ${e?.message}`);
+    res.status(500).json({ error: e?.message || '\u914D\u7F6E\u5BFC\u5165\u5931\u8D25' });
+  }
+});
+
 app.get('/api/openclaw/config/backups', (req, res) => {
   try {
     const backups = listOpenClawConfigBackups();
@@ -8058,11 +8191,25 @@ function parseSkillMd(filePath) {
       if (inFm) fmLines.push(l);
     }
     if (fmLines.length) {
-      for (const fl of fmLines) {
+      for (let fi = 0; fi < fmLines.length; fi++) {
+        const fl = fmLines[fi];
         const nm = fl.match(/^name:\s*(.+)/);
         if (nm) name = nm[1].trim().replace(/^['"]|['"]$/g, '');
-        const dm = fl.match(/^description:\s*(.+)/);
-        if (dm) description = dm[1].trim().replace(/^['"]|['"]$/g, '').slice(0, 200);
+        const dm = fl.match(/^description:\s*(.*)/);
+        if (dm) {
+          const val = dm[1].trim();
+          if (val === '|' || val === '>') {
+            // YAML block scalar: collect indented lines
+            const descLines = [];
+            for (let j = fi + 1; j < fmLines.length; j++) {
+              if (/^\s+/.test(fmLines[j])) descLines.push(fmLines[j].trim());
+              else break;
+            }
+            description = descLines.join(' ').slice(0, 200);
+          } else {
+            description = val.replace(/^['"]|['"]$/g, '').slice(0, 200);
+          }
+        }
       }
     }
     // Fallback: heading for name

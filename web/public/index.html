@@ -178,6 +178,11 @@
                   <button class="btn" id="btn-oc-repair-config">配置恢复</button>
                   <button class="btn" id="btn-oc-start" title="重启前会二次确认，按住 Shift 点击可跳过">重启 Gateway</button>
                 </div>
+                <div class="row" style="margin-top:8px">
+                  <button class="btn" id="btn-oc-config-export" title="导出当前配置为压缩包下载到本地">📤 配置导出</button>
+                  <button class="btn" id="btn-oc-config-import" title="从本地压缩包导入配置（会自动备份当前配置）">📥 配置导入</button>
+                  <input type="file" id="config-import-file" accept=".tar.gz,.tgz" style="display:none" />
+                </div>
                 <div class="muted small" id="oc-update-status" style="margin-top:10px">更新状态：自动检查中</div>
                 <div class="muted small" style="margin-top:4px">当前：<span id="oc-current-ver">—</span> · 最新：<span id="oc-latest-ver">—</span></div>
                 <div class="muted small" style="margin-top:10px">安装按钮会自动判断是否需要更新，详细日志请到“日志”页面查看</div>
