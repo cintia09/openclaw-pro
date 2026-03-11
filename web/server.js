@@ -7916,6 +7916,16 @@ app.post('/api/trading/update', (req, res) => {
 // Plugins market — Skills & Extensions
 // ============================================================
 const OPENCLAW_SKILLS_DIR = '/root/.openclaw/skills';
+const SKILL_SCAN_TMP = '/tmp/openclaw-skill-scan';
+const SKILL_SCAN_MAX_DEPTH = 8;
+const SKILL_MD_MAX_SIZE = 512 * 1024; // 512KB
+const SKILL_DIR_MAX_FILES = 200;
+const SKILL_DANGEROUS_PATTERNS = [
+  /\beval\s*\(/i, /\bexec\s*\(/i, /\bspawn\s*\(/i,
+  /\brm\s+-rf\b/i, /\bsudo\b/i, /\bcurl\b.*\|\s*bash/i,
+  /\bwget\b.*\|\s*bash/i, /process\.env/i,
+  /child_process/i, /\brequire\s*\(/i, /\bimport\s*\(/i
+];
 
 function listUserSkills() {
   try {
@@ -7937,6 +7947,162 @@ function listUserSkills() {
   } catch {
     return [];
   }
+}
+
+/** Parse SKILL.md to extract name & description */
+function parseSkillMd(filePath) {
+  try {
+    const stat = fs.statSync(filePath);
+    if (stat.size > SKILL_MD_MAX_SIZE) return null;
+    const content = fs.readFileSync(filePath, 'utf8');
+    const lines = content.split('\n');
+    let name = '';
+    let description = '';
+    // Extract name from first heading
+    for (const l of lines) {
+      const hMatch = l.match(/^#{1,3}\s+(.+)/);
+      if (hMatch) { name = hMatch[1].trim(); break; }
+    }
+    // Extract description: first non-empty, non-heading, non-frontmatter line
+    let inFrontmatter = false;
+    for (const l of lines) {
+      const trimmed = l.trim();
+      if (trimmed === '---') { inFrontmatter = !inFrontmatter; continue; }
+      if (inFrontmatter) continue;
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      description = trimmed.slice(0, 200);
+      break;
+    }
+    return { name, description, content };
+  } catch {
+    return null;
+  }
+}
+
+/** Recursively find all SKILL.md files up to maxDepth */
+function findSkillsInDir(baseDir, maxDepth = SKILL_SCAN_MAX_DEPTH) {
+  const results = [];
+  function walk(dir, depth) {
+    if (depth > maxDepth) return;
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    // Check if this dir has SKILL.md
+    const skillMdPath = path.join(dir, 'SKILL.md');
+    if (fs.existsSync(skillMdPath)) {
+      const parsed = parseSkillMd(skillMdPath);
+      if (parsed) {
+        const relPath = path.relative(baseDir, dir);
+        const dirName = path.basename(dir);
+        results.push({
+          name: parsed.name || dirName,
+          dirName,
+          relPath: relPath || '.',
+          description: parsed.description,
+          absPath: dir,
+        });
+      }
+      return; // Don't recurse into skill subdirectories
+    }
+    // Recurse into subdirectories
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      if (e.name.startsWith('.') || e.name === 'node_modules' || e.name === '__pycache__') continue;
+      walk(path.join(dir, e.name), depth + 1);
+    }
+  }
+  walk(baseDir, 0);
+  return results;
+}
+
+/** Security check: scan skill directory for dangerous patterns */
+function validateSkillSecurity(skillDir) {
+  const warnings = [];
+  const errors = [];
+  const skillMdPath = path.join(skillDir, 'SKILL.md');
+
+  // 1. SKILL.md must exist
+  if (!fs.existsSync(skillMdPath)) {
+    errors.push('缺少 SKILL.md 文件');
+    return { valid: false, errors, warnings };
+  }
+
+  // 2. Check SKILL.md is valid markdown
+  const parsed = parseSkillMd(skillMdPath);
+  if (!parsed) {
+    errors.push('SKILL.md 文件无法解析');
+    return { valid: false, errors, warnings };
+  }
+
+  // 3. Check SKILL.md content for dangerous patterns
+  for (const pat of SKILL_DANGEROUS_PATTERNS) {
+    if (pat.test(parsed.content)) {
+      warnings.push(`SKILL.md 包含可疑模式: ${pat.source}`);
+    }
+  }
+
+  // 4. Check for executable files or scripts
+  try {
+    const allFiles = [];
+    function collectFiles(dir, depth) {
+      if (depth > 3 || allFiles.length > SKILL_DIR_MAX_FILES) return;
+      const ents = fs.readdirSync(dir, { withFileTypes: true });
+      for (const e of ents) {
+        if (e.name.startsWith('.')) continue;
+        const fp = path.join(dir, e.name);
+        if (e.isDirectory()) { collectFiles(fp, depth + 1); continue; }
+        allFiles.push({ name: e.name, path: fp });
+      }
+    }
+    collectFiles(skillDir, 0);
+
+    if (allFiles.length > SKILL_DIR_MAX_FILES) {
+      warnings.push(`目录包含过多文件 (>${SKILL_DIR_MAX_FILES})`);
+    }
+
+    // Check for suspicious file types
+    const suspiciousExts = ['.sh', '.bash', '.py', '.js', '.ts', '.exe', '.bat', '.cmd', '.ps1', '.rb', '.pl'];
+    for (const f of allFiles) {
+      const ext = path.extname(f.name).toLowerCase();
+      if (suspiciousExts.includes(ext)) {
+        warnings.push(`包含脚本文件: ${f.name}`);
+      }
+      // Check for large binary files
+      try {
+        const fstat = fs.statSync(f.path);
+        if (fstat.size > 5 * 1024 * 1024) {
+          warnings.push(`大文件 (>${Math.round(fstat.size / 1024 / 1024)}MB): ${f.name}`);
+        }
+      } catch {}
+    }
+
+    // Check other .md files for dangerous patterns
+    for (const f of allFiles) {
+      if (path.extname(f.name).toLowerCase() !== '.md') continue;
+      if (f.name === 'SKILL.md') continue;
+      try {
+        const content = fs.readFileSync(f.path, 'utf8').slice(0, 50000);
+        for (const pat of SKILL_DANGEROUS_PATTERNS) {
+          if (pat.test(content)) {
+            warnings.push(`${f.name} 包含可疑模式: ${pat.source}`);
+            break;
+          }
+        }
+      } catch {}
+    }
+  } catch (e) {
+    warnings.push(`目录扫描异常: ${e.message}`);
+  }
+
+  return { valid: errors.length === 0, errors, warnings };
+}
+
+/** Clean up scan temp directory */
+function cleanScanTmp() {
+  try {
+    if (fs.existsSync(SKILL_SCAN_TMP)) {
+      fs.rmSync(SKILL_SCAN_TMP, { recursive: true, force: true });
+    }
+  } catch {}
 }
 
 async function listUserExtensions() {
@@ -7992,6 +8158,178 @@ app.get('/api/plugins/list', async (req, res) => {
   }
 });
 
+// Scan GitHub repo or local dir for available skills
+app.post('/api/plugins/skill/scan', async (req, res) => {
+  const { source, localPath } = req.body || {};
+  if (!source || typeof source !== 'string') {
+    return res.status(400).json({ error: '请提供 GitHub URL 或本地目录路径' });
+  }
+
+  const sanitized = source.trim();
+  if (sanitized.length > 1000) {
+    return res.status(400).json({ error: '输入过长' });
+  }
+
+  try {
+    let scanDir;
+    let isGitClone = false;
+
+    // Determine if it's a GitHub/git URL or local path
+    const isGitUrl = /^https?:\/\//.test(sanitized) || /^git@/.test(sanitized) || /\.git$/.test(sanitized);
+
+    if (isGitUrl) {
+      // Validate URL to prevent SSRF
+      if (/[;&|`$(){}]/.test(sanitized)) {
+        return res.status(400).json({ error: '无效的 URL' });
+      }
+      // Only allow github.com, gitlab.com, gitee.com
+      try {
+        const parsed = new URL(sanitized);
+        const allowedHosts = ['github.com', 'gitlab.com', 'gitee.com', 'bitbucket.org'];
+        if (!allowedHosts.some(h => parsed.hostname === h || parsed.hostname.endsWith('.' + h))) {
+          return res.status(400).json({ error: `不支持的 Git 主机: ${parsed.hostname}。仅支持 GitHub/GitLab/Gitee/Bitbucket` });
+        }
+      } catch {
+        return res.status(400).json({ error: '无效的 URL 格式' });
+      }
+
+      // Clone to temp dir
+      cleanScanTmp();
+      fs.mkdirSync(SKILL_SCAN_TMP, { recursive: true });
+      scanDir = SKILL_SCAN_TMP;
+      isGitClone = true;
+
+      await runCommandTextAsync(
+        `git clone --depth=1 ${JSON.stringify(sanitized)} ${JSON.stringify(SKILL_SCAN_TMP)} 2>&1`,
+        120000
+      );
+    } else if (localPath || sanitized.startsWith('/')) {
+      // Local directory scan
+      const dirPath = (localPath || sanitized).trim();
+      // Prevent path traversal - must be absolute path
+      if (!path.isAbsolute(dirPath)) {
+        return res.status(400).json({ error: '请提供绝对路径' });
+      }
+      // Block sensitive directories
+      const blocked = ['/etc', '/proc', '/sys', '/dev', '/boot', '/root/.ssh', '/root/.gnupg'];
+      if (blocked.some(b => dirPath === b || dirPath.startsWith(b + '/'))) {
+        return res.status(400).json({ error: '该目录不可扫描' });
+      }
+      if (!fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) {
+        return res.status(400).json({ error: '目录不存在或不是一个目录' });
+      }
+      scanDir = dirPath;
+    } else {
+      return res.status(400).json({ error: '请提供有效的 GitHub URL 或本地目录路径' });
+    }
+
+    // Scan for skills
+    const skills = findSkillsInDir(scanDir);
+
+    // Run security validation on each found skill
+    const results = skills.map(s => {
+      const check = validateSkillSecurity(s.absPath);
+      return {
+        ...s,
+        valid: check.valid,
+        errors: check.errors,
+        warnings: check.warnings,
+        installed: fs.existsSync(path.join(OPENCLAW_SKILLS_DIR, s.dirName))
+      };
+    });
+
+    res.json({
+      source: sanitized,
+      isGit: isGitClone,
+      scanDir,
+      total: results.length,
+      skills: results
+    });
+  } catch (e) {
+    cleanScanTmp();
+    res.status(500).json({ error: `扫描失败: ${e.message}` });
+  }
+});
+
+// Install selected skills from scan results
+app.post('/api/plugins/skill/install-selected', async (req, res) => {
+  const { skills, source } = req.body || {};
+  if (!Array.isArray(skills) || skills.length === 0) {
+    return res.status(400).json({ error: '请选择要安装的 Skills' });
+  }
+
+  // Ensure skills dir exists
+  if (!fs.existsSync(OPENCLAW_SKILLS_DIR)) {
+    fs.mkdirSync(OPENCLAW_SKILLS_DIR, { recursive: true });
+  }
+
+  const results = [];
+  for (const skill of skills) {
+    const { dirName, relPath, absPath } = skill;
+    if (!dirName || typeof dirName !== 'string') {
+      results.push({ name: dirName, success: false, error: '无效的 skill 名称' });
+      continue;
+    }
+
+    // Safe name
+    const safeName = path.basename(dirName);
+    if (safeName !== dirName || dirName.includes('..')) {
+      results.push({ name: dirName, success: false, error: '名称包含非法字符' });
+      continue;
+    }
+
+    const dest = path.join(OPENCLAW_SKILLS_DIR, safeName);
+    if (fs.existsSync(dest)) {
+      results.push({ name: safeName, success: false, error: '已存在，请先移除' });
+      continue;
+    }
+
+    // Determine source path
+    let srcPath = absPath;
+    if (!srcPath || !fs.existsSync(srcPath)) {
+      // Try to reconstruct from scan tmp
+      if (relPath && fs.existsSync(path.join(SKILL_SCAN_TMP, relPath))) {
+        srcPath = path.join(SKILL_SCAN_TMP, relPath);
+      } else {
+        results.push({ name: safeName, success: false, error: '源目录不存在' });
+        continue;
+      }
+    }
+
+    // Final security check
+    const check = validateSkillSecurity(srcPath);
+    if (!check.valid) {
+      results.push({ name: safeName, success: false, error: `安全检查失败: ${check.errors.join('; ')}` });
+      continue;
+    }
+
+    try {
+      // Copy skill dir — use cp -a for proper copy
+      execSync(`cp -a ${JSON.stringify(srcPath)} ${JSON.stringify(dest)}`, { timeout: 30000 });
+      // Remove .git dir if present (from cloned repos)
+      const gitDir = path.join(dest, '.git');
+      if (fs.existsSync(gitDir)) {
+        fs.rmSync(gitDir, { recursive: true, force: true });
+      }
+      results.push({ name: safeName, success: true, warnings: check.warnings });
+    } catch (e) {
+      results.push({ name: safeName, success: false, error: e.message });
+    }
+  }
+
+  // Clean up scan temp
+  cleanScanTmp();
+
+  const successCount = results.filter(r => r.success).length;
+  res.json({
+    success: successCount > 0,
+    total: skills.length,
+    installed: successCount,
+    results
+  });
+});
+
+// Legacy: direct install from git URL (backward compat)
 app.post('/api/plugins/skill/install', async (req, res) => {
   const { url } = req.body || {};
   if (!url || typeof url !== 'string') return res.status(400).json({ error: 'missing url' });

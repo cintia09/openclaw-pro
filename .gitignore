@@ -9,4 +9,5 @@ node_modules/
 test/*.remote.sh
 test/.tmp/
 test/logs/
+log/
 ws-test*

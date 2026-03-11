@@ -3224,6 +3224,8 @@ $('btn-strategy-save').addEventListener('click', async ()=>{
 // ------------------------
 // Plugins (Skills & Extensions)
 // ------------------------
+let _scanResults = []; // cached scan results
+
 function skillCard(s) {
   return `
     <div class="card" style="margin-bottom:10px;padding:10px 14px">
@@ -3235,6 +3237,34 @@ function skillCard(s) {
         <button class="btn" style="font-size:12px;padding:2px 10px" data-skill-remove="${escapeHtml(s.name)}">移除</button>
       </div>
     </div>`;
+}
+
+function scanSkillCard(s, idx) {
+  const statusBadge = s.installed
+    ? '<span style="color:#4caf50;font-size:11px;margin-left:6px">✓ 已安装</span>'
+    : !s.valid
+      ? '<span style="color:#f44;font-size:11px;margin-left:6px">✗ 无效</span>'
+      : '';
+  const warningHtml = (s.warnings || []).length
+    ? `<div class="muted small" style="color:#ffa726;margin-top:2px">⚠ ${escapeHtml(s.warnings.join('; '))}</div>`
+    : '';
+  const errorHtml = (s.errors || []).length
+    ? `<div class="muted small" style="color:#f44;margin-top:2px">✗ ${escapeHtml(s.errors.join('; '))}</div>`
+    : '';
+  const disabled = s.installed || !s.valid;
+  return `
+    <div class="card" style="margin-bottom:6px;padding:8px 12px;opacity:${disabled ? '0.6' : '1'}">
+      <div class="row" style="align-items:flex-start;gap:8px">
+        <input type="checkbox" data-scan-idx="${idx}" ${disabled ? 'disabled' : ''} style="margin-top:4px" />
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:700;font-size:13px">${escapeHtml(s.name)}${statusBadge}</div>
+          <div class="muted small" style="margin-top:1px">${escapeHtml(s.description || '')}</div>
+          <div class="muted small" style="margin-top:1px;color:#888">📁 ${escapeHtml(s.relPath || s.dirName)}</div>
+          ${warningHtml}${errorHtml}
+        </div>
+      </div>
+    </div>`;
+}
 }
 
 function extensionCard(ext) {
@@ -3278,36 +3308,120 @@ $('plugins-tabs')?.addEventListener('click', (e) => {
   $('plugins-extensions').hidden = ptab !== 'extensions';
 });
 
-// Install Skill from git URL
-$('btn-skill-install')?.addEventListener('click', async () => {
+// Install Skill — Scan workflow
+$('btn-skill-scan')?.addEventListener('click', async () => {
   const input = $('skill-url-input');
-  const url = (input?.value || '').trim();
-  if (!url) return toast('请输入', '请输入 Skill 的 Git 仓库 URL 或名称');
+  const source = (input?.value || '').trim();
+  if (!source) return toast('请输入', '请输入 GitHub URL 或本地目录路径');
 
   const logEl = $('skill-install-log');
   const pre = logEl?.querySelector('pre');
   logEl.style.display = '';
-  pre.textContent = '正在安装...\n';
+  pre.textContent = '正在扫描...\n';
 
-  const btn = $('btn-skill-install');
+  const btn = $('btn-skill-scan');
+  btn.disabled = true;
+  btn.textContent = '扫描中...';
+
+  try {
+    const r = await api('/api/plugins/skill/scan', { method: 'POST', body: { source }, timeoutMs: 180000 });
+    if (r.error) {
+      pre.textContent += `错误: ${r.error}\n`;
+      toast('扫描失败', r.error);
+      return;
+    }
+
+    _scanResults = r.skills || [];
+    pre.textContent += `找到 ${r.total} 个 Skill\n`;
+
+    if (r.total === 0) {
+      pre.textContent += '该源中未找到包含 SKILL.md 的目录\n';
+      $('skill-scan-results').style.display = 'none';
+      return;
+    }
+
+    // Show scan results
+    $('skill-scan-title').textContent = `扫描结果 — 共 ${r.total} 个 Skill`;
+    $('skill-scan-list').innerHTML = _scanResults.map((s, i) => scanSkillCard(s, i)).join('');
+    $('skill-scan-results').style.display = '';
+    logEl.style.display = 'none';
+  } catch (e) {
+    pre.textContent += `错误: ${e.message}\n`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔍 扫描';
+  }
+});
+
+// Browse local directory
+$('btn-skill-browse')?.addEventListener('click', () => {
+  const dir = prompt('请输入容器内的本地目录路径（绝对路径）：\n例如: /root/my-skills 或 /tmp/some-repo');
+  if (!dir) return;
+  $('skill-url-input').value = dir.trim();
+  $('btn-skill-scan')?.click();
+});
+
+// Select all in scan results
+$('btn-skill-select-all')?.addEventListener('click', () => {
+  const boxes = qa('#skill-scan-list input[type=checkbox]:not(:disabled)');
+  const allChecked = [...boxes].every(b => b.checked);
+  boxes.forEach(b => { b.checked = !allChecked; });
+});
+
+// Close scan results
+$('btn-skill-scan-close')?.addEventListener('click', () => {
+  $('skill-scan-results').style.display = 'none';
+  _scanResults = [];
+});
+
+// Install selected skills from scan
+$('btn-skill-install-selected')?.addEventListener('click', async () => {
+  const boxes = qa('#skill-scan-list input[type=checkbox]:checked');
+  const selected = [...boxes].map(b => {
+    const idx = parseInt(b.getAttribute('data-scan-idx'), 10);
+    return _scanResults[idx];
+  }).filter(Boolean);
+
+  if (selected.length === 0) return toast('请选择', '请勾选要安装的 Skills');
+
+  const logEl = $('skill-install-log');
+  const pre = logEl?.querySelector('pre');
+  logEl.style.display = '';
+  pre.textContent = `正在安装 ${selected.length} 个 Skill...\n`;
+
+  const btn = $('btn-skill-install-selected');
   btn.disabled = true;
   btn.textContent = '安装中...';
 
   try {
-    const r = await api('/api/plugins/skill/install', { method: 'POST', body: { url }, timeoutMs: 120000 });
-    pre.textContent += (r.output || r.error || (r.success ? '安装成功' : '未知错误')) + '\n';
-    if (r.success) {
-      toast('安装成功', `Skill 已安装，重启 Gateway 后生效`);
-      input.value = '';
+    const r = await api('/api/plugins/skill/install-selected', {
+      method: 'POST',
+      body: { skills: selected },
+      timeoutMs: 120000
+    });
+
+    if (r.results) {
+      for (const item of r.results) {
+        const icon = item.success ? '✓' : '✗';
+        pre.textContent += `${icon} ${item.name}: ${item.success ? '安装成功' : item.error}`;
+        if (item.warnings?.length) pre.textContent += ` ⚠ ${item.warnings.join('; ')}`;
+        pre.textContent += '\n';
+      }
+    }
+
+    if (r.installed > 0) {
+      toast('安装完成', `成功安装 ${r.installed}/${r.total} 个 Skill，重启 Gateway 后生效`);
+      $('skill-scan-results').style.display = 'none';
+      _scanResults = [];
       refreshPlugins();
     } else {
-      toast('安装失败', r.error || '');
+      toast('安装失败', r.error || '未成功安装任何 Skill');
     }
   } catch (e) {
     pre.textContent += `错误: ${e.message}\n`;
   } finally {
     btn.disabled = false;
-    btn.textContent = '安装 Skill';
+    btn.textContent = '安装选中';
   }
 });
 

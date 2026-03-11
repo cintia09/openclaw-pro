@@ -777,17 +777,40 @@
           <div id="plugins-skills">
             <div style="margin-bottom:14px">
               <div class="muted small" style="margin-bottom:10px">OpenClaw 内置 48+ Skills。以下为用户自行安装的 Skills，存储在 <code>~/.openclaw/skills/</code></div>
+
+              <!-- Scan source input -->
+              <div class="muted small" style="margin-bottom:6px;font-weight:600;color:#aaa">扫描 Skill 源</div>
               <div class="row" style="gap:8px;flex-wrap:wrap">
-                <input class="input" id="skill-url-input" placeholder="输入 Skill Git 仓库 URL 或名称" style="flex:1;min-width:200px" />
-                <button class="btn btn-primary" id="btn-skill-install">安装 Skill</button>
+                <input class="input" id="skill-url-input" placeholder="输入 GitHub URL 或本地目录路径" style="flex:1;min-width:200px" />
+                <button class="btn btn-primary" id="btn-skill-scan">🔍 扫描</button>
+                <button class="btn" id="btn-skill-browse" title="输入本地目录路径进行扫描">📂 本地目录</button>
               </div>
               <div class="muted small" style="margin-top:6px">
-                支持 GitHub URL（如 <code>https://github.com/user/my-skill</code>）或本地路径。安装后需重启 Gateway 生效。
+                支持 GitHub/GitLab/Gitee URL（如 <code>https://github.com/user/skills-repo</code>）或容器内本地路径。扫描会穿透多重目录查找所有可用 Skills。
               </div>
             </div>
+
+            <!-- Scan results -->
+            <div id="skill-scan-results" style="display:none">
+              <div style="margin-bottom:8px;padding:8px 12px;background:#1a1a2e;border-radius:8px">
+                <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:6px">
+                  <span style="font-weight:700;font-size:13px" id="skill-scan-title">扫描结果</span>
+                  <div class="row" style="gap:6px">
+                    <button class="btn" id="btn-skill-select-all" style="font-size:11px;padding:2px 8px">全选</button>
+                    <button class="btn btn-primary" id="btn-skill-install-selected" style="font-size:12px;padding:3px 12px">安装选中</button>
+                    <button class="btn" id="btn-skill-scan-close" style="font-size:11px;padding:2px 8px">关闭</button>
+                  </div>
+                </div>
+                <div id="skill-scan-list" style="max-height:400px;overflow-y:auto"></div>
+              </div>
+            </div>
+
+            <!-- Install log -->
             <div id="skill-install-log" style="display:none">
               <pre class="terminal" style="height:120px;overflow-y:auto;font-size:11.5px"></pre>
             </div>
+
+            <!-- Installed skills list -->
             <div id="skills-list">
               <div class="muted small">加载中...</div>
             </div>
