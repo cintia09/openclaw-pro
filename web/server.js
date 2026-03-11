@@ -8912,6 +8912,16 @@ if (WebSocketServer) {
 
   // ─── Browser Bridge WebSocket ─────────────────────────
   browserBridgeWss.on('connection', (ws, req) => {
+    // 仅允许内网 IP 连接浏览器桥接
+    const clientIp = req.headers['x-real-ip'] || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || '';
+    const normalizedIp = clientIp.replace(/^::ffff:/, '');
+    const isPrivate = /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1$|fd|fe80)/i.test(normalizedIp);
+    if (!isPrivate) {
+      console.log(`[browser-bridge] 拒绝非内网连接: ip=${normalizedIp}`);
+      try { ws.close(4003, 'browser bridge is LAN only'); } catch {}
+      return;
+    }
+
     let parsedUrl;
     try { parsedUrl = new URL(req.url, 'http://localhost'); } catch { parsedUrl = { searchParams: new URLSearchParams() }; }
     const code = (parsedUrl.searchParams.get('code') || '').trim().toUpperCase();
