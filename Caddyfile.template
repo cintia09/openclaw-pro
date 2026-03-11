@@ -28,6 +28,12 @@ ${DOMAIN} {
     # OpenClaw Gateway (strip /gateway prefix)
     handle_path /gateway/* {
         reverse_proxy 127.0.0.1:18789 {
+            header_up Host {host}
+            header_up X-Real-IP {remote}
+            header_up X-Forwarded-For {remote}
+            header_up X-Forwarded-Proto {scheme}
+            header_up Upgrade {http.request.header.Upgrade}
+            header_up Connection {http.request.header.Connection}
             flush_interval -1
             transport http {
                 read_timeout 0
