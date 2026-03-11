@@ -1591,6 +1591,8 @@ function Get-DeployConfig {
         PortArgs     = @()
         AutoOpenFirewall = $true
         HttpsEnabled = $true
+        BrowserBridgeEnabled = $false
+        BrowserBridgePort    = 0
     }
 
     # 1. Gateway 端口
@@ -1825,6 +1827,35 @@ function Get-DeployConfig {
     $config.SshPort = $sshPort
     $config.PortArgs += @("-p", "$($config.SshPort):22")
 
+    # ─── 远端浏览器控制（仅局域网 IP 模式提供选项）─────────
+    $isLanIp = $false
+    if ($config.Domain -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') {
+        if ($config.Domain -match '^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.)') {
+            $isLanIp = $true
+        }
+    }
+    if ($isLanIp) {
+        Write-Host ""
+        Write-Host "  🌐 检测到局域网环境 ($($config.Domain))，可开启远端浏览器控制功能。" -ForegroundColor White
+        Write-Host "     该功能允许局域网内其他电脑上的 Chrome 通过插件连接到本服务器，" -ForegroundColor DarkGray
+        Write-Host "     AI 代理可远程操控浏览器。" -ForegroundColor DarkGray
+        Write-Host "     是否开启远端浏览器控制？[y/N] : " -NoNewline -ForegroundColor White
+        $bbChoice = (Read-Host).Trim().ToLower()
+        if ($bbChoice -eq 'y' -or $bbChoice -eq 'yes') {
+            $config.BrowserBridgeEnabled = $true
+            $bridgePort = 3001
+            if (-not (Test-PortAvailable $bridgePort)) {
+                $bridgePort = Find-AvailablePort -PreferredPort 3001 -RangeStart 3001 -RangeEnd 3099
+                Write-Warn "端口 3001 已被占用，浏览器控制使用端口 $bridgePort"
+            }
+            $config.BrowserBridgePort = $bridgePort
+            $config.PortArgs += @("-p", "$($config.BrowserBridgePort):3001")
+            Write-OK "已开启远端浏览器控制，端口: $bridgePort"
+        } else {
+            Write-Info "已跳过远端浏览器控制"
+        }
+    }
+
     # 显示配置摘要
     Write-Host ""
     Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray
@@ -1834,6 +1865,9 @@ function Get-DeployConfig {
     }
     Write-Host "     HTTPS  $($config.HttpsPort) → 容器 443 (主入口)" -ForegroundColor Gray
     Write-Host "     SSH    $($config.SshPort) → 容器 22  (远程登录)" -ForegroundColor Gray
+    if ($config.BrowserBridgeEnabled) {
+        Write-Host "     Bridge $($config.BrowserBridgePort) → 容器 3001 (浏览器控制)" -ForegroundColor Gray
+    }
     if ($config.CertMode -eq "internal") {
         Write-Host "     证书: 自签证书（Caddy Internal）" -ForegroundColor Yellow
     } else {
@@ -1858,6 +1892,7 @@ function Get-DeployConfig {
     }
     if ($config.HttpsPort -and $config.HttpsPort -gt 0) { $fwPortList += $config.HttpsPort }
     if ($config.SshPort -and $config.SshPort -gt 0) { $fwPortList += $config.SshPort }
+    if ($config.BrowserBridgeEnabled -and $config.BrowserBridgePort -gt 0) { $fwPortList += $config.BrowserBridgePort }
     $fwPortsText = ($fwPortList | Sort-Object -Unique) -join ','
     $defaultAutoOpen = "Y"
     $defaultHint = "Y/n"
@@ -1887,7 +1922,9 @@ function Write-LaunchAccessSummary {
         [string]$CertMode = "letsencrypt",
         [int]$HttpPort = 0,
         [int]$HttpsPort = 0,
-        [int]$SshPort = 2222
+        [int]$SshPort = 2222,
+        [bool]$BrowserBridgeEnabled = $false,
+        [int]$BrowserBridgePort = 0
     )
 
     if ($IsDockerDesktop) {
@@ -1906,6 +1943,9 @@ function Write-LaunchAccessSummary {
     }
     Write-Host "     HTTPS  ${HttpsPort} → 主入口（Caddy 反代）" -ForegroundColor Gray
     Write-Host "     SSH    ${SshPort} → 远程登录（密钥认证）" -ForegroundColor Gray
+    if ($BrowserBridgeEnabled -and $BrowserBridgePort -gt 0) {
+        Write-Host "     Bridge ${BrowserBridgePort} → 浏览器控制（WebSocket）" -ForegroundColor Gray
+    }
     if ($CertMode -eq "internal") {
         Write-Host "     证书模式: 自签证书（局域网测试）" -ForegroundColor Yellow
         Write-Host "     ⚠️  首次访问浏览器会提示「不安全」，点击「继续访问」/「高级」即可" -ForegroundColor Yellow
@@ -1936,7 +1976,9 @@ function Show-Completion {
         [int]$HttpPort = 0,
         [int]$HttpsPort = 0,
         [int]$SshPort = 2222,
-        [bool]$AutoOpenFirewall = $true
+        [bool]$AutoOpenFirewall = $true,
+        [bool]$BrowserBridgeEnabled = $false,
+        [int]$BrowserBridgePort = 0
     )
 
     Write-Host ""
@@ -1964,6 +2006,7 @@ function Show-Completion {
         }
         if ($HttpsPort -and $HttpsPort -gt 0) { $portList += $HttpsPort }
         if ($SshPort -and $SshPort -gt 0) { $portList += $SshPort }
+        if ($BrowserBridgeEnabled -and $BrowserBridgePort -gt 0) { $portList += $BrowserBridgePort }
         if ($portList.Count -gt 0 -and $AutoOpenFirewall) {
             $ports = ($portList | Sort-Object -Unique) -join ','
             Write-Host "  防火墙端口已自动开放 (${ports})，如需重新设置:" -ForegroundColor Yellow
@@ -3195,6 +3238,10 @@ function Main {
                     Write-Host "     数据目录: $(Join-Path $homeBaseDir $upgradeHomeDataName)" -ForegroundColor White
                     $upgradeSshPort = if ($upgradeConfig.ssh_port) { $upgradeConfig.ssh_port } else { 2222 }
                     Write-Host "     SSH 端口: $upgradeSshPort" -ForegroundColor White
+                    if ($upgradeConfig.browser_bridge_enabled) {
+                        $upgradeBridgePort = if ($upgradeConfig.browser_bridge_port) { $upgradeConfig.browser_bridge_port } else { 3001 }
+                        Write-Host "     浏览器控制: 端口 $upgradeBridgePort" -ForegroundColor White
+                    }
                     Write-Host ""
 
                     # 构建 $deployConfig 复用旧配置
@@ -3210,6 +3257,8 @@ function Main {
                         PortArgs     = @()
                         AutoOpenFirewall = $true
                         HttpsEnabled = [bool]$upgradeConfig.domain
+                        BrowserBridgeEnabled = if ($upgradeConfig.browser_bridge_enabled) { [bool]$upgradeConfig.browser_bridge_enabled } else { $false }
+                        BrowserBridgePort    = if ($upgradeConfig.browser_bridge_port) { [int]$upgradeConfig.browser_bridge_port } else { 0 }
                     }
                     if ($deployConfig.HttpsEnabled) {
                         if ($deployConfig.CertMode -eq "letsencrypt") {
@@ -3229,6 +3278,9 @@ function Main {
                         )
                     }
                     $deployConfig.PortArgs += @("-p", "$($deployConfig.SshPort):22")
+                    if ($deployConfig.BrowserBridgeEnabled -and $deployConfig.BrowserBridgePort -gt 0) {
+                        $deployConfig.PortArgs += @("-p", "$($deployConfig.BrowserBridgePort):3001")
+                    }
 
                     $script:actualGatewayPort = $deployConfig.GatewayPort
                     $script:actualPanelPort   = $deployConfig.WebPort
@@ -3238,6 +3290,8 @@ function Main {
                     $script:httpsPort         = $deployConfig.HttpsPort
                     $script:sshPort           = $deployConfig.SshPort
                     $script:autoOpenFirewall  = $deployConfig.AutoOpenFirewall
+                    $script:browserBridgeEnabled = $deployConfig.BrowserBridgeEnabled
+                    $script:browserBridgePort    = $deployConfig.BrowserBridgePort
                 }
 
                 # 停止并删除旧容器
@@ -3318,6 +3372,8 @@ function Main {
             $script:httpsPort         = $deployConfig.HttpsPort
             $script:sshPort           = $deployConfig.SshPort
             $script:autoOpenFirewall  = $deployConfig.AutoOpenFirewall
+            $script:browserBridgeEnabled = $deployConfig.BrowserBridgeEnabled
+            $script:browserBridgePort    = $deployConfig.BrowserBridgePort
         }
 
         Write-Info "正在准备镜像..."
@@ -3991,6 +4047,7 @@ function Main {
                     elseif ($c.ContainerPort -eq 80) { $deployConfig.HttpPort = $newPort }
                     elseif ($c.ContainerPort -eq 443) { $deployConfig.HttpsPort = $newPort }
                     elseif ($c.ContainerPort -eq 22) { $deployConfig.SshPort = $newPort }
+                    elseif ($c.ContainerPort -eq 3001) { $deployConfig.BrowserBridgePort = $newPort }
                 }
 
                 if ($deployConfig.HttpsEnabled) {
@@ -4086,6 +4143,8 @@ function Main {
                 cert_mode  = $deployConfig.CertMode
                 domain     = $deployConfig.Domain
                 browserEnabled = $false
+                browser_bridge_enabled = [bool]$deployConfig.BrowserBridgeEnabled
+                browser_bridge_port    = [int]$deployConfig.BrowserBridgePort
                 timezone   = "Asia/Shanghai"
                 created    = (Get-Date -Format "o")
             } | ConvertTo-Json -Depth 2
@@ -4240,6 +4299,7 @@ function Main {
                             if ($containerPort -eq 3000)  { $deployConfig.WebPort = $newPort }
                             if ($containerPort -eq 80)    { $deployConfig.HttpPort = $newPort }
                             if ($containerPort -eq 443)   { $deployConfig.HttpsPort = $newPort }
+                            if ($containerPort -eq 3001)  { $deployConfig.BrowserBridgePort = $newPort }
 
                             $runArgs[$i + 1] = "${ipPrefix}${newPort}:${containerPort}"
                         }
@@ -4488,6 +4548,9 @@ function Main {
                     } else {
                         $fwPortList += $deployConfig.GatewayPort
                         $fwPortList += $deployConfig.WebPort
+                    }
+                    if ($deployConfig.BrowserBridgeEnabled -and $deployConfig.BrowserBridgePort -gt 0) {
+                        $fwPortList += $deployConfig.BrowserBridgePort
                     }
 
                     if ($fwPortList.Count -gt 0 -and $deployConfig.AutoOpenFirewall) {
@@ -5118,12 +5181,14 @@ function Main {
     $hsPort = if ($script:httpsPort) { $script:httpsPort } else { 0 }
     $sPort  = if ($script:sshPort) { $script:sshPort } else { 2222 }
     $autoFw = if ($null -ne $script:autoOpenFirewall) { [bool]$script:autoOpenFirewall } else { $true }
-    Show-Completion -DeployLaunched $launched -IsDockerDesktop $dockerDesktopMode -GatewayPort $gwPort -PanelPort $wpPort -Domain $dom -CertMode $cmode -HttpPort $hPort -HttpsPort $hsPort -SshPort $sPort -AutoOpenFirewall $autoFw
+    $bbEnabled = if ($null -ne $script:browserBridgeEnabled) { [bool]$script:browserBridgeEnabled } else { $false }
+    $bbPort    = if ($script:browserBridgePort) { [int]$script:browserBridgePort } else { 0 }
+    Show-Completion -DeployLaunched $launched -IsDockerDesktop $dockerDesktopMode -GatewayPort $gwPort -PanelPort $wpPort -Domain $dom -CertMode $cmode -HttpPort $hPort -HttpsPort $hsPort -SshPort $sPort -AutoOpenFirewall $autoFw -BrowserBridgeEnabled $bbEnabled -BrowserBridgePort $bbPort
 
     if ($launched) {
         $enterContainerName = if ($script:deployedContainerName) { $script:deployedContainerName } else { "openclaw-pro" }
         $enterExecUser = if ($script:hostUserForSSH -and $script:hostUserForSSH -ne "root") { $script:hostUserForSSH } else { "" }
-        Write-LaunchAccessSummary -IsDockerDesktop $dockerDesktopMode -GatewayPort $gwPort -PanelPort $wpPort -Domain $dom -CertMode $cmode -HttpPort $hPort -HttpsPort $hsPort -SshPort $sPort
+        Write-LaunchAccessSummary -IsDockerDesktop $dockerDesktopMode -GatewayPort $gwPort -PanelPort $wpPort -Domain $dom -CertMode $cmode -HttpPort $hPort -HttpsPort $hsPort -SshPort $sPort -BrowserBridgeEnabled $bbEnabled -BrowserBridgePort $bbPort
         Write-Host "  ==================================================" -ForegroundColor DarkCyan
         Write-Host "  🚪 默认进入容器终端（输入 exit 返回）" -ForegroundColor Cyan
         if ($enterExecUser) {
