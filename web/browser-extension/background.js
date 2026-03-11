@@ -44,6 +44,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     config.pairCode   = msg.pairCode   || '';
     config.deviceName = msg.deviceName || '';
     chrome.storage.local.set(config);
+    _wssFailed = false; // 用户重新连接时重置回退标记
     disconnect();
     connect();
     sendResponse({ ok: true });
@@ -57,21 +58,36 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 // ─── WebSocket 连接 ─────────────────────────────────────
-function buildWsUrl() {
+function buildWsUrl(forceWs) {
   let base = config.serverUrl.replace(/\/+$/, '');
-  // http → ws, https → wss
-  base = base.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
-  if (!/^wss?:/.test(base)) base = 'ws://' + base;
+  if (forceWs) {
+    // 强制使用 ws:// (绕过自签名证书问题)
+    // 如果原始 URL 是 https 且没有显式端口或端口是 443，回退到 3000 (Web 面板默认端口)
+    let host = base.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    if (!/:/.test(host) || /:443$/.test(host)) {
+      host = host.replace(/:443$/, '') + ':3000';
+    }
+    base = 'ws://' + host;
+  } else {
+    // http → ws, https → wss
+    base = base.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
+    if (!/^wss?:/.test(base)) base = 'ws://' + base;
+  }
   return `${base}/api/ws/browser-bridge?code=${encodeURIComponent(config.pairCode)}&name=${encodeURIComponent(config.deviceName || 'Chrome')}`;
 }
+
+let _wssFailed = false; // 记住 wss 是否失败过，后续自动使用 ws
 
 function connect() {
   if (ws) return;
   connState = 'connecting';
   broadcastState();
 
+  const useWs = _wssFailed || /^http:\/\//i.test(config.serverUrl);
+  const url = buildWsUrl(useWs);
+
   try {
-    ws = new WebSocket(buildWsUrl());
+    ws = new WebSocket(url);
   } catch (e) {
     console.error('[bridge] ws create error', e);
     connState = 'disconnected';
@@ -82,10 +98,13 @@ function connect() {
 
   ws.onopen = () => {
     console.log('[bridge] connected');
+    _connectStarted = 0;
     connState = 'connected';
     broadcastState();
     startHeartbeat();
   };
+
+  var _connectStarted = Date.now();
 
   ws.onmessage = async (evt) => {
     let msg;
@@ -145,6 +164,11 @@ function connect() {
 
   ws.onclose = () => {
     console.log('[bridge] disconnected');
+    // 如果 wss 连接在 3 秒内失败且从未成功连接过，自动回退到 ws
+    if (!_wssFailed && _connectStarted > 0 && (Date.now() - _connectStarted < 3000) && /^https:\/\//i.test(config.serverUrl)) {
+      console.log('[bridge] wss failed quickly, falling back to ws://');
+      _wssFailed = true;
+    }
     cleanup();
     scheduleReconnect();
   };

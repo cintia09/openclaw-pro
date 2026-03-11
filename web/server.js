@@ -7212,7 +7212,7 @@ app.get('/api/openclaw/config/repair/:taskId', (req, res) => {
 });
 
 // --- Config Export (download as .tar.gz) ---
-app.get('/api/openclaw/config/export', (req, res) => {
+app.get('/api/openclaw/config/export', async (req, res) => {
   try {
     const OPENCLAW_BASE = path.dirname(CONFIG_PATH);
     const FILE_MAP = {
@@ -7243,8 +7243,10 @@ app.get('/api/openclaw/config/export', (req, res) => {
     }, null, 2));
 
     const tgzPath = `${tmpDir}.tar.gz`;
-    const { execSync } = require('child_process');
-    execSync(`tar -czf ${JSON.stringify(tgzPath)} -C ${JSON.stringify(tmpDir)} .`, { stdio: 'pipe', timeout: 15000 });
+    const { exec } = require('child_process');
+    await new Promise((resolve, reject) => {
+      exec(`tar -czf ${JSON.stringify(tgzPath)} -C ${JSON.stringify(tmpDir)} .`, { timeout: 15000 }, (err) => err ? reject(err) : resolve());
+    });
     fs.rmSync(tmpDir, { recursive: true, force: true });
 
     const stat = fs.statSync(tgzPath);

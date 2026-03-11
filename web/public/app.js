@@ -1701,7 +1701,12 @@ $('btn-oc-config-export')?.addEventListener('click', async () => {
 
 // --- Config Import ---
 $('btn-oc-config-import')?.addEventListener('click', () => {
-  $('config-import-file')?.click();
+  const fileInput = $('config-import-file');
+  if (!fileInput) return;
+  // macOS file picker may grey out files with compound extensions (.tar.gz),
+  // so clear accept to show all files and rely on JS validation instead
+  fileInput.accept = '';
+  fileInput.click();
 });
 
 $('config-import-file')?.addEventListener('change', async (e) => {

@@ -286,13 +286,14 @@ ensure_image() {
         # 镜像已存在，检查是否有新版本
         local local_tag remote_tag
         local_tag=$(get_local_image_tag)
-        # 回退：从容器内读取版本号
-        if [ -z "$local_tag" ]; then
-            local_tag=$(docker exec "$CONTAINER_NAME" cat /etc/openclaw-version 2>/dev/null || true)
-            # 补写 tag 文件供下次使用
-            if [ -n "$local_tag" ]; then
-                save_image_tag "$local_tag"
-            fi
+        # 优先从容器内读取版本号（热更新后容器版本是最新的）
+        local container_ver
+        container_ver=$(docker exec "$CONTAINER_NAME" cat /etc/openclaw-version 2>/dev/null || true)
+        if [ -n "$container_ver" ]; then
+            local_tag="$container_ver"
+            save_image_tag "$container_ver"
+        elif [ -z "$local_tag" ]; then
+            local_tag=""
         fi
         remote_tag=$(get_latest_release_tag)
 

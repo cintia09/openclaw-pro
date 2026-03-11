@@ -719,7 +719,12 @@ show_upgrade_detection(){
   local installed_tag container_version
   installed_tag="$(normalize_release_tag "$(safe_json_value release_tag)")"
   container_version="$(get_container_release_tag)"
-  [ -z "$installed_tag" ] && [ -n "$container_version" ] && installed_tag="$container_version"
+  # 优先使用容器内版本号（热更新后容器版本是最新的）
+  if [ -n "$container_version" ]; then
+    installed_tag="$container_version"
+  elif [ -z "$installed_tag" ]; then
+    installed_tag=""
+  fi
 
   if [ -z "$installed_tag" ]; then
     info "升级检测：未发现已安装版本标记，将执行全量镜像更新。"
@@ -737,7 +742,10 @@ get_installed_release_tag(){
   local installed_tag container_version
   installed_tag="$(normalize_release_tag "$(safe_json_value release_tag)")"
   container_version="$(get_container_release_tag)"
-  [ -z "$installed_tag" ] && [ -n "$container_version" ] && installed_tag="$container_version"
+  # 优先使用容器内版本号（热更新后容器版本是最新的，而宿主机配置可能未同步）
+  if [ -n "$container_version" ]; then
+    installed_tag="$container_version"
+  fi
   printf '%s' "$installed_tag"
 }
 
