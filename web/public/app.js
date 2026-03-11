@@ -3300,7 +3300,6 @@ function scanSkillCard(s, idx) {
       </div>
     </div>`;
 }
-}
 
 function extensionCard(ext) {
   return `
