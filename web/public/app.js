@@ -3263,12 +3263,20 @@ let _scanResults = []; // cached scan results
 let _installedSkills = []; // cached installed skills for comparison
 let _scanIsLocal = false; // whether current scan is from browser local
 
+function skillSourceBadge(source) {
+  if (!source) return '';
+  if (source === 'bundled') return '<span style="background:#e3f2fd;color:#1565c0;font-size:10px;padding:1px 5px;border-radius:3px;margin-left:6px">内置</span>';
+  if (source === 'managed') return '<span style="background:#e8f5e9;color:#2e7d32;font-size:10px;padding:1px 5px;border-radius:3px;margin-left:6px">手动</span>';
+  if (source.startsWith('ext:')) return `<span style="background:#fff3e0;color:#e65100;font-size:10px;padding:1px 5px;border-radius:3px;margin-left:6px">${escapeHtml(source.slice(4))}</span>`;
+  return '';
+}
+
 function skillCard(s) {
   return `
     <div class="card" style="margin-bottom:10px;padding:10px 14px">
       <div class="row" style="justify-content:space-between;align-items:center">
         <div style="flex:1;min-width:0">
-          <div style="font-weight:700">${escapeHtml(s.name)}</div>
+          <div style="font-weight:700">${escapeHtml(s.name)}${skillSourceBadge(s.source)}</div>
           ${s.description ? `<div class="muted small" style="margin-top:2px">${escapeHtml(s.description)}</div>` : ''}
         </div>
         <button class="btn" style="font-size:12px;padding:2px 10px;white-space:nowrap" data-skill-remove="${escapeHtml(s.name)}">移除</button>
@@ -3539,24 +3547,87 @@ $('btn-skill-scan')?.addEventListener('click', async () => {
 });
 
 // Browse local directory (browser filesystem)
-$('btn-skill-browse')?.addEventListener('click', async () => {
-  if (!window.showDirectoryPicker) {
-    toast('不支持', '当前浏览器不支持目录选择 API，请使用 Chrome 或 Edge');
-    return;
-  }
-  let dirHandle;
-  try {
-    dirHandle = await window.showDirectoryPicker({ mode: 'read' });
-  } catch (e) {
-    if (e.name === 'AbortError') return;
-    toast('选择失败', e.message);
-    return;
+// Safari fallback: process files from <input webkitdirectory>
+async function browserScanFromFileList(fileList) {
+  const tree = {}; // { topDir: { relPath: File } }
+  for (const f of fileList) {
+    const parts = f.webkitRelativePath.split('/');
+    if (parts.length < 2) continue;
+    const topDir = parts[0]; // root directory name
+    const relPath = parts.slice(1).join('/');
+    if (!tree[topDir]) tree[topDir] = {};
+    tree[topDir][relPath] = f;
   }
 
+  // Build a virtual FS handle-like structure and scan each skill dir
+  const results = [];
+  for (const [dirName, files] of Object.entries(tree)) {
+    if (!files['SKILL.md']) {
+      // Check sub-dirs for SKILL.md
+      const subDirs = {};
+      for (const [rel, file] of Object.entries(files)) {
+        const parts = rel.split('/');
+        if (parts.length < 2) continue;
+        const sub = parts[0];
+        const subRel = parts.slice(1).join('/');
+        if (!subDirs[sub]) subDirs[sub] = {};
+        subDirs[sub][subRel] = file;
+      }
+      for (const [sub, subFiles] of Object.entries(subDirs)) {
+        const sk = await _processFileMap(sub, sub, subFiles);
+        if (sk) results.push(sk);
+      }
+    } else {
+      const sk = await _processFileMap(dirName, '.', files);
+      if (sk) results.push(sk);
+    }
+  }
+  return results;
+}
+
+async function _processFileMap(dirName, relPath, fileMap) {
+  const skillMdFile = fileMap['SKILL.md'];
+  if (!skillMdFile) return null;
+  const skillMdText = await skillMdFile.text();
+  const fileEntries = [];
+  for (const [rel, file] of Object.entries(fileMap)) {
+    if (rel.startsWith('.') || rel.split('/').some(p => p.startsWith('.'))) continue;
+    if (file.size > 5 * 1024 * 1024) {
+      fileEntries.push({ path: rel, size: file.size, content: '', textContent: '' });
+      continue;
+    }
+    const b64 = await readFileAsBase64(file);
+    let textContent = '';
+    if (/\.(md|txt|yaml|yml|json)$/i.test(rel)) textContent = await file.text();
+    fileEntries.push({ path: rel, content: b64, size: file.size, textContent });
+  }
+  const parsed = clientParseSkillMd(skillMdText);
+  const check = clientValidateSecurity(fileEntries);
+  let contentHash = '';
+  try {
+    const enc = new TextEncoder().encode(skillMdText);
+    const buf = await crypto.subtle.digest('SHA-256', enc);
+    contentHash = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
+  } catch {}
+  return {
+    name: parsed.name || dirName,
+    dirName,
+    relPath,
+    description: parsed.description,
+    valid: check.valid,
+    errors: check.errors,
+    warnings: check.warnings,
+    contentHash,
+    files: fileEntries,
+    _localScan: true
+  };
+}
+
+async function handleLocalDirScan(getSkills, label) {
   const logEl = $('skill-install-log');
   const pre = logEl?.querySelector('pre');
   logEl.style.display = '';
-  pre.textContent = `正在扫描本地目录: ${dirHandle.name}\n`;
+  pre.textContent = `正在扫描本地目录: ${label}\n`;
   _scanIsLocal = true;
 
   const btn = $('btn-skill-browse');
@@ -3564,14 +3635,12 @@ $('btn-skill-browse')?.addEventListener('click', async () => {
   btn.textContent = '扫描中...';
 
   try {
-    // Refresh installed list
     const list = await api('/api/plugins/list');
     if (list.skills) _installedSkills = list.skills;
 
     pre.textContent += '正在读取文件并进行安全扫描...\n';
-    const skills = await browserScanDirectory(dirHandle);
+    const skills = await getSkills();
 
-    // Show security scan summary
     const warnCount = skills.reduce((n, s) => n + (s.warnings?.length || 0), 0);
     const invalidCount = skills.filter(s => !s.valid).length;
     if (warnCount > 0) pre.textContent += `⚠ 安全扫描: ${warnCount} 条警告\n`;
@@ -3584,6 +3653,36 @@ $('btn-skill-browse')?.addEventListener('click', async () => {
   } finally {
     btn.disabled = false;
     btn.textContent = '📂 本地目录';
+  }
+}
+
+$('btn-skill-browse')?.addEventListener('click', async () => {
+  if (window.showDirectoryPicker) {
+    // Chrome / Edge: use File System Access API
+    let dirHandle;
+    try {
+      dirHandle = await window.showDirectoryPicker({ mode: 'read' });
+    } catch (e) {
+      if (e.name === 'AbortError') return;
+      toast('选择失败', e.message);
+      return;
+    }
+    await handleLocalDirScan(() => browserScanDirectory(dirHandle), dirHandle.name);
+  } else {
+    // Safari / Firefox fallback: use hidden <input webkitdirectory>
+    const input = $('skill-dir-fallback');
+    if (!input) {
+      toast('不支持', '当前浏览器不支持目录选择');
+      return;
+    }
+    input.value = '';
+    input.onchange = async () => {
+      const files = input.files;
+      if (!files || files.length === 0) return;
+      const label = files[0]?.webkitRelativePath?.split('/')[0] || '本地目录';
+      await handleLocalDirScan(() => browserScanFromFileList(files), label);
+    };
+    input.click();
   }
 });
 

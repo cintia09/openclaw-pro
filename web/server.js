@@ -7925,7 +7925,25 @@ app.post('/api/trading/update', (req, res) => {
 // ============================================================
 // Plugins market — Skills & Extensions
 // ============================================================
-const OPENCLAW_SKILLS_DIR = '/root/.openclaw/skills';
+// Resolve the openclaw package's skills directory (bundled)
+function resolveOpenclawPkgRoot() {
+  try {
+    const npmRoot = execSync('npm root -g 2>/dev/null', { encoding: 'utf8', timeout: 5000 }).trim();
+    const candidate = path.join(npmRoot, 'openclaw');
+    if (fs.existsSync(path.join(candidate, 'skills'))) return candidate;
+  } catch {}
+  // Fallback: common paths
+  const fallbacks = ['/root/.npm-global/lib/node_modules/openclaw', '/usr/local/lib/node_modules/openclaw'];
+  for (const f of fallbacks) {
+    if (fs.existsSync(path.join(f, 'skills'))) return f;
+  }
+  return '/root/.npm-global/lib/node_modules/openclaw';
+}
+const OPENCLAW_PKG_ROOT = resolveOpenclawPkgRoot();
+const OPENCLAW_BUNDLED_SKILLS_DIR = path.join(OPENCLAW_PKG_ROOT, 'skills');
+const OPENCLAW_EXTENSIONS_DIR = path.join(OPENCLAW_PKG_ROOT, 'extensions');
+const OPENCLAW_MANAGED_SKILLS_DIR = path.join(process.env.HOME || '/root', '.openclaw', 'skills');
+const OPENCLAW_SKILLS_DIR = OPENCLAW_BUNDLED_SKILLS_DIR; // install target = bundled
 const SKILL_SCAN_TMP = '/tmp/openclaw-skill-scan';
 const SKILL_SCAN_MAX_DEPTH = 8;
 const SKILL_MD_MAX_SIZE = 512 * 1024; // 512KB
@@ -7937,29 +7955,60 @@ const SKILL_DANGEROUS_PATTERNS = [
   /child_process/i, /\brequire\s*\(/i, /\bimport\s*\(/i
 ];
 
-function listUserSkills() {
+/** Scan a skills directory and return skill entries with metadata */
+function scanSkillsDir(dir, source) {
+  const results = [];
   try {
-    if (!fs.existsSync(OPENCLAW_SKILLS_DIR)) return [];
-    const entries = fs.readdirSync(OPENCLAW_SKILLS_DIR, { withFileTypes: true });
-    return entries
-      .filter(e => e.isDirectory())
-      .map(e => {
-        const dir = path.join(OPENCLAW_SKILLS_DIR, e.name);
-        const skillMd = path.join(dir, 'SKILL.md');
-        let description = '';
-        let contentHash = '';
-        if (fs.existsSync(skillMd)) {
-          const parsed = parseSkillMd(skillMd);
-          if (parsed) {
-            description = parsed.description || '';
-            contentHash = crypto.createHash('md5').update(parsed.content).digest('hex');
-          }
+    if (!fs.existsSync(dir)) return [];
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      const skillDir = path.join(dir, e.name);
+      const skillMd = path.join(skillDir, 'SKILL.md');
+      let description = '';
+      let contentHash = '';
+      if (fs.existsSync(skillMd)) {
+        const parsed = parseSkillMd(skillMd);
+        if (parsed) {
+          description = parsed.description || '';
+          contentHash = crypto.createHash('md5').update(parsed.content).digest('hex');
         }
-        return { name: e.name, description, path: dir, contentHash };
-      });
-  } catch {
-    return [];
+      }
+      results.push({ name: e.name, description, path: skillDir, contentHash, source });
+    }
+  } catch {}
+  return results;
+}
+
+/** List all installed skills from bundled dir, extension skills, and managed dir */
+function listUserSkills() {
+  const skills = new Map(); // name → skill entry (later sources override)
+
+  // 1) Bundled skills  (lowest priority)
+  for (const s of scanSkillsDir(OPENCLAW_BUNDLED_SKILLS_DIR, 'bundled')) {
+    skills.set(s.name, s);
   }
+
+  // 2) Extension skills (under extensions/*/skills/)
+  try {
+    if (fs.existsSync(OPENCLAW_EXTENSIONS_DIR)) {
+      const extDirs = fs.readdirSync(OPENCLAW_EXTENSIONS_DIR, { withFileTypes: true });
+      for (const ext of extDirs) {
+        if (!ext.isDirectory()) continue;
+        const extSkillsDir = path.join(OPENCLAW_EXTENSIONS_DIR, ext.name, 'skills');
+        for (const s of scanSkillsDir(extSkillsDir, `ext:${ext.name}`)) {
+          skills.set(s.name, s);
+        }
+      }
+    }
+  } catch {}
+
+  // 3) Managed skills  (highest priority — user installed)
+  for (const s of scanSkillsDir(OPENCLAW_MANAGED_SKILLS_DIR, 'managed')) {
+    skills.set(s.name, s);
+  }
+
+  return Array.from(skills.values());
 }
 
 /** Parse SKILL.md to extract name & description */
@@ -8118,6 +8167,25 @@ function cleanScanTmp() {
   } catch {}
 }
 
+/** Check if a skill is already installed in any recognized skills directory */
+function isSkillInstalled(dirName) {
+  // Check bundled
+  if (fs.existsSync(path.join(OPENCLAW_BUNDLED_SKILLS_DIR, dirName, 'SKILL.md'))) return true;
+  // Check managed
+  if (fs.existsSync(path.join(OPENCLAW_MANAGED_SKILLS_DIR, dirName, 'SKILL.md'))) return true;
+  // Check extension skills
+  try {
+    if (fs.existsSync(OPENCLAW_EXTENSIONS_DIR)) {
+      const exts = fs.readdirSync(OPENCLAW_EXTENSIONS_DIR, { withFileTypes: true });
+      for (const ext of exts) {
+        if (!ext.isDirectory()) continue;
+        if (fs.existsSync(path.join(OPENCLAW_EXTENSIONS_DIR, ext.name, 'skills', dirName, 'SKILL.md'))) return true;
+      }
+    }
+  } catch {}
+  return false;
+}
+
 async function listUserExtensions() {
   try {
     const [json, npmRoot] = await Promise.all([
@@ -8256,7 +8324,7 @@ app.post('/api/plugins/skill/scan', async (req, res) => {
         errors: check.errors,
         warnings: check.warnings,
         contentHash,
-        installed: fs.existsSync(path.join(OPENCLAW_SKILLS_DIR, s.dirName))
+        installed: isSkillInstalled(s.dirName)
       };
     });
 
@@ -8474,8 +8542,22 @@ app.post('/api/plugins/skill/remove', async (req, res) => {
     return res.status(400).json({ error: '无效的名称' });
   }
 
-  const dir = path.join(OPENCLAW_SKILLS_DIR, safeName);
-  if (!fs.existsSync(dir)) {
+  // Search all skill dirs for this skill
+  const candidates = [
+    path.join(OPENCLAW_BUNDLED_SKILLS_DIR, safeName),
+    path.join(OPENCLAW_MANAGED_SKILLS_DIR, safeName),
+  ];
+  // Also check extension skills
+  try {
+    if (fs.existsSync(OPENCLAW_EXTENSIONS_DIR)) {
+      for (const ext of fs.readdirSync(OPENCLAW_EXTENSIONS_DIR, { withFileTypes: true })) {
+        if (ext.isDirectory()) candidates.push(path.join(OPENCLAW_EXTENSIONS_DIR, ext.name, 'skills', safeName));
+      }
+    }
+  } catch {}
+
+  const dir = candidates.find(d => fs.existsSync(d));
+  if (!dir) {
     return res.status(404).json({ error: `Skill "${safeName}" 不存在` });
   }
 

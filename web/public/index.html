@@ -776,7 +776,7 @@
           <!-- Skills Tab -->
           <div id="plugins-skills">
             <div style="margin-bottom:14px">
-              <div class="muted small" style="margin-bottom:10px">OpenClaw 内置 48+ Skills。以下为用户自行安装的 Skills，存储在 <code>~/.openclaw/skills/</code></div>
+              <div class="muted small" style="margin-bottom:10px">OpenClaw 内置 48+ Skills。以下为所有已安装的 Skills（内置 + 扩展 + 手动安装）</div>
 
               <!-- Scan source input -->
               <div class="muted small" style="margin-bottom:6px;font-weight:600;color:#aaa">扫描 Skill 源</div>
@@ -784,9 +784,10 @@
                 <input class="input" id="skill-url-input" placeholder="输入 GitHub/GitLab/Gitee URL" style="flex:1;min-width:200px" />
                 <button class="btn btn-primary" id="btn-skill-scan">🔍 扫描</button>
                 <button class="btn" id="btn-skill-browse" title="从浏览器本地选择目录">📂 本地目录</button>
+                <input type="file" id="skill-dir-fallback" webkitdirectory multiple style="display:none" />
               </div>
               <div class="muted small" style="margin-top:6px">
-                <b>远程仓库</b>：输入 URL 后点扫描（如 <code>https://github.com/user/skills-repo</code>）。<b>本地目录</b>：点 📂 按钮从浏览器本机选择文件夹，含客户端安全扫描。
+                <b>远程仓库</b>：输入 URL 后点扫描（如 <code>https://github.com/user/skills-repo</code>）。<b>本地目录</b>：点 📂 按钮选择文件夹，含客户端安全扫描（支持 Chrome/Edge/Safari）。
               </div>
             </div>
 
