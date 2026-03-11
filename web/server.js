@@ -7943,7 +7943,7 @@ const OPENCLAW_PKG_ROOT = resolveOpenclawPkgRoot();
 const OPENCLAW_BUNDLED_SKILLS_DIR = path.join(OPENCLAW_PKG_ROOT, 'skills');
 const OPENCLAW_EXTENSIONS_DIR = path.join(OPENCLAW_PKG_ROOT, 'extensions');
 const OPENCLAW_MANAGED_SKILLS_DIR = path.join(process.env.HOME || '/root', '.openclaw', 'skills');
-const OPENCLAW_SKILLS_DIR = OPENCLAW_BUNDLED_SKILLS_DIR; // install target = bundled
+const OPENCLAW_SKILLS_DIR = OPENCLAW_MANAGED_SKILLS_DIR; // install target = managed (~/.openclaw/skills/)
 const SKILL_SCAN_TMP = '/tmp/openclaw-skill-scan';
 const SKILL_SCAN_MAX_DEPTH = 8;
 const SKILL_MD_MAX_SIZE = 512 * 1024; // 512KB
@@ -7974,7 +7974,25 @@ function scanSkillsDir(dir, source) {
           contentHash = crypto.createHash('md5').update(parsed.content).digest('hex');
         }
       }
-      results.push({ name: e.name, description, path: skillDir, contentHash, source });
+      // Quick security check: look for script files
+      let securityWarnings = 0;
+      try {
+        const allFiles = fs.readdirSync(skillDir, { withFileTypes: true, recursive: true });
+        const suspiciousExts = ['.js', '.ts', '.py', '.sh', '.bash', '.exe', '.bat', '.cmd', '.ps1'];
+        for (const f of allFiles) {
+          if (!f.isFile()) continue;
+          const ext = path.extname(f.name).toLowerCase();
+          if (suspiciousExts.includes(ext)) { securityWarnings++; break; }
+        }
+        // Check SKILL.md for dangerous patterns
+        if (fs.existsSync(skillMd)) {
+          const content = fs.readFileSync(skillMd, 'utf8').slice(0, 50000);
+          for (const pat of SKILL_DANGEROUS_PATTERNS) {
+            if (pat.test(content)) { securityWarnings++; break; }
+          }
+        }
+      } catch {}
+      results.push({ name: e.name, description, path: skillDir, contentHash, source, securityWarnings });
     }
   } catch {}
   return results;
@@ -8574,9 +8592,16 @@ app.post('/api/plugins/extension/install', async (req, res) => {
   if (!pkg || typeof pkg !== 'string') return res.status(400).json({ error: 'missing package' });
 
   const sanitized = pkg.trim();
-  // Basic validation: npm package names should not contain shell metacharacters
-  if (sanitized.length > 200 || /[;&|`$(){}]/.test(sanitized)) {
-    return res.status(400).json({ error: '无效的包名' });
+  // Validate: npm package name, scoped name, github:user/repo, or https URL
+  if (sanitized.length > 500 || /[;&|`$(){}\\]/.test(sanitized)) {
+    return res.status(400).json({ error: '无效的包名或 URL' });
+  }
+  // Must be a recognized format
+  const isNpmPkg = /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*(@[^\s]*)?$/.test(sanitized);
+  const isGithubShort = /^github:[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+(#.*)?$/.test(sanitized);
+  const isGitUrl = /^https?:\/\/(github\.com|gitlab\.com|gitee\.com)\/[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+(\.git)?(\/?#.*)?$/.test(sanitized);
+  if (!isNpmPkg && !isGithubShort && !isGitUrl) {
+    return res.status(400).json({ error: '请输入 npm 包名（如 @anthropic/extension）、github:user/repo 或 GitHub URL' });
   }
 
   try {

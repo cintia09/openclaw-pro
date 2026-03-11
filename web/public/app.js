@@ -3272,11 +3272,14 @@ function skillSourceBadge(source) {
 }
 
 function skillCard(s) {
+  const secBadge = s.securityWarnings > 0
+    ? '<span style="background:#fff3e0;color:#e65100;font-size:10px;padding:1px 5px;border-radius:3px;margin-left:6px" title="包含脚本文件或可疑模式">⚠ 注意</span>'
+    : '';
   return `
-    <div class="card" style="margin-bottom:10px;padding:10px 14px">
+    <div class="card" style="margin-bottom:10px;padding:10px 14px${s.securityWarnings > 0 ? ';border-left:3px solid #ff9800' : ''}">
       <div class="row" style="justify-content:space-between;align-items:center">
         <div style="flex:1;min-width:0">
-          <div style="font-weight:700">${escapeHtml(s.name)}${skillSourceBadge(s.source)}</div>
+          <div style="font-weight:700">${escapeHtml(s.name)}${skillSourceBadge(s.source)}${secBadge}</div>
           ${s.description ? `<div class="muted small" style="margin-top:2px">${escapeHtml(s.description)}</div>` : ''}
         </div>
         <button class="btn" style="font-size:12px;padding:2px 10px;white-space:nowrap" data-skill-remove="${escapeHtml(s.name)}">移除</button>
