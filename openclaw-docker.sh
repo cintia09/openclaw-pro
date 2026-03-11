@@ -936,8 +936,28 @@ first_time_setup() {
         PORT_ARGS="-p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000 -p ${SSH_PORT}:22"
     fi
 
-    echo ""
-    success "端口配置完成"
+    # 远端浏览器控制（仅局域网提供选项）
+    local detected_ip="$(detect_local_ip 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo '127.0.0.1')"
+    local is_lan="false"
+    if echo "$detected_ip" | grep -Eq '^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|127\.)'; then
+      is_lan="true"
+    fi
+    BROWSER_BRIDGE_ENABLED="false"
+    BRIDGE_PORT=0
+    if [ "$is_lan" = "true" ]; then
+      echo ""
+      echo -e "  ${CYAN}检测到局域网环境 (${detected_ip})${NC}"
+      echo -e "  可开启远端浏览器控制：局域网内 Chrome 通过插件连接本服务器，AI 代理可远程操控浏览器。"
+      local bb_ans=""
+      read -p "  是否开启远端浏览器控制？[y/N]: " bb_ans || true
+      bb_ans="$(echo "$bb_ans" | tr '[:upper:]' '[:lower:]')"
+      if [ "$bb_ans" = "y" ] || [ "$bb_ans" = "yes" ]; then
+        BROWSER_BRIDGE_ENABLED="true"
+        ask_port 3001 3002 "浏览器控制" 3001
+        BRIDGE_PORT="$PICKED_PORT"
+        PORT_ARGS="$PORT_ARGS -p ${BRIDGE_PORT}:3001"
+      fi
+    fi
 
     # 保存配置
     mkdir -p "$ROOT_HOME_DIR/.openclaw"
@@ -951,6 +971,8 @@ first_time_setup() {
     "domain": "${DOMAIN}",
     "cert_mode": "${CERT_MODE}",
     "timezone": "${TZ_VAL}",
+    "browser_bridge_enabled": ${BROWSER_BRIDGE_ENABLED:-false},
+    "browser_bridge_port": ${BRIDGE_PORT:-0},
     "created": "$(date -Iseconds)"
 }
 EOF
@@ -1003,6 +1025,11 @@ EOF
                 success "ufw 将放行: 22/${GW_PORT}/${WEB_PORT}/${SSH_PORT}"
             fi
             ufw allow "${SSH_PORT}/tcp"
+
+            if [ "${BROWSER_BRIDGE_ENABLED:-false}" = "true" ] && [ "${BRIDGE_PORT:-0}" -gt 0 ] 2>/dev/null; then
+                ufw allow "${BRIDGE_PORT}/tcp"
+                success "ufw 放行浏览器控制端口: ${BRIDGE_PORT}"
+            fi
 
             ufw --force enable
             success "ufw 防火墙已启用"
@@ -1657,6 +1684,8 @@ _do_full_update() {
 
     # 构建端口映射
     local PORT_ARGS=""
+    local bridge_port=$(echo "$config_json" | jq -r '.browser_bridge_port // 0' 2>/dev/null)
+    local bridge_enabled=$(echo "$config_json" | jq -r '.browser_bridge_enabled // false' 2>/dev/null)
     if [ -n "$domain" ] && [ "$cert_mode" = "letsencrypt" ]; then
         PORT_ARGS="-p ${http_port}:80 -p ${https_port}:443 -p 127.0.0.1:${gw_port}:18789 -p 127.0.0.1:${web_port}:3000 -p ${ssh_port}:22"
     elif [ -n "$domain" ]; then
@@ -1664,6 +1693,9 @@ _do_full_update() {
         PORT_ARGS="-p ${https_port}:443 -p 127.0.0.1:${gw_port}:18789 -p 127.0.0.1:${web_port}:3000 -p ${ssh_port}:22"
     else
         PORT_ARGS="-p ${gw_port}:18789 -p ${web_port}:3000 -p ${ssh_port}:22"
+    fi
+    if [ "$bridge_enabled" = "true" ] && [ "${bridge_port:-0}" -gt 0 ] 2>/dev/null; then
+        PORT_ARGS="$PORT_ARGS -p ${bridge_port}:3001"
     fi
 
     # 清除旧 SSH host key（容器重建后 key 会变）

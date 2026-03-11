@@ -52,6 +52,8 @@ TZ_VALUE="${TZ_VALUE:-Asia/Shanghai}"
 HTTPS_ENABLED="true"
 ROOT_PASS="${ROOT_PASS:-}"
 DO_FIREWALL="${DO_FIREWALL:-}"
+BROWSER_BRIDGE_ENABLED="${BROWSER_BRIDGE_ENABLED:-}"
+BRIDGE_PORT="${BRIDGE_PORT:-0}"
 UPGRADE_MODE="false"
 
 # ─── helpers ──────────────────────────────────────────────────
@@ -253,6 +255,8 @@ write_config(){
   "cert_mode": "${CERT_MODE}",
   "timezone": "${TZ_VALUE}",
   "https_enabled": ${HTTPS_ENABLED},
+  "browser_bridge_enabled": ${BROWSER_BRIDGE_ENABLED:-false},
+  "browser_bridge_port": ${BRIDGE_PORT:-0},
   "release_tag": "${TAG:-unknown}"
 }
 EOF
@@ -712,7 +716,40 @@ prompt_deploy_config(){
   SSH_PORT="$(find_available_port "$SSH_PORT" 2223 2299)"
 
   apply_port_conflicts
-  info "最终端口：Gateway=${GW_PORT}, Web=${WEB_PORT}, SSH=${SSH_PORT}, HTTPS=${HTTPS_PORT}（HTTPS 留空或冲突会自动调整）"
+
+  # ─── 远端浏览器控制（仅局域网环境提供选项）─────────
+  if [ -z "$BROWSER_BRIDGE_ENABLED" ] && has_tty; then
+    local detected_ip="$(detect_local_ip)"
+    local is_lan="false"
+    if echo "$detected_ip" | grep -Eq '^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|127\.)'; then
+      is_lan="true"
+    fi
+    if [ "$is_lan" = "true" ]; then
+      echo ""
+      info "检测到局域网环境 (${detected_ip})，可开启远端浏览器控制功能。"
+      info "该功能允许局域网内其他电脑上的 Chrome 通过插件连接到本服务器，AI 代理可远程操控浏览器。"
+      local bb_ans
+      bb_ans="$(prompt "是否开启远端浏览器控制？[y/N]: ")"
+      bb_ans="$(echo "$bb_ans" | tr '[:upper:]' '[:lower:]')"
+      if [ "$bb_ans" = "y" ] || [ "$bb_ans" = "yes" ]; then
+        BROWSER_BRIDGE_ENABLED="true"
+        if [ "$BRIDGE_PORT" -eq 0 ] 2>/dev/null; then
+          BRIDGE_PORT="$(find_available_port 3001 3001 3099)"
+        fi
+        BRIDGE_PORT="$(prompt_port_or_default "浏览器控制端口" "$BRIDGE_PORT")"
+        BRIDGE_PORT="$(find_available_port "$BRIDGE_PORT" 3001 3099)"
+        info "浏览器控制端口: ${BRIDGE_PORT}"
+      else
+        BROWSER_BRIDGE_ENABLED="false"
+      fi
+    else
+      # 非局域网，自动关闭
+      BROWSER_BRIDGE_ENABLED="false"
+    fi
+  fi
+  [ -z "$BROWSER_BRIDGE_ENABLED" ] && BROWSER_BRIDGE_ENABLED="false"
+
+  info "最终端口：Gateway=${GW_PORT}, Web=${WEB_PORT}, SSH=${SSH_PORT}, HTTPS=${HTTPS_PORT}$([ "$BROWSER_BRIDGE_ENABLED" = "true" ] && echo ", Bridge=${BRIDGE_PORT}")（端口冲突会自动调整）"
 }
 
 # ─── upgrade detection ────────────────────────────────────────
@@ -934,6 +971,10 @@ configure_firewall_and_fail2ban(){
       [ "$HTTPS_PORT" -gt 0 ] 2>/dev/null && ufw allow "${HTTPS_PORT}/tcp" >/dev/null 2>&1 || true
       success "ufw 放行: 22/${SSH_PORT}/${HTTPS_PORT}"
     fi
+    if [ "$BROWSER_BRIDGE_ENABLED" = "true" ] && [ "$BRIDGE_PORT" -gt 0 ] 2>/dev/null; then
+      ufw allow "${BRIDGE_PORT}/tcp" >/dev/null 2>&1 || true
+      success "ufw 放行浏览器控制端口: ${BRIDGE_PORT}"
+    fi
     ufw --force enable >/dev/null 2>&1 || true
     success "ufw 防火墙已启用"
   else
@@ -999,6 +1040,11 @@ create_and_start(){
     # 始终映射 80 端口 (Let's Encrypt 需要 ACME 验证; 自签名模式 Caddy 提供 HTTP→HTTPS 重定向 + ws:// WebSocket 透传)
     port_args+=(-p "${HTTP_PORT}:80" -p "${HTTPS_PORT}:443" -p "127.0.0.1:${GW_PORT}:18789" -p "127.0.0.1:${WEB_PORT}:3000" -p "${SSH_PORT}:22")
   else
+    port_args+=(-p "127.0.0.1:${GW_PORT}:18789" -p "127.0.0.1:${WEB_PORT}:3000" -p "${SSH_PORT}:22")
+  fi
+  # 远端浏览器控制端口
+  if [ "$BROWSER_BRIDGE_ENABLED" = "true" ] && [ "$BRIDGE_PORT" -gt 0 ] 2>/dev/null; then
+    port_args+=(-p "${BRIDGE_PORT}:3001")
   fi
 
   # Build volume arguments

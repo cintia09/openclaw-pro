@@ -637,6 +637,11 @@ async function refreshStatus(){
     const cls = online ? 'online' : 'offline';
     statusEl.innerHTML = `Gateway <span class="gw-label ${cls}">${online ? 'Online' : 'Offline'}</span>`;
   }
+
+  // 根据配置隐藏/显示远端浏览器控制
+  const browserNav = document.querySelector('#nav a[data-route="browser"]');
+  if (browserNav) browserNav.style.display = s.browserBridgeEnabled ? '' : 'none';
+
     const elapsed = ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt;
     dlog('refreshStatus ok', 'elapsedMs=', Math.round(elapsed), 'gateway=', !!s.gateway, 'caddy=', !!s.caddy);
   } finally {
@@ -3195,9 +3200,16 @@ async function loadBrowserConfig(){
 
   if ($('btn-browser-restart')) $('btn-browser-restart').style.display = 'none';
 
-  // 指引中动态填入服务器地址
+  // 指引中动态填入服务器地址（使用专用 bridge 端口）
   const guideUrl = $('browser-guide-server-url');
-  if (guideUrl) guideUrl.textContent = location.origin;
+  if (guideUrl) {
+    if (d.browserBridgeEnabled && d.browserBridgePort > 0) {
+      const host = location.hostname;
+      guideUrl.textContent = `http://${host}:${d.browserBridgePort}`;
+    } else {
+      guideUrl.textContent = location.origin;
+    }
+  }
 }
 
 function renderBrowserOnline(){

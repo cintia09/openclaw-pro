@@ -88,8 +88,8 @@ function _isIpAddress(url) {
   return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || /^\[/.test(host);
 }
 
-// ws:// 回退端口列表: 80 (Caddy HTTP), 3000 (Node.js 直连)
-const _WS_FALLBACK_PORTS = [80, 3000];
+// ws:// 回退端口列表: 3001 (专用 Bridge 端口), 80 (Caddy HTTP), 3000 (Node.js 直连)
+const _WS_FALLBACK_PORTS = [3001, 80, 3000];
 let _wsPortIndex = 0; // 当前尝试的端口索引
 
 function connect() {
