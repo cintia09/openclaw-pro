@@ -91,7 +91,7 @@ normalize_release_tag(){
 get_container_release_tag(){
   docker ps --filter "name=^/${CONTAINER_NAME}$" --format '{{.Names}}' | head -1 | grep -q "^${CONTAINER_NAME}$" || return 0
   local v
-  v="$(docker exec "$CONTAINER_NAME" sh -lc 'cat /etc/openclaw-version 2>/dev/null || true' 2>/dev/null | head -1 || true)"
+  v="$(docker exec "$CONTAINER_NAME" sh -c 'cat /etc/openclaw-version 2>/dev/null || true' 2>/dev/null | head -1 || true)"
   normalize_release_tag "$v"
 }
 
@@ -546,7 +546,7 @@ ensure_container_host_user(){
   local host_user="$1" host_uid="$2" host_gid="$3"
   [ -z "$host_user" ] || [ "$host_user" = "root" ] && return 1
 
-  if docker exec "$CONTAINER_NAME" bash -lc "id '$host_user' >/dev/null 2>&1"; then
+  if docker exec "$CONTAINER_NAME" bash -c "id '$host_user' >/dev/null 2>&1"; then
     return 0
   fi
 
@@ -556,7 +556,7 @@ ensure_container_host_user(){
   fi
 
   info "容器内未检测到用户 $host_user，执行兼容创建"
-  docker exec "$CONTAINER_NAME" bash -lc "
+  docker exec "$CONTAINER_NAME" bash -c "
 set -e
 if [ -n '$host_gid' ] && [[ '$host_gid' =~ ^[0-9]+$ ]] && ! getent group '$host_gid' >/dev/null 2>&1; then
   groupadd -g '$host_gid' '$host_user' 2>/dev/null || groupadd -g '$host_gid' 'oc_$host_user' 2>/dev/null || true
@@ -575,7 +575,7 @@ chmod 700 '/home/$host_user/.ssh'
 chown -R '$host_user:$host_user' '/home/$host_user/.ssh'
 " >/dev/null 2>&1 || return 1
 
-  docker exec "$CONTAINER_NAME" bash -lc "id '$host_user' >/dev/null 2>&1"
+  docker exec "$CONTAINER_NAME" bash -c "id '$host_user' >/dev/null 2>&1"
 }
 
 generate_host_pubkey_if_missing(){
@@ -597,7 +597,7 @@ generate_host_pubkey_if_missing(){
 
 harden_container_sshd(){
   local ssh_user="$1"
-  docker exec -e OPENCLAW_SSH_USER="$ssh_user" "$CONTAINER_NAME" bash -lc '
+  docker exec -e OPENCLAW_SSH_USER="$ssh_user" "$CONTAINER_NAME" bash -c '
 cfg="/etc/ssh/sshd_config"
 [ -f "$cfg" ] || exit 0
 
@@ -761,8 +761,8 @@ get_installed_release_tag(){
 
 can_hotpatch_current_container(){
   docker ps --filter "name=^/${CONTAINER_NAME}$" --format '{{.Names}}' | head -1 | grep -q "^${CONTAINER_NAME}$" || return 1
-  docker exec "$CONTAINER_NAME" sh -lc "command -v curl >/dev/null 2>&1" >/dev/null 2>&1 || return 1
-  docker exec "$CONTAINER_NAME" sh -lc "curl -sS -f --connect-timeout 3 --max-time 8 http://127.0.0.1:3000/api/update/hotpatch/status >/dev/null" >/dev/null 2>&1
+  docker exec "$CONTAINER_NAME" sh -c "command -v curl >/dev/null 2>&1" >/dev/null 2>&1 || return 1
+  docker exec "$CONTAINER_NAME" sh -c "curl -sS -f --connect-timeout 3 --max-time 8 http://127.0.0.1:3000/api/update/hotpatch/status >/dev/null" >/dev/null 2>&1
 }
 
 prompt_hotpatch_first_if_applicable(){
@@ -1063,7 +1063,7 @@ create_and_start(){
   # 等待 SSH 服务就绪
   local ssh_ready="false"
   for i in 1 2 3 4 5 6 7 8; do
-    if docker exec "$CONTAINER_NAME" bash -lc "pgrep -x sshd >/dev/null 2>&1"; then
+    if docker exec "$CONTAINER_NAME" bash -c "pgrep -x sshd >/dev/null 2>&1"; then
       ssh_ready="true"
       break
     fi
@@ -1077,7 +1077,7 @@ create_and_start(){
   fi
 
   if [ -n "$host_user" ] && [ "$host_user" != "root" ]; then
-    if docker exec "$CONTAINER_NAME" bash -lc "id '$host_user' >/dev/null 2>&1"; then
+    if docker exec "$CONTAINER_NAME" bash -c "id '$host_user' >/dev/null 2>&1"; then
       user_ready="true"
       ssh_login_user="$host_user"
     elif ensure_container_host_user "$host_user" "$host_uid" "$host_gid"; then
@@ -1091,18 +1091,18 @@ create_and_start(){
     [ -f "$keyfile" ] || continue
     if [ "$user_ready" = "true" ]; then
       info "注入公钥 $(basename "$keyfile") 到用户 $host_user"
-      docker exec "$CONTAINER_NAME" bash -lc "mkdir -p '/home/$host_user/.ssh' && chmod 700 '/home/$host_user/.ssh'" >/dev/null 2>&1 || true
+      docker exec "$CONTAINER_NAME" bash -c "mkdir -p '/home/$host_user/.ssh' && chmod 700 '/home/$host_user/.ssh'" >/dev/null 2>&1 || true
       if docker cp "$keyfile" "$CONTAINER_NAME:/tmp/host_user_key.pub" >/dev/null 2>&1 \
-        && docker exec "$CONTAINER_NAME" bash -lc "touch '/home/$host_user/.ssh/authorized_keys' && while IFS= read -r k; do [ -z \"\$k\" ] && continue; grep -qxF \"\$k\" '/home/$host_user/.ssh/authorized_keys' || echo \"\$k\" >> '/home/$host_user/.ssh/authorized_keys'; done < /tmp/host_user_key.pub && chmod 600 '/home/$host_user/.ssh/authorized_keys' && chown -R '$host_user:$host_user' '/home/$host_user/.ssh' && test -s '/home/$host_user/.ssh/authorized_keys' && rm -f /tmp/host_user_key.pub" >/dev/null 2>&1; then
+        && docker exec "$CONTAINER_NAME" bash -c "touch '/home/$host_user/.ssh/authorized_keys' && while IFS= read -r k; do [ -z \"\$k\" ] && continue; grep -qxF \"\$k\" '/home/$host_user/.ssh/authorized_keys' || echo \"\$k\" >> '/home/$host_user/.ssh/authorized_keys'; done < /tmp/host_user_key.pub && chmod 600 '/home/$host_user/.ssh/authorized_keys' && chown -R '$host_user:$host_user' '/home/$host_user/.ssh' && test -s '/home/$host_user/.ssh/authorized_keys' && rm -f /tmp/host_user_key.pub" >/dev/null 2>&1; then
         key_injected="true"
         ssh_login_user="$host_user"
         break
       fi
       continue
     fi
-    if docker exec "$CONTAINER_NAME" bash -lc "chmod 700 /root 2>/dev/null || true; mkdir -p /root/.ssh && chmod 700 /root/.ssh" >/dev/null 2>&1 \
+    if docker exec "$CONTAINER_NAME" bash -c "chmod 700 /root 2>/dev/null || true; mkdir -p /root/.ssh && chmod 700 /root/.ssh" >/dev/null 2>&1 \
       && docker cp "$keyfile" "$CONTAINER_NAME:/root/.ssh/authorized_keys.tmp" >/dev/null 2>&1 \
-      && docker exec "$CONTAINER_NAME" bash -lc "touch /root/.ssh/authorized_keys && while IFS= read -r k; do [ -z \"\$k\" ] && continue; grep -qxF \"\$k\" /root/.ssh/authorized_keys || echo \"\$k\" >> /root/.ssh/authorized_keys; done < /root/.ssh/authorized_keys.tmp && chmod 600 /root/.ssh/authorized_keys && test -s /root/.ssh/authorized_keys && rm -f /root/.ssh/authorized_keys.tmp" >/dev/null 2>&1; then
+      && docker exec "$CONTAINER_NAME" bash -c "touch /root/.ssh/authorized_keys && while IFS= read -r k; do [ -z \"\$k\" ] && continue; grep -qxF \"\$k\" /root/.ssh/authorized_keys || echo \"\$k\" >> /root/.ssh/authorized_keys; done < /root/.ssh/authorized_keys.tmp && chmod 600 /root/.ssh/authorized_keys && test -s /root/.ssh/authorized_keys && rm -f /root/.ssh/authorized_keys.tmp" >/dev/null 2>&1; then
       key_injected="true"
       ssh_login_user="root"
       warn "普通用户公钥注入失败，已回退 root 密钥登录"
@@ -1116,16 +1116,16 @@ create_and_start(){
     if [ -n "$auto_pub" ]; then
       info "未检测到宿主机公钥，已自动生成 $(basename "$auto_pub")"
       if [ "$user_ready" = "true" ]; then
-        docker exec "$CONTAINER_NAME" bash -lc "mkdir -p '/home/$host_user/.ssh' && chmod 700 '/home/$host_user/.ssh'" >/dev/null 2>&1 || true
+        docker exec "$CONTAINER_NAME" bash -c "mkdir -p '/home/$host_user/.ssh' && chmod 700 '/home/$host_user/.ssh'" >/dev/null 2>&1 || true
         if docker cp "$auto_pub" "$CONTAINER_NAME:/tmp/host_user_key.pub" >/dev/null 2>&1 \
-          && docker exec "$CONTAINER_NAME" bash -lc "touch '/home/$host_user/.ssh/authorized_keys' && while IFS= read -r k; do [ -z \"\$k\" ] && continue; grep -qxF \"\$k\" '/home/$host_user/.ssh/authorized_keys' || echo \"\$k\" >> '/home/$host_user/.ssh/authorized_keys'; done < /tmp/host_user_key.pub && chmod 600 '/home/$host_user/.ssh/authorized_keys' && chown -R '$host_user:$host_user' '/home/$host_user/.ssh' && test -s '/home/$host_user/.ssh/authorized_keys' && rm -f /tmp/host_user_key.pub" >/dev/null 2>&1; then
+          && docker exec "$CONTAINER_NAME" bash -c "touch '/home/$host_user/.ssh/authorized_keys' && while IFS= read -r k; do [ -z \"\$k\" ] && continue; grep -qxF \"\$k\" '/home/$host_user/.ssh/authorized_keys' || echo \"\$k\" >> '/home/$host_user/.ssh/authorized_keys'; done < /tmp/host_user_key.pub && chmod 600 '/home/$host_user/.ssh/authorized_keys' && chown -R '$host_user:$host_user' '/home/$host_user/.ssh' && test -s '/home/$host_user/.ssh/authorized_keys' && rm -f /tmp/host_user_key.pub" >/dev/null 2>&1; then
           key_injected="true"
           ssh_login_user="$host_user"
           success "已自动生成并注入宿主机 SSH 公钥到用户 $host_user"
         fi
-      elif docker exec "$CONTAINER_NAME" bash -lc "chmod 700 /root 2>/dev/null || true; mkdir -p /root/.ssh && chmod 700 /root/.ssh" >/dev/null 2>&1 \
+      elif docker exec "$CONTAINER_NAME" bash -c "chmod 700 /root 2>/dev/null || true; mkdir -p /root/.ssh && chmod 700 /root/.ssh" >/dev/null 2>&1 \
         && docker cp "$auto_pub" "$CONTAINER_NAME:/root/.ssh/authorized_keys.tmp" >/dev/null 2>&1 \
-        && docker exec "$CONTAINER_NAME" bash -lc "touch /root/.ssh/authorized_keys && while IFS= read -r k; do [ -z \"\$k\" ] && continue; grep -qxF \"\$k\" /root/.ssh/authorized_keys || echo \"\$k\" >> /root/.ssh/authorized_keys; done < /root/.ssh/authorized_keys.tmp && chmod 600 /root/.ssh/authorized_keys && test -s /root/.ssh/authorized_keys && rm -f /root/.ssh/authorized_keys.tmp" >/dev/null 2>&1; then
+        && docker exec "$CONTAINER_NAME" bash -c "touch /root/.ssh/authorized_keys && while IFS= read -r k; do [ -z \"\$k\" ] && continue; grep -qxF \"\$k\" /root/.ssh/authorized_keys || echo \"\$k\" >> /root/.ssh/authorized_keys; done < /root/.ssh/authorized_keys.tmp && chmod 600 /root/.ssh/authorized_keys && test -s /root/.ssh/authorized_keys && rm -f /root/.ssh/authorized_keys.tmp" >/dev/null 2>&1; then
         key_injected="true"
         ssh_login_user="root"
         warn "未发现宿主机公钥，已自动生成并回退 root 密钥登录"
@@ -1139,7 +1139,7 @@ create_and_start(){
     warn "SSH 安全配置加固失败，请检查容器内 /etc/ssh/sshd_config"
   fi
 
-  if [ "$ssh_hardened" = "true" ] && docker exec "$CONTAINER_NAME" bash -lc "/usr/sbin/sshd -T 2>/dev/null | grep -q '^passwordauthentication no$'"; then
+  if [ "$ssh_hardened" = "true" ] && docker exec "$CONTAINER_NAME" bash -c "/usr/sbin/sshd -T 2>/dev/null | grep -q '^passwordauthentication no$'"; then
     success "SSH 密码认证已禁用（与 Windows 安装对齐）"
   else
     warn "未确认 SSH 密码认证状态，建议执行: docker exec $CONTAINER_NAME /usr/sbin/sshd -T | grep passwordauthentication"
