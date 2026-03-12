@@ -717,36 +717,7 @@ prompt_deploy_config(){
 
   apply_port_conflicts
 
-  # ─── 远端浏览器控制（仅局域网环境提供选项）─────────
-  if [ -z "$BROWSER_BRIDGE_ENABLED" ] && has_tty; then
-    local detected_ip="$(detect_local_ip)"
-    local is_lan="false"
-    if echo "$detected_ip" | grep -Eq '^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|127\.)'; then
-      is_lan="true"
-    fi
-    if [ "$is_lan" = "true" ]; then
-      echo ""
-      info "检测到局域网环境 (${detected_ip})，可开启远端浏览器控制功能。"
-      info "该功能允许局域网内其他电脑上的 Chrome 通过插件连接到本服务器，AI 代理可远程操控浏览器。"
-      local bb_ans
-      bb_ans="$(prompt "是否开启远端浏览器控制？[y/N]: ")"
-      bb_ans="$(echo "$bb_ans" | tr '[:upper:]' '[:lower:]')"
-      if [ "$bb_ans" = "y" ] || [ "$bb_ans" = "yes" ]; then
-        BROWSER_BRIDGE_ENABLED="true"
-        if [ "$BRIDGE_PORT" -eq 0 ] 2>/dev/null; then
-          BRIDGE_PORT="$(find_available_port 3001 3001 3099)"
-        fi
-        BRIDGE_PORT="$(prompt_port_or_default "浏览器控制端口" "$BRIDGE_PORT")"
-        BRIDGE_PORT="$(find_available_port "$BRIDGE_PORT" 3001 3099)"
-        info "浏览器控制端口: ${BRIDGE_PORT}"
-      else
-        BROWSER_BRIDGE_ENABLED="false"
-      fi
-    else
-      # 非局域网，自动关闭
-      BROWSER_BRIDGE_ENABLED="false"
-    fi
-  fi
+  # 浏览器控制默认关闭，不再交互提示（可通过环境变量 BROWSER_BRIDGE_ENABLED=true 开启）
   [ -z "$BROWSER_BRIDGE_ENABLED" ] && BROWSER_BRIDGE_ENABLED="false"
 
   info "最终端口：Gateway=${GW_PORT}, Web=${WEB_PORT}, SSH=${SSH_PORT}, HTTPS=${HTTPS_PORT}$([ "$BROWSER_BRIDGE_ENABLED" = "true" ] && echo ", Bridge=${BRIDGE_PORT}")（端口冲突会自动调整）"
