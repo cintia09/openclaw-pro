@@ -326,12 +326,8 @@ const WEB_PANEL_LOG_FILE = '/root/.openclaw/logs/web-panel.log';
 const OPENCLAW_INSTALL_LOG_FILE = '/root/.openclaw/logs/openclaw-install.log';
 const OPENCLAW_STATE_ROOT = '/root/.openclaw';
 const OPENCLAW_LOCK_DIR = `${OPENCLAW_STATE_ROOT}/locks`;
-const BROWSER_PAIRS_PATH = '/root/.openclaw/browser-pairs.json';
 const DEVICE_PAIRING_PENDING_PATH = '/root/.openclaw/devices/pending.json';
 const DEVICE_PAIRING_PAIRED_PATH = '/root/.openclaw/devices/paired.json';
-
-const TRADING_DIR = '/root/trading-system';
-const STRATEGY_PARAMS_PATH = path.join(TRADING_DIR, 'strategy_params.json');
 
 app.use(express.json({ limit: '20mb' }));
 
@@ -2893,42 +2889,6 @@ app.use('/gateway-proxy', (req, res) => {
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/api', requireAuthApi);
 
-// Browser extension download (auth-protected)
-app.get('/api/browser-extension/download', (req, res) => {
-  const extDir = path.join(__dirname, 'browser-extension');
-  if (!fs.existsSync(extDir)) {
-    return res.status(404).json({ error: '浏览器插件目录不存在' });
-  }
-  const tmpFile = path.join(require('os').tmpdir(), `openclaw-browser-bridge-${Date.now()}`);
-  // Use zip if available, otherwise fall back to tar+gzip (zip may not be installed in container)
-  const hasZip = (() => { try { execSync('which zip', { stdio: 'pipe' }); return true; } catch { return false; } })();
-  try {
-    if (hasZip) {
-      const zipPath = tmpFile + '.zip';
-      execSync(`cd "${extDir}" && zip -r "${zipPath}" .`, { timeout: 10000 });
-      res.setHeader('Content-Type', 'application/zip');
-      res.setHeader('Content-Disposition', 'attachment; filename="OpenClaw-Browser-Bridge.zip"');
-      const stream = fs.createReadStream(zipPath);
-      stream.pipe(res);
-      stream.on('end', () => { try { fs.unlinkSync(zipPath); } catch {} });
-      stream.on('error', () => { try { fs.unlinkSync(zipPath); } catch {} });
-    } else {
-      const tgzPath = tmpFile + '.tar.gz';
-      execSync(`cd "${extDir}" && tar czf "${tgzPath}" .`, { timeout: 10000 });
-      res.setHeader('Content-Type', 'application/gzip');
-      res.setHeader('Content-Disposition', 'attachment; filename="OpenClaw-Browser-Bridge.tar.gz"');
-      const stream = fs.createReadStream(tgzPath);
-      stream.pipe(res);
-      stream.on('end', () => { try { fs.unlinkSync(tgzPath); } catch {} });
-      stream.on('error', () => { try { fs.unlinkSync(tgzPath); } catch {} });
-    }
-  } catch (e) {
-    try { fs.unlinkSync(tmpFile + '.zip'); } catch {}
-    try { fs.unlinkSync(tmpFile + '.tar.gz'); } catch {}
-    res.status(500).json({ error: '打包插件失败: ' + (e.message || '') });
-  }
-});
-
 app.get('/api/terminal/ws-token', (req, res) => {
   const secret = readDockerConfig().webAuth?.secret;
   const sess = secret ? getSession(req, secret) : null;
@@ -3606,7 +3566,6 @@ app.get('/api/status', async (req, res) => {
   dockerConfig = readDockerConfig();
   status.domain = dockerConfig.domain || '';
   status.port = dockerConfig.port || 18789;
-  status.browserBridgeEnabled = dockerConfig.browser_bridge_enabled === true || dockerConfig.browser_bridge_enabled === 'true';
   status.gatewayWatchdog = watchdogRunning;
   const gatewayWarmupByProcess = !!(
     status.openclawInstalled
@@ -3877,27 +3836,9 @@ function normalizeFeishuChannelConfig(channelsObj) {
 }
 
 // ============================================================
-// API: browser bridge (远端浏览器插件控制)
+// API: 远端设备管理 (Node 模式)
 // ============================================================
 const BROWSER_CONTROL_PORT = 18791;
-const GATEWAY_RELAY_PORT = 18792; // BROWSER_CONTROL_PORT + 1
-const RELAY_TOKEN_CONTEXT = 'openclaw-extension-relay-v1';
-
-// ─── Gateway Relay Proxy ──────────────────────────────────
-// When Chrome extension connects via our bridge, web-panel connects
-// to gateway's relay port (18792) as the "extension" and forwards
-// messages bidirectionally with protocol translation.
-let gatewayRelayWs = null;
-let relayTabSessionMap = new Map();   // tabId(string) → sessionId
-let relaySessionTabMap = new Map();   // sessionId → tabId(string)
-let relayTabPollTimer = null;
-let relayBridgeClientCode = null;     // pair code of the bridge client we're proxying for
-
-function deriveRelayAuthToken(gatewayToken, port) {
-  return crypto.createHmac('sha256', gatewayToken)
-    .update(`${RELAY_TOKEN_CONTEXT}:${port}`)
-    .digest('hex');
-}
 
 function getGatewayAuthToken() {
   try {
@@ -3906,415 +3847,93 @@ function getGatewayAuthToken() {
   } catch { return ''; }
 }
 
-function getRelayBridgeClient() {
-  if (relayBridgeClientCode) {
-    const c = browserBridgeClients.get(relayBridgeClientCode);
-    if (c && c.ws && c.ws.readyState === 1) return c;
-  }
-  for (const [code, client] of browserBridgeClients) {
-    if (client.ws && client.ws.readyState === 1) {
-      relayBridgeClientCode = code;
-      return client;
-    }
-  }
-  return null;
-}
-
-function sendToRelay(msg) {
-  if (gatewayRelayWs && gatewayRelayWs.readyState === 1) {
-    gatewayRelayWs.send(JSON.stringify(msg));
-  }
-}
-
-function announceTabsToRelay() {
-  const client = getRelayBridgeClient();
-  if (!client || !gatewayRelayWs || gatewayRelayWs.readyState !== 1) return;
-
-  const requestId = `relay-tabs-${Date.now()}`;
-  client._pendingRequests.set(requestId, (response) => {
-    if (!response.targets || !gatewayRelayWs || gatewayRelayWs.readyState !== 1) return;
-
-    const currentTabIds = new Set(response.targets.map(t => String(t.id)));
-
-    // Only announce NEWLY appeared tabs (never re-announce existing)
-    for (const target of response.targets) {
-      const tabId = String(target.id);
-      if (relayTabSessionMap.has(tabId)) {
-        // Update title/url via targetInfoChanged (safe, no duplicate risk)
-        const sessionId = relayTabSessionMap.get(tabId);
-        sendToRelay({
-          method: 'forwardCDPEvent',
-          params: {
-            method: 'Target.targetInfoChanged',
-            params: {
-              targetInfo: {
-                targetId: tabId,
-                type: target.type || 'page',
-                title: target.title || '',
-                url: target.url || '',
-                attached: true,
-                browserContextId: 'bridge-default-context',
-                canAccessOpener: false
-              }
-            }
-          }
-        });
-        continue;
-      }
-      const sessionId = `bridge-${tabId}`;
-      relayTabSessionMap.set(tabId, sessionId);
-      relaySessionTabMap.set(sessionId, tabId);
-
-      sendToRelay({
-        method: 'forwardCDPEvent',
-        params: {
-          method: 'Target.attachedToTarget',
-          params: {
-            sessionId,
-            targetInfo: {
-              targetId: tabId,
-              type: target.type || 'page',
-              title: target.title || '',
-              url: target.url || '',
-              attached: true,
-              browserContextId: 'bridge-default-context',
-              canAccessOpener: false
-            },
-            waitingForDebugger: false
-          }
-        }
-      });
-    }
-
-    // Remove stale tabs
-    for (const [tabId, sessionId] of relayTabSessionMap) {
-      if (currentTabIds.has(tabId)) continue;
-      relayTabSessionMap.delete(tabId);
-      relaySessionTabMap.delete(sessionId);
-      sendToRelay({
-        method: 'forwardCDPEvent',
-        params: {
-          method: 'Target.detachedFromTarget',
-          params: { sessionId, targetId: tabId }
-        }
-      });
-    }
-  });
-
+// GET /api/node/setup-command — 生成一键连接命令
+app.get('/api/node/setup-command', (req, res) => {
   try {
-    client.ws.send(JSON.stringify({ type: 'list-targets', requestId }));
-  } catch {
-    client._pendingRequests.delete(requestId);
-  }
-}
-
-function connectToGatewayRelay() {
-  if (gatewayRelayWs) return;
-
-  const gatewayToken = getGatewayAuthToken();
-  if (!gatewayToken) {
-    console.log('[relay-proxy] gateway auth token 未配置，跳过 relay 连接');
-    return;
-  }
-
-  // Accept both derived token and raw gateway token (matches relay behavior)
-  const relayToken = deriveRelayAuthToken(gatewayToken, GATEWAY_RELAY_PORT);
-  const relayUrl = `ws://127.0.0.1:${GATEWAY_RELAY_PORT}/extension?token=${encodeURIComponent(relayToken)}`;
-
-  let WsClient;
-  try { WsClient = require('ws'); } catch {
-    console.log('[relay-proxy] ws 模块不可用，跳过 relay 连接');
-    return;
-  }
-
-  console.log('[relay-proxy] 连接 gateway relay...');
-  const ws = new WsClient(relayUrl);
-  gatewayRelayWs = ws;
-
-  ws.on('open', () => {
-    console.log('[relay-proxy] 已连接 gateway relay (port ' + GATEWAY_RELAY_PORT + ')');
-    // Clear tab maps so all tabs get re-announced to potentially new gateway
-    relayTabSessionMap.clear();
-    relaySessionTabMap.clear();
-    // Announce current browser tabs
-    setTimeout(() => announceTabsToRelay(), 500);
-    // Periodically refresh tab list (detect new/closed tabs)
-    relayTabPollTimer = setInterval(() => announceTabsToRelay(), 8000);
-  });
-
-  ws.on('message', (data) => {
-    if (gatewayRelayWs !== ws) return;
-    let msg;
-    try { msg = JSON.parse(data.toString()); } catch { return; }
-
-    // Relay ping → pong
-    if (msg.method === 'ping') {
-      try { ws.send(JSON.stringify({ method: 'pong' })); } catch {}
-      return;
+    const token = getGatewayAuthToken();
+    const host = (req.headers['x-forwarded-host'] || req.headers.host || '').replace(/:\d+$/, '') || '127.0.0.1';
+    const dcfg = readDockerConfig();
+    const gatewayTlsPort = Number(dcfg.gateway_tls_port || 18790) || 18790;
+    if (!token) {
+      return res.json({ success: true, command: '# Gateway Auth Token 未配置，请先在 openclaw.json 中设置 gateway.auth.token', hasToken: false });
     }
-
-    // forwardCDPCommand from gateway → translate & forward to extension
-    if (typeof msg.id === 'number' && msg.method === 'forwardCDPCommand') {
-      const p = msg.params || {};
-      const cdpMethod = p.method || '';
-      const cdpSessionId = p.sessionId || '';
-      const cdpParams = p.params || {};
-      const relayId = msg.id;
-
-      // Map sessionId → tabId
-      let tabId = relaySessionTabMap.get(cdpSessionId);
-      if (!tabId && cdpSessionId) {
-        // Try to extract tabId from sessionId pattern "bridge-<tabId>-..."
-        const m = cdpSessionId.match(/^bridge-(\d+)-/);
-        if (m) tabId = m[1];
-      }
-      // For Target.* commands that include targetId in params
-      if (!tabId && cdpParams.targetId) {
-        tabId = String(cdpParams.targetId);
-      }
-
-      const client = getRelayBridgeClient();
-      if (!client) {
-        try { ws.send(JSON.stringify({ id: relayId, error: 'browser extension not connected' })); } catch {}
-        return;
-      }
-
-      // Generate unique bridge message ID
-      const bridgeId = `relay-cdp-${relayId}`;
-
-      // Set up callback for extension response
-      client._pendingRequests.set(bridgeId, (response) => {
-        if (response.type === 'cdp-result') {
-          try { ws.send(JSON.stringify({ id: relayId, result: response.result ?? {} })); } catch {}
-        } else {
-          try { ws.send(JSON.stringify({ id: relayId, error: response.error || 'CDP command failed' })); } catch {}
-        }
-      });
-
-      // Forward to Chrome extension via bridge
-      try {
-        client.ws.send(JSON.stringify({
-          type: 'cdp',
-          id: bridgeId,
-          targetId: tabId || '',
-          method: cdpMethod,
-          params: cdpParams
-        }));
-      } catch (e) {
-        client._pendingRequests.delete(bridgeId);
-        try { ws.send(JSON.stringify({ id: relayId, error: e.message })); } catch {}
-      }
-      return;
-    }
-  });
-
-  ws.on('close', (code) => {
-    console.log(`[relay-proxy] gateway relay 断开 (code=${code})`);
-    if (gatewayRelayWs === ws) gatewayRelayWs = null;
-    cleanupRelayProxy();
-    // Auto-reconnect if bridge clients still exist
-    if (browserBridgeClients.size > 0) {
-      console.log('[relay-proxy] 将在 5 秒后重连...');
-      setTimeout(() => {
-        if (browserBridgeClients.size > 0 && !gatewayRelayWs) connectToGatewayRelay();
-      }, 5000);
-    }
-  });
-
-  ws.on('error', (e) => {
-    // Suppress ECONNREFUSED noise (gateway not ready yet)
-    if (e.code !== 'ECONNREFUSED') {
-      console.error('[relay-proxy] relay 连接错误:', e.message);
-    }
-  });
-}
-
-function disconnectFromGatewayRelay() {
-  if (gatewayRelayWs) {
-    try { gatewayRelayWs.close(); } catch {}
-    gatewayRelayWs = null;
-  }
-  fullCleanupRelayProxy();
-}
-
-function cleanupRelayProxy() {
-  if (relayTabPollTimer) { clearInterval(relayTabPollTimer); relayTabPollTimer = null; }
-  // Don't clear tab maps — stable sessionIds survive reconnects
-  // Maps are only cleared on full disconnect (bridge client gone)
-}
-
-function fullCleanupRelayProxy() {
-  cleanupRelayProxy();
-  relayTabSessionMap.clear();
-  relaySessionTabMap.clear();
-  relayBridgeClientCode = null;
-}
-
-function readBrowserPairs() {
-  return readJson(BROWSER_PAIRS_PATH, { pairs: [], pairCodes: [] });
-}
-
-function writeBrowserPairs(data) {
-  writeJson(BROWSER_PAIRS_PATH, data);
-}
-
-// 已连接的浏览器扩展: Map<pairCode, { ws, name, connectedAt, lastPing }>
-const browserBridgeClients = new Map();
-
-// 生成配对码 (6位大写字母数字)
-function generatePairCode() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 去掉易混淆字符 I,O,0,1
-  let code = '';
-  for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
-  return code;
-}
-
-app.get('/api/browser/config', async (req, res) => {
-  try {
-    const config = readJson(CONFIG_PATH, {});
-    const dockerCfg = readDockerConfig();
-    const pairsData = readBrowserPairs();
-    const browserCfg = config.browser || {};
-    const sandboxEnabled = !!(config.agents?.defaults?.sandbox?.browser?.enabled);
-
-    // 探测 gateway browser control 状态
-    let gatewayBrowser = { listening: false, version: '' };
-    try {
-      const versionJson = runCommandText(
-        `curl -sf --max-time 3 http://127.0.0.1:${BROWSER_CONTROL_PORT}/json/version 2>/dev/null`,
-        5000
-      );
-      if (versionJson) {
-        const v = JSON.parse(versionJson);
-        gatewayBrowser = { listening: true, version: v.Browser || v.browser || '' };
-      }
-    } catch {}
-    if (!gatewayBrowser.listening) {
-      gatewayBrowser.listening = runCommandOk(
-        `curl -sf --max-time 2 -o /dev/null http://127.0.0.1:${BROWSER_CONTROL_PORT}/ 2>/dev/null`,
-        4000
-      );
-    }
-
-    // 在线扩展列表
-    const connectedBrowsers = [];
-    for (const [code, client] of browserBridgeClients) {
-      connectedBrowsers.push({
-        pairCode: code,
-        name: client.name || code,
-        connectedAt: client.connectedAt,
-        lastPing: client.lastPing
-      });
-    }
-
-    // 已注册的配对码
-    const pairCodes = pairsData.pairCodes || [];
-
-    res.json({
-      browser: browserCfg,
-      sandboxEnabled,
-      gatewayBrowser,
-      pairCodes,
-      connectedBrowsers,
-      browserBridgeEnabled: dockerCfg.browser_bridge_enabled === true || dockerCfg.browser_bridge_enabled === 'true'
-    });
+    const command = `NODE_TLS_REJECT_UNAUTHORIZED=0 OPENCLAW_GATEWAY_TOKEN=${token} openclaw node run --host ${host} --port ${gatewayTlsPort} --tls`;
+    res.json({ success: true, command, hasToken: true, host, port: gatewayTlsPort });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// 生成新配对码
-app.post('/api/browser/pair-code', async (req, res) => {
+// GET /api/node/security — 获取安全配置
+app.get('/api/node/security', (req, res) => {
   try {
-    const { name } = req.body || {};
-    const code = generatePairCode();
-    const pairsData = readBrowserPairs();
-    if (!pairsData.pairCodes) pairsData.pairCodes = [];
-    pairsData.pairCodes.push({
-      code,
-      name: String(name || '').trim() || '新设备',
-      createdAt: new Date().toISOString()
-    });
-    writeBrowserPairs(pairsData);
-    res.json({ success: true, code });
+    const cfg = readJson(CONFIG_PATH, {});
+    const autoApprove = cfg?.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true;
+    const browserMode = cfg?.gateway?.nodes?.browser?.mode || 'auto';
+    const denyCommands = cfg?.gateway?.nodes?.denyCommands || [];
+    const execSecurity = cfg?.tools?.exec?.security || 'ask';
+    res.json({ success: true, autoApprove, browserMode, denyCommands, execSecurity });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// 删除配对码
-app.delete('/api/browser/pair-code/:code', async (req, res) => {
+// POST /api/node/security — 保存安全配置
+app.post('/api/node/security', (req, res) => {
   try {
-    const code = req.params.code;
-    const pairsData = readBrowserPairs();
-    pairsData.pairCodes = (pairsData.pairCodes || []).filter(p => p.code !== code);
-    writeBrowserPairs(pairsData);
-    // 如果已连接则断开
-    const client = browserBridgeClients.get(code);
-    if (client) {
-      try { client.ws.close(1000, 'pair code deleted'); } catch {}
-      browserBridgeClients.delete(code);
+    const { autoApprove, browserMode, denyCommands, execSecurity } = req.body || {};
+    const cfg = readJson(CONFIG_PATH, {});
+
+    // auto-approve
+    if (typeof autoApprove === 'boolean') {
+      if (!cfg.gateway) cfg.gateway = {};
+      if (!cfg.gateway.controlUi) cfg.gateway.controlUi = {};
+      cfg.gateway.controlUi.dangerouslyDisableDeviceAuth = autoApprove;
     }
+
+    // browser mode
+    if (browserMode === 'auto' || browserMode === 'off') {
+      if (!cfg.gateway) cfg.gateway = {};
+      if (!cfg.gateway.nodes) cfg.gateway.nodes = {};
+      if (!cfg.gateway.nodes.browser) cfg.gateway.nodes.browser = {};
+      cfg.gateway.nodes.browser.mode = browserMode;
+    }
+
+    // deny commands
+    if (Array.isArray(denyCommands)) {
+      if (!cfg.gateway) cfg.gateway = {};
+      if (!cfg.gateway.nodes) cfg.gateway.nodes = {};
+      cfg.gateway.nodes.denyCommands = denyCommands.filter(c => typeof c === 'string' && c.trim()).map(c => c.trim());
+    }
+
+    // exec security
+    if (execSecurity === 'ask' || execSecurity === 'deny' || execSecurity === 'allow') {
+      if (!cfg.tools) cfg.tools = {};
+      if (!cfg.tools.exec) cfg.tools.exec = {};
+      cfg.tools.exec.security = execSecurity;
+    }
+
+    writeOpenClawConfig(cfg);
     res.json({ success: true });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// 更新浏览器启用配置
-app.post('/api/browser/config', async (req, res) => {
+// POST /api/node/unpair — 取消配对
+app.post('/api/node/unpair', (req, res) => {
   try {
-    const { browserEnabled, sandboxEnabled } = req.body || {};
-    const config = readJson(CONFIG_PATH, {});
-    if (typeof browserEnabled === 'boolean') {
-      if (!config.browser) config.browser = {};
-      config.browser.enabled = browserEnabled;
-    }
-    if (typeof sandboxEnabled === 'boolean') {
-      if (!config.agents) config.agents = {};
-      if (!config.agents.defaults) config.agents.defaults = {};
-      if (!config.agents.defaults.sandbox) config.agents.defaults.sandbox = {};
-      if (!config.agents.defaults.sandbox.browser) config.agents.defaults.sandbox.browser = {};
-      config.agents.defaults.sandbox.browser.enabled = sandboxEnabled;
-    }
-    writeOpenClawConfig(config);
+    const { deviceId } = req.body || {};
+    if (!deviceId || typeof deviceId !== 'string') return res.status(400).json({ success: false, error: '缺少 deviceId' });
+    if (!/^[0-9a-f-]{36}$/.test(deviceId)) return res.status(400).json({ success: false, error: 'deviceId 格式无效' });
+    const paired = readJson(DEVICE_PAIRING_PAIRED_PATH, {});
+    if (!paired[deviceId]) return res.status(404).json({ success: false, error: '未找到该设备' });
+    delete paired[deviceId];
+    fs.writeFileSync(DEVICE_PAIRING_PAIRED_PATH, JSON.stringify(paired, null, 2));
+    console.log(`[node][unpair] deviceId=${deviceId}`);
     res.json({ success: true });
   } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// 向已连接的浏览器扩展发送测试命令
-app.post('/api/browser/test', async (req, res) => {
-  try {
-    const { pairCode } = req.body || {};
-    if (!pairCode) return res.status(400).json({ error: '缺少 pairCode' });
-    const client = browserBridgeClients.get(pairCode);
-    if (!client) return res.json({ reachable: false, error: '该设备未在线' });
-
-    // 向扩展发送 list-targets 命令并等待回复
-    const requestId = `test-${Date.now()}`;
-    const p = new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        client._pendingRequests?.delete(requestId);
-        resolve({ reachable: false, error: '扩展响应超时' });
-      }, 8000);
-      if (!client._pendingRequests) client._pendingRequests = new Map();
-      client._pendingRequests.set(requestId, (data) => {
-        clearTimeout(timeout);
-        resolve(data);
-      });
-    });
-    try {
-      client.ws.send(JSON.stringify({ type: 'list-targets', requestId }));
-    } catch (e) {
-      return res.json({ reachable: false, error: '发送命令失败: ' + e.message });
-    }
-    const result = await p;
-    if (result.reachable === false) return res.json(result);
-    return res.json({ reachable: true, targets: result.targets || [], name: client.name });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 
@@ -8170,8 +7789,8 @@ function sanitizeLogLine(line) {
   if (/\[ws\]\s+webchat\s+(connected|disconnected)/i.test(line)) {
     return null;
   }
-  // 过滤掉高频 ws 消息日志（device.pair.list, node.list, chat.history 等）
-  if (/\[ws\]\s+⇄\s+res\s+✓\s+(device\.pair\.list|node\.list|chat\.history|device\.list)\b/.test(line)) {
+  // 过滤掉高频 ws 消息日志（device.pair.list, node.list, chat.history, config.get 等）
+  if (/\[ws\]\s+⇄\s+res\s+✓\s+(device\.pair\.list|node\.list|chat\.history|device\.list|config\.get)\b/.test(line)) {
     return null;
   }
   // 过滤掉重复的 Discord 重连/TLS 错误日志（网络问题时极其频繁）
@@ -8313,63 +7932,6 @@ app.get('/api/logs', (req, res) => {
   } catch (e) {
     res.json({ logs: e.message });
   }
-});
-
-// ============================================================
-// Trading system (legacy)
-// ============================================================
-app.get('/api/trading', (req, res) => {
-  const installed = fs.existsSync(TRADING_DIR);
-  const result = { installed };
-
-  if (installed) {
-    try {
-      const commit = execSync(`git -C ${TRADING_DIR} log -1 --format="%h %s" 2>/dev/null`, { encoding: 'utf8' }).trim();
-      result.commit = commit;
-    } catch {}
-
-    try {
-      if (fs.existsSync(STRATEGY_PARAMS_PATH)) {
-        result.strategyParams = JSON.parse(fs.readFileSync(STRATEGY_PARAMS_PATH, 'utf8'));
-      }
-    } catch {}
-  }
-
-  res.json(result);
-});
-
-app.post('/api/trading', (req, res) => {
-  try {
-    fs.mkdirSync(path.dirname(STRATEGY_PARAMS_PATH), { recursive: true });
-    fs.writeFileSync(STRATEGY_PARAMS_PATH, JSON.stringify(req.body, null, 2));
-    res.json({ success: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post('/api/trading/install', (req, res) => {
-  const { token, repo } = req.body || {};
-  if (!token || !repo) return res.status(400).json({ error: '需要 GitHub Token 和仓库地址' });
-
-  // Validate repo format to prevent shell injection
-  const repoPattern = /^https:\/\/github\.com\/[\w\-]+\/[\w\-]+(?:\.git)?$/;
-  if (!repoPattern.test(repo)) return res.status(400).json({ error: '仓库地址格式无效，需要 https://github.com/user/repo' });
-  if (/[;&|`$(){}]/.test(token)) return res.status(400).json({ error: 'Token 格式无效' });
-
-  const repoUrl = repo.replace('https://', `https://${token}@`);
-  const { execFile } = require('child_process');
-  execFile('git', ['clone', repoUrl, TRADING_DIR], (err, stdout, stderr) => {
-    if (err) return res.status(500).json({ error: stderr || String(err) });
-    res.json({ success: true, output: stdout });
-  });
-});
-
-app.post('/api/trading/update', (req, res) => {
-  const { execFile } = require('child_process');
-  execFile('git', ['-C', TRADING_DIR, 'pull'], (err, stdout, stderr) => {
-    res.json({ success: !err, output: stdout || stderr });
-  });
 });
 
 // ============================================================
@@ -9189,7 +8751,6 @@ app.post('/api/stt/install-local', (req, res) => {
 const server = http.createServer(app);
 let wss = null;
 let termWss = null;
-let browserBridgeWss = null;
 
 if (WebSocketServer) {
   wss = new WebSocketServer({ noServer: true });
@@ -9197,186 +8758,6 @@ if (WebSocketServer) {
   termWss = new WebSocketServer({ 
     noServer: true,
     perMessageDeflate: false
-  });
-  browserBridgeWss = new WebSocketServer({ noServer: true });
-
-  // ─── Browser Bridge WebSocket ─────────────────────────
-  browserBridgeWss.on('connection', (ws, req) => {
-    // 仅允许内网 IP 连接浏览器桥接
-    const clientIp = req.headers['x-real-ip'] || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || '';
-    const normalizedIp = clientIp.replace(/^::ffff:/, '');
-    const isPrivate = /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1$|fd|fe80)/i.test(normalizedIp);
-    if (!isPrivate) {
-      console.log(`[browser-bridge] 拒绝非内网连接: ip=${normalizedIp}`);
-      try { ws.close(4003, 'browser bridge is LAN only'); } catch {}
-      return;
-    }
-
-    let parsedUrl;
-    try { parsedUrl = new URL(req.url, 'http://localhost'); } catch { parsedUrl = { searchParams: new URLSearchParams() }; }
-    const code = (parsedUrl.searchParams.get('code') || '').trim().toUpperCase();
-    const name = (parsedUrl.searchParams.get('name') || '').trim() || 'Chrome';
-    const token = (parsedUrl.searchParams.get('token') || '').trim();
-
-    // 验证连接密码（如果 Web 面板设置了密码）
-    const dockerCfg = readDockerConfig();
-    const webPassword = dockerCfg.webAuth?.password || '';
-    if (webPassword && token !== webPassword) {
-      console.log(`[browser-bridge] 连接密码验证失败: ip=${normalizedIp}`);
-      try { ws.close(4004, 'invalid token'); } catch {}
-      return;
-    }
-
-    // 验证配对码
-    const pairsData = readBrowserPairs();
-    const validCodes = (pairsData.pairCodes || []).map(p => p.code);
-    if (!code || !validCodes.includes(code)) {
-      try { ws.close(4001, 'invalid pair code'); } catch {}
-      return;
-    }
-
-    // 如果该 code 已有连接，踢掉旧的
-    if (browserBridgeClients.has(code)) {
-      const old = browserBridgeClients.get(code);
-      try { old.ws.close(4002, 'replaced by new connection'); } catch {}
-    }
-
-    const client = {
-      ws,
-      name,
-      connectedAt: new Date().toISOString(),
-      lastPing: new Date().toISOString(),
-      _pendingRequests: new Map()
-    };
-    browserBridgeClients.set(code, client);
-    console.log(`[browser-bridge] 扩展已连接: code=${code}, name=${name}`);
-
-    // 扩展首次连接时自动启用浏览器控制
-    try {
-      const dcfg = readDockerConfig();
-      const ocfg = readJson(CONFIG_PATH, {});
-      let changed = false;
-      if (dcfg.browser_bridge_enabled !== true) {
-        dcfg.browser_bridge_enabled = true;
-        writeDockerConfig(dcfg);
-        changed = true;
-      }
-      if (!ocfg.browser) ocfg.browser = {};
-      if (!ocfg.browser.enabled) {
-        ocfg.browser.enabled = true;
-        changed = true;
-      }
-      // Docker 容器内无本地 Chrome，默认使用 extension relay profile
-      if (!ocfg.browser.defaultProfile) {
-        ocfg.browser.defaultProfile = 'chrome';
-        changed = true;
-      }
-      if (changed) {
-        writeOpenClawConfig(ocfg);
-        console.log('[browser-bridge] 已自动启用浏览器控制配置 (defaultProfile=chrome)');
-      }
-    } catch (e) {
-      console.error('[browser-bridge] 自动启用配置失败:', e.message);
-    }
-
-    // 自动连接 gateway relay proxy（延迟等待 gateway 就绪）
-    setTimeout(() => connectToGatewayRelay(), 2000);
-
-    ws.on('message', (data) => {
-      let msg;
-      try { msg = JSON.parse(data); } catch { return; }
-
-      // 心跳回复
-      if (msg.type === 'ping') {
-        client.lastPing = new Date().toISOString();
-        try { ws.send(JSON.stringify({ type: 'pong' })); } catch {}
-        return;
-      }
-
-      // targets 列表回复
-      if (msg.type === 'targets' && msg.requestId) {
-        const cb = client._pendingRequests.get(msg.requestId);
-        if (cb) {
-          client._pendingRequests.delete(msg.requestId);
-          cb({ reachable: true, targets: msg.targets || [] });
-        }
-        return;
-      }
-
-      // CDP 命令结果回复
-      if (msg.type === 'cdp-result' || msg.type === 'cdp-error') {
-        const cb = client._pendingRequests.get(msg.id);
-        if (cb) {
-          client._pendingRequests.delete(msg.id);
-          cb(msg);
-        }
-        return;
-      }
-
-      // attach/detach 结果
-      if (msg.type === 'attach-result' || msg.type === 'detach-result') {
-        const key = `${msg.type}-${msg.tabId}`;
-        const cb = client._pendingRequests.get(key);
-        if (cb) {
-          client._pendingRequests.delete(key);
-          cb(msg);
-        }
-        return;
-      }
-
-      // CDP 事件转发到 relay proxy (filter out Target.* to avoid duplicates)
-      if (msg.type === 'cdp-event' && msg.tabId && msg.method) {
-        // Never forward Target.attachedToTarget/detachedFromTarget — we manage these ourselves
-        if (msg.method.startsWith('Target.')) return;
-        const tabId = String(msg.tabId);
-        const sessionId = relayTabSessionMap.get(tabId);
-        if (sessionId && gatewayRelayWs && gatewayRelayWs.readyState === 1) {
-          sendToRelay({
-            method: 'forwardCDPEvent',
-            params: {
-              method: msg.method,
-              params: msg.params || {},
-              sessionId
-            }
-          });
-        }
-        return;
-      }
-
-      // Tab removed → notify relay
-      if (msg.type === 'tab-removed' && msg.tabId) {
-        const tabId = String(msg.tabId);
-        const sessionId = relayTabSessionMap.get(tabId);
-        if (sessionId) {
-          relayTabSessionMap.delete(tabId);
-          relaySessionTabMap.delete(sessionId);
-          sendToRelay({
-            method: 'forwardCDPEvent',
-            params: {
-              method: 'Target.detachedFromTarget',
-              params: { sessionId, targetId: tabId }
-            }
-          });
-        }
-        return;
-      }
-    });
-
-    ws.on('close', () => {
-      if (browserBridgeClients.get(code)?.ws === ws) {
-        browserBridgeClients.delete(code);
-        console.log(`[browser-bridge] 扩展已断开: code=${code}`);
-        // 如果没有其他 bridge 客户端，断开 relay
-        if (browserBridgeClients.size === 0) {
-          disconnectFromGatewayRelay();
-        }
-      }
-    });
-
-    ws.on('error', () => {});
-
-    // 发送欢迎消息
-    try { ws.send(JSON.stringify({ type: 'welcome', serverTime: new Date().toISOString() })); } catch {}
   });
 
   wss.on('connection', (ws, req) => {
@@ -9593,19 +8974,6 @@ server.on('upgrade', (req, socket, head) => {
       });
     } catch (e) {
       console.error(`[terminal-ws] handleUpgrade error:`, e.message);
-      socket.destroy();
-    }
-    return;
-  }
-
-  // 浏览器扩展 Bridge WebSocket (无需 session 认证，使用配对码认证)
-  if (WebSocketServer && browserBridgeWss && pathname === '/api/ws/browser-bridge') {
-    try {
-      browserBridgeWss.handleUpgrade(req, socket, head, (ws) => {
-        browserBridgeWss.emit('connection', ws, req);
-      });
-    } catch (e) {
-      console.error(`[browser-bridge] handleUpgrade error:`, e.message);
       socket.destroy();
     }
     return;

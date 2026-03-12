@@ -1,4 +1,21 @@
 ${GLOBAL_OPTIONS}
+# Gateway TLS 代理（独立端口，供 openclaw node run --tls 连接）
+https://${DOMAIN_HTTP}:18790 {
+    ${TLS_BLOCK}
+    reverse_proxy 127.0.0.1:18789 {
+        header_up Host {host}
+        header_up X-Real-IP {remote}
+        header_up X-Forwarded-For {remote}
+        header_up X-Forwarded-Proto {scheme}
+        header_up Upgrade {http.request.header.Upgrade}
+        header_up Connection {http.request.header.Connection}
+        flush_interval -1
+        transport http {
+            read_timeout 0
+        }
+    }
+}
+
 http://${DOMAIN_HTTP} {
     # 允许浏览器插件通过 ws:// (非 TLS) 连接 WebSocket，绕过自签名证书问题
     handle /api/ws/* {
@@ -26,7 +43,7 @@ ${DOMAIN} {
         reverse_proxy 127.0.0.1:6080
     }
 
-    # WebSocket for log streaming, terminal, browser-bridge
+    # WebSocket for log streaming, terminal
     handle /api/ws/* {
         reverse_proxy 127.0.0.1:3000 {
             header_up Upgrade {http.request.header.Upgrade}

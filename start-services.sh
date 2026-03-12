@@ -883,7 +883,7 @@ if [ -f "$CONFIG_FILE" ]; then
             export TLS_BLOCK
             echo "[start-services] Using Let's Encrypt certificate"
         fi
-        # 只替换我们定义的三个变量，避免 envsubst 误替换模板中的其他 $ 符号
+        # 只替换我们定义的四个变量，避免 envsubst 误替换模板中的其他 $ 符号
         envsubst '${DOMAIN} ${DOMAIN_HTTP} ${GLOBAL_OPTIONS} ${TLS_BLOCK}' \
             < /etc/caddy/Caddyfile.template > /tmp/Caddyfile
 

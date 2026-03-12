@@ -719,6 +719,7 @@ show_install_summary() {
     local tz="$5"
     local ssh_port="${6:-2222}"
     local cert_mode="${7:-}"
+    local gw_tls_port="${8:-18790}"
 
     echo ""
     echo -e "${GREEN}╔══════════════════════════════════════════════════════════════════╗${NC}"
@@ -731,11 +732,13 @@ show_install_summary() {
         # 域名 + Let's Encrypt
         echo -e "${GREEN}║${NC}    HTTP  ${YELLOW}${http_port}${NC} → 容器 80（证书验证 + 跳转HTTPS）          ${GREEN}║${NC}"
         echo -e "${GREEN}║${NC}    HTTPS ${YELLOW}${https_port}${NC} → 容器 443（主入口）                     ${GREEN}║${NC}"
+        echo -e "${GREEN}║${NC}    GW-TLS ${YELLOW}${gw_tls_port}${NC} → 容器 18790（Node远程接入 TLS）        ${GREEN}║${NC}"
         echo -e "${GREEN}║${NC}    SSH   ${YELLOW}${ssh_port}${NC} → 容器 22（远程登录）                  ${GREEN}║${NC}"
         echo -e "${GREEN}║${NC}    Gateway ${YELLOW}127.0.0.1:${gw_port}${NC} → 容器内部（不对外）     ${GREEN}║${NC}"
     elif [ -n "$domain" ]; then
         # IP + 自签名
         echo -e "${GREEN}║${NC}    HTTPS ${YELLOW}${https_port}${NC} → 容器 443（自签证书）                 ${GREEN}║${NC}"
+        echo -e "${GREEN}║${NC}    GW-TLS ${YELLOW}${gw_tls_port}${NC} → 容器 18790（Node远程接入 TLS）        ${GREEN}║${NC}"
         echo -e "${GREEN}║${NC}    SSH   ${YELLOW}${ssh_port}${NC} → 容器 22（远程登录）                  ${GREEN}║${NC}"
         echo -e "${GREEN}║${NC}    Gateway ${YELLOW}127.0.0.1:${gw_port}${NC} → 容器内部（不对外）     ${GREEN}║${NC}"
     else
@@ -915,6 +918,9 @@ first_time_setup() {
     ask_port 18789 18790 "Gateway" 18789
     GW_PORT="$PICKED_PORT"
 
+    ask_port 18790 18791 "Gateway TLS（Node远程接入）" 18790
+    GW_TLS_PORT="$PICKED_PORT"
+
     ask_port 2222 2223 "SSH" 22
     SSH_PORT="$PICKED_PORT"
 
@@ -926,35 +932,14 @@ first_time_setup() {
         ask_port 8443 8444 "HTTPS" 443
         HTTPS_PORT="$PICKED_PORT"
 
-        PORT_ARGS="-p ${HTTP_PORT}:80 -p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000 -p ${SSH_PORT}:22"
+        PORT_ARGS="-p ${HTTP_PORT}:80 -p ${HTTPS_PORT}:443 -p ${GW_TLS_PORT}:18790 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000 -p ${SSH_PORT}:22"
 
     elif [ -n "$DOMAIN" ] && [ "$CERT_MODE" = "internal" ]; then
         # IP+自签名: HTTPS(443) + 内部GW/Web
         ask_port 8443 8444 "HTTPS" 443
         HTTPS_PORT="$PICKED_PORT"
 
-        PORT_ARGS="-p ${HTTPS_PORT}:443 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000 -p ${SSH_PORT}:22"
-    fi
-
-    # 远端浏览器控制（仅局域网提供选项）
-    local detected_ip="$(detect_local_ip 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo '127.0.0.1')"
-    local is_lan="false"
-    if echo "$detected_ip" | grep -Eq '^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|127\.)'; then
-      is_lan="true"
-    fi
-    BROWSER_BRIDGE_ENABLED="false"
-    BRIDGE_PORT=0
-    if [ "$is_lan" = "true" ]; then
-      echo ""
-      echo -e "  ${CYAN}检测到局域网环境 (${detected_ip})${NC}"
-      echo -e "  可开启远端浏览器控制：局域网内 Chrome 通过插件连接本服务器，AI 代理可远程操控浏览器。"
-      echo -e "  ${YELLOW}浏览器插件通过 HTTPS(WSS) 端口连接，无需额外端口。${NC}"
-      local bb_ans=""
-      read -p "  是否开启远端浏览器控制？[y/N]: " bb_ans || true
-      bb_ans="$(echo "$bb_ans" | tr '[:upper:]' '[:lower:]')"
-      if [ "$bb_ans" = "y" ] || [ "$bb_ans" = "yes" ]; then
-        BROWSER_BRIDGE_ENABLED="true"
-      fi
+        PORT_ARGS="-p ${HTTPS_PORT}:443 -p ${GW_TLS_PORT}:18790 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000 -p ${SSH_PORT}:22"
     fi
 
     # 保存配置
@@ -962,6 +947,7 @@ first_time_setup() {
     cat > "$CONFIG_FILE" << EOF
 {
     "port": $GW_PORT,
+    "gateway_tls_port": ${GW_TLS_PORT:-18790},
     "web_port": $WEB_PORT,
     "ssh_port": $SSH_PORT,
     "http_port": $HTTP_PORT,
@@ -969,8 +955,6 @@ first_time_setup() {
     "domain": "${DOMAIN}",
     "cert_mode": "${CERT_MODE}",
     "timezone": "${TZ_VAL}",
-    "browser_bridge_enabled": ${BROWSER_BRIDGE_ENABLED:-false},
-    "browser_bridge_port": ${BRIDGE_PORT:-0},
     "created": "$(date -Iseconds)"
 }
 EOF
@@ -1013,10 +997,12 @@ EOF
             if [ -n "$DOMAIN" ] && [ "$CERT_MODE" = "letsencrypt" ]; then
                 ufw allow "${HTTP_PORT}/tcp"
                 ufw allow "${HTTPS_PORT}/tcp"
-                success "ufw 将放行: 22/${HTTP_PORT}/${HTTPS_PORT}/${SSH_PORT}"
+                ufw allow "${GW_TLS_PORT}/tcp"
+                success "ufw 将放行: 22/${HTTP_PORT}/${HTTPS_PORT}/${GW_TLS_PORT}/${SSH_PORT}"
             elif [ -n "$DOMAIN" ]; then
                 ufw allow "${HTTPS_PORT}/tcp"
-                success "ufw 将放行: 22/${HTTPS_PORT}/${SSH_PORT}"
+                ufw allow "${GW_TLS_PORT}/tcp"
+                success "ufw 将放行: 22/${HTTPS_PORT}/${GW_TLS_PORT}/${SSH_PORT}"
             else
                 ufw allow "${GW_PORT}/tcp"
                 ufw allow "${WEB_PORT}/tcp"
@@ -1124,7 +1110,7 @@ F2B
     fi
 
     # 显示安装完成摘要
-    show_install_summary "$GW_PORT" "$HTTP_PORT" "$HTTPS_PORT" "$DOMAIN" "$TZ_VAL" "$SSH_PORT" "$CERT_MODE"
+    show_install_summary "$GW_PORT" "$HTTP_PORT" "$HTTPS_PORT" "$DOMAIN" "$TZ_VAL" "$SSH_PORT" "$CERT_MODE" "$GW_TLS_PORT"
 
     # 进入容器
     show_command_hint
@@ -1636,9 +1622,10 @@ _do_full_update() {
     fi
 
     # 解析配置
-    local domain gw_port web_port http_port https_port cert_mode tz
+    local domain gw_port gw_tls_port web_port http_port https_port cert_mode tz
     domain=$(echo "$config_json" | jq -r '.domain // empty' 2>/dev/null)
     gw_port=$(echo "$config_json" | jq -r '.port // 18789' 2>/dev/null)
+    gw_tls_port=$(echo "$config_json" | jq -r '.gateway_tls_port // 18790' 2>/dev/null)
     web_port=$(echo "$config_json" | jq -r '.web_port // 3000' 2>/dev/null)
     ssh_port=$(echo "$config_json" | jq -r '.ssh_port // 2222' 2>/dev/null)
     http_port=$(echo "$config_json" | jq -r '.http_port // 0' 2>/dev/null)
@@ -1647,7 +1634,7 @@ _do_full_update() {
     tz=$(echo "$config_json" | jq -r '.timezone // "Asia/Shanghai"' 2>/dev/null)
 
     info "域名: ${domain:-无}"
-    info "端口: Gateway=$gw_port Web=$web_port SSH=$ssh_port HTTP=$http_port HTTPS=$https_port"
+    info "端口: Gateway=$gw_port GatewayTLS=$gw_tls_port Web=$web_port SSH=$ssh_port HTTP=$http_port HTTPS=$https_port"
 
     # 获取当前版本
     local current_ver
@@ -1679,13 +1666,11 @@ _do_full_update() {
 
     # 构建端口映射
     local PORT_ARGS=""
-    local bridge_port=$(echo "$config_json" | jq -r '.browser_bridge_port // 0' 2>/dev/null)
-    local bridge_enabled=$(echo "$config_json" | jq -r '.browser_bridge_enabled // false' 2>/dev/null)
     if [ -n "$domain" ] && [ "$cert_mode" = "letsencrypt" ]; then
-        PORT_ARGS="-p ${http_port}:80 -p ${https_port}:443 -p 127.0.0.1:${gw_port}:18789 -p 127.0.0.1:${web_port}:3000 -p ${ssh_port}:22"
+        PORT_ARGS="-p ${http_port}:80 -p ${https_port}:443 -p ${gw_tls_port}:18790 -p 127.0.0.1:${gw_port}:18789 -p 127.0.0.1:${web_port}:3000 -p ${ssh_port}:22"
     elif [ -n "$domain" ]; then
         # IP+自签名: 不需要 80
-        PORT_ARGS="-p ${https_port}:443 -p 127.0.0.1:${gw_port}:18789 -p 127.0.0.1:${web_port}:3000 -p ${ssh_port}:22"
+        PORT_ARGS="-p ${https_port}:443 -p ${gw_tls_port}:18790 -p 127.0.0.1:${gw_port}:18789 -p 127.0.0.1:${web_port}:3000 -p ${ssh_port}:22"
     else
         PORT_ARGS="-p ${gw_port}:18789 -p ${web_port}:3000 -p ${ssh_port}:22"
     fi

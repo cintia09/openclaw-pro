@@ -42,6 +42,7 @@ TAG=""
 IMAGE_TARBALL="$IMAGE_TARBALL_LITE"
 
 GW_PORT="${GW_PORT:-18789}"
+GW_TLS_PORT="${GW_TLS_PORT:-18790}"
 WEB_PORT="${WEB_PORT:-3000}"
 SSH_PORT="${SSH_PORT:-2222}"
 HTTP_PORT="${HTTP_PORT:-0}"
@@ -186,6 +187,13 @@ apply_port_conflicts(){
     GW_PORT="$ng"
   fi
 
+  local ngt
+  ngt="$(find_available_port "$GW_TLS_PORT" 18800 18999)"
+  if [ "$ngt" != "$GW_TLS_PORT" ]; then
+    warn "Gateway TLS 端口 ${GW_TLS_PORT} 已占用，自动调整为 ${ngt}"
+    GW_TLS_PORT="$ngt"
+  fi
+
   nw="$(find_available_port "$WEB_PORT" 3001 3099)"
   if [ "$nw" != "$WEB_PORT" ]; then
     warn "Web 端口 ${WEB_PORT} 已占用，自动调整为 ${nw}"
@@ -230,6 +238,7 @@ load_existing_config(){
   [ ! -f "$CONFIG_FILE" ] && [ ! -f "$CONFIG_FILE_LEGACY" ] && return 1
   local v
   v="$(safe_json_value port)";       [ -n "$v" ] && GW_PORT="$v"
+  v="$(safe_json_value gateway_tls_port)"; [ -n "$v" ] && GW_TLS_PORT="$v"
   v="$(safe_json_value web_port)";   [ -n "$v" ] && WEB_PORT="$v"
   v="$(safe_json_value ssh_port)";   [ -n "$v" ] && SSH_PORT="$v"
   v="$(safe_json_value http_port)";  [ -n "$v" ] && HTTP_PORT="$v"
@@ -247,6 +256,7 @@ write_config(){
   cat > "$CONFIG_FILE" <<EOF
 {
   "port": ${GW_PORT},
+  "gateway_tls_port": ${GW_TLS_PORT},
   "web_port": ${WEB_PORT},
   "ssh_port": ${SSH_PORT},
   "http_port": ${HTTP_PORT},
@@ -942,10 +952,12 @@ configure_firewall_and_fail2ban(){
     if [ "$CERT_MODE" = "letsencrypt" ]; then
       [ "$HTTP_PORT"  -gt 0 ] 2>/dev/null && ufw allow "${HTTP_PORT}/tcp"  >/dev/null 2>&1 || true
       [ "$HTTPS_PORT" -gt 0 ] 2>/dev/null && ufw allow "${HTTPS_PORT}/tcp" >/dev/null 2>&1 || true
-      success "ufw 放行: 22/${SSH_PORT}/${HTTP_PORT}/${HTTPS_PORT}"
+      [ "$GW_TLS_PORT" -gt 0 ] 2>/dev/null && ufw allow "${GW_TLS_PORT}/tcp" >/dev/null 2>&1 || true
+      success "ufw 放行: 22/${SSH_PORT}/${HTTP_PORT}/${HTTPS_PORT}/${GW_TLS_PORT}"
     else
       [ "$HTTPS_PORT" -gt 0 ] 2>/dev/null && ufw allow "${HTTPS_PORT}/tcp" >/dev/null 2>&1 || true
-      success "ufw 放行: 22/${SSH_PORT}/${HTTPS_PORT}"
+      [ "$GW_TLS_PORT" -gt 0 ] 2>/dev/null && ufw allow "${GW_TLS_PORT}/tcp" >/dev/null 2>&1 || true
+      success "ufw 放行: 22/${SSH_PORT}/${HTTPS_PORT}/${GW_TLS_PORT}"
     fi
     if [ "$BROWSER_BRIDGE_ENABLED" = "true" ] && [ "$BRIDGE_PORT" -gt 0 ] 2>/dev/null; then
       ufw allow "${BRIDGE_PORT}/tcp" >/dev/null 2>&1 || true
@@ -1014,9 +1026,9 @@ create_and_start(){
   local port_args=()
   if [ "$HTTPS_ENABLED" = "true" ]; then
     # 始终映射 80 端口 (Let's Encrypt 需要 ACME 验证; 自签名模式 Caddy 提供 HTTP→HTTPS 重定向 + ws:// WebSocket 透传)
-    port_args+=(-p "${HTTP_PORT}:80" -p "${HTTPS_PORT}:443" -p "127.0.0.1:${GW_PORT}:18789" -p "127.0.0.1:${WEB_PORT}:3000" -p "${SSH_PORT}:22")
+    port_args+=(-p "${HTTP_PORT}:80" -p "${HTTPS_PORT}:443" -p "${GW_TLS_PORT}:18790" -p "127.0.0.1:${GW_PORT}:18789" -p "127.0.0.1:${WEB_PORT}:3000" -p "${SSH_PORT}:22")
   else
-    port_args+=(-p "127.0.0.1:${GW_PORT}:18789" -p "127.0.0.1:${WEB_PORT}:3000" -p "${SSH_PORT}:22")
+    port_args+=(-p "${GW_TLS_PORT}:18790" -p "127.0.0.1:${GW_PORT}:18789" -p "127.0.0.1:${WEB_PORT}:3000" -p "${SSH_PORT}:22")
   fi
   # 远端浏览器控制端口
   if [ "$BROWSER_BRIDGE_ENABLED" = "true" ] && [ "$BRIDGE_PORT" -gt 0 ] 2>/dev/null; then

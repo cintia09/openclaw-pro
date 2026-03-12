@@ -28,10 +28,7 @@
         <a href="#openclaw-ai" data-route="openclaw-ai"><span class="ico">◈</span><span>接入模型配置</span></a>
         <a href="#messaging" data-route="messaging"><span class="ico">⌁</span><span>消息平台</span></a>
         <a href="#plugins" data-route="plugins"><span class="ico">◌</span><span>插件市场</span></a>
-        <a href="#browser" data-route="browser"><span class="ico">🖥</span><span>远端浏览器控制</span></a>
-
-        <div class="nav-group-label">应用中心</div>
-        <a href="#trading" data-route="trading"><span class="ico">◒</span><span>交易系统</span></a>
+        <a href="#browser" data-route="browser"><span class="ico">�</span><span>远端设备管理</span></a>
 
         <div class="nav-group-label">运维与系统</div>
         <a href="#terminal" data-route="terminal"><span class="ico">⌘</span><span>终端</span></a>
@@ -67,7 +64,7 @@
           (function(){
             var h = (location.hash||'').replace('#','').trim();
             if(h==='ai') h='openclaw-ai'; if(h==='openclaw') h='openclaw-engine';
-            var validRoutes = ['dashboard','openclaw-engine','openclaw-ai','messaging','browser','trading','plugins','terminal','settings','logs'];
+            var validRoutes = ['dashboard','openclaw-engine','openclaw-ai','messaging','browser','plugins','terminal','settings','logs'];
             var route = validRoutes.indexOf(h) >= 0 ? h : 'dashboard';
             var el = document.getElementById('page-' + route);
             if(el) el.classList.add('active');
@@ -198,19 +195,6 @@
                 <div class="muted small" style="margin-top:4px">当前：<span id="oc-current-ver">—</span> · 最新：<span id="oc-latest-ver">—</span></div>
                 <div class="muted small" style="margin-top:10px">安装按钮会自动判断是否需要更新，详细日志请到“日志”页面查看</div>
               </div>
-            </div>
-            <!-- 设备配对审批 -->
-            <div class="sep"></div>
-            <div id="pairing-section">
-              <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px">
-                <div style="font-weight:800;font-size:14px">🔗 设备配对审批</div>
-                <button class="btn" id="btn-pairing-refresh" style="font-size:12px;padding:2px 10px">刷新</button>
-              </div>
-              <div class="muted small" style="margin-bottom:8px">新设备首次连接 Gateway 时需要审批（包括 CLI、Web UI、消息平台 Bot 等所有客户端）</div>
-              <div id="pairing-pending-list" style="min-height:32px">
-                <div class="muted small">加载中...</div>
-              </div>
-              <span class="muted small" id="pairing-result" style="margin-top:4px;display:block"></span>
             </div>
             <!-- 操作日志窗口 -->
             <div class="sep"></div>
@@ -554,223 +538,153 @@
         </div>
       </section>
 
-      <!-- Browser Control (远端浏览器控制) -->
-      <section class="page" id="page-browser" data-title="远端浏览器控制">
+      <!-- 远端设备管理 -->
+      <section class="page" id="page-browser" data-title="远端设备管理">
         <div class="grid">
-          <!-- 状态卡片 -->
+          <!-- 快速连接 -->
           <div class="card" style="grid-column: span 12;">
             <div class="row" style="justify-content:space-between">
               <div>
-                <div style="font-weight:900;font-size:18px">🖥 远端浏览器控制</div>
-                <div class="muted" style="margin-top:4px;font-size:13px">通过 Chrome 插件连接局域网内的浏览器，AI 代理可远程操控</div>
+                <div style="font-weight:900;font-size:18px">📡 远端设备管理</div>
+                <div class="muted" style="margin-top:4px;font-size:13px">通过 <code>openclaw node run</code> 将远端机器接入本 Gateway，AI 代理可远程操控浏览器与执行命令</div>
               </div>
               <div class="row">
-                <button class="btn" id="btn-browser-refresh">刷新</button>
+                <button class="btn" id="btn-device-refresh">刷新</button>
               </div>
             </div>
             <div class="sep"></div>
-            <div class="grid">
-              <div style="grid-column: span 4;" class="field">
-                <div class="label"><span>Browser Control 服务</span></div>
-                <div class="big" id="browser-gw-status">—</div>
-              </div>
-              <div style="grid-column: span 4;" class="field">
-                <div class="label"><span>在线浏览器</span></div>
-                <div class="big" id="browser-online-count">0</div>
-              </div>
-              <div style="grid-column: span 4;" class="field">
-                <div class="label"><span>浏览器沙盒</span></div>
-                <div class="big" id="browser-sandbox-status">—</div>
-              </div>
+            <div style="font-weight:700;font-size:14px;margin-bottom:8px">🚀 快速连接</div>
+            <div class="muted small" style="margin-bottom:8px">在远端机器上运行以下命令即可自动配对（需先安装 <code>openclaw</code> CLI）。通过 Caddy 独立 TLS 端口加密连接：</div>
+            <div style="position:relative">
+              <pre class="terminal" id="device-setup-command" style="height:auto;min-height:44px;padding:12px 48px 12px 12px;font-size:13px;user-select:all;white-space:pre-wrap;word-break:break-all">加载中...</pre>
+              <button class="btn btn-sm" id="btn-copy-setup-cmd" style="position:absolute;top:8px;right:8px;font-size:11px;padding:2px 8px" title="复制命令">📋</button>
+            </div>
+            <div class="muted small" style="margin-top:6px">💡 命令已包含 TLS 加密和证书兼容设置，复制后直接在远端运行即可。运行后需在下方审批才能接入。</div>
+          </div>
+
+          <!-- 设备配对审批 -->
+          <div class="card" style="grid-column: span 12;">
+            <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px">
+              <div style="font-weight:900;font-size:16px">🔗 设备配对审批</div>
+              <button class="btn" id="btn-pairing-refresh" style="font-size:12px;padding:2px 10px">刷新</button>
+            </div>
+            <div class="muted small" style="margin-bottom:8px">新设备首次连接 Gateway 时需要审批（包括 CLI、Node、Web UI、消息平台 Bot 等所有客户端）</div>
+            <div id="pairing-pending-list" style="min-height:32px">
+              <div class="muted small">加载中...</div>
+            </div>
+            <span class="muted small" id="pairing-result" style="margin-top:4px;display:block"></span>
+          </div>
+
+          <!-- 已配对设备 -->
+          <div class="card" style="grid-column: span 12;">
+            <div style="font-weight:900;font-size:16px">✅ 已配对设备</div>
+            <div class="sep"></div>
+            <div id="device-paired-list" style="min-height:40px">
+              <div class="muted" style="text-align:center;padding:20px">加载中...</div>
             </div>
           </div>
 
-          <!-- 已在线的浏览器 -->
+          <!-- 安全配置 -->
           <div class="card" style="grid-column: span 12;">
-            <div style="font-weight:900;font-size:16px">🟢 已连接的浏览器</div>
+            <div style="font-weight:900;font-size:16px">🔒 安全配置</div>
             <div class="sep"></div>
-            <div id="browser-online-list" style="min-height:40px">
-              <div class="muted" style="text-align:center;padding:20px">暂无在线浏览器</div>
-            </div>
-          </div>
 
-          <!-- 配对码管理 -->
-          <div class="card" style="grid-column: span 12;">
-            <div style="font-weight:900;font-size:16px">🔑 配对码管理</div>
-            <div class="muted small" style="margin-top:4px">生成配对码后，在远端浏览器的 OpenClaw Bridge 插件中输入该配对码即可建立连接</div>
-            <div class="sep"></div>
-            <div id="browser-pair-codes-list" style="min-height:40px">
-              <div class="muted" style="text-align:center;padding:12px">暂无配对码</div>
-            </div>
-            <div class="sep"></div>
-            <div class="grid">
-              <div style="grid-column: span 6;" class="field">
-                <div class="label"><span>设备备注名</span></div>
-                <input class="input" id="browser-new-name" placeholder="如: 书房 Mac Mini" />
-              </div>
-              <div style="grid-column: span 6;" class="field" style="display:flex;align-items:flex-end">
-                <button class="btn btn-primary" id="btn-browser-gen-code">生成新配对码</button>
-              </div>
-            </div>
-          </div>
-
-          <!-- 配置 -->
-          <div class="card" style="grid-column: span 12;">
-            <div style="font-weight:900;font-size:16px">⚙️ 配置</div>
-            <div class="sep"></div>
+            <!-- 自动审批 -->
             <div class="grid">
               <div style="grid-column: span 6;" class="field">
-                <div class="label"><span>Browser Control 开关</span></div>
-                <select class="input" id="browser-enabled-select">
-                  <option value="true">启用</option>
-                  <option value="false">关闭</option>
+                <div class="label"><span>设备自动审批</span></div>
+                <select class="input" id="device-auto-approve">
+                  <option value="false">关闭（推荐）</option>
+                  <option value="true">开启</option>
                 </select>
               </div>
               <div style="grid-column: span 6;" class="field">
-                <div class="label"><span>浏览器沙盒</span></div>
-                <select class="input" id="browser-sandbox-select">
-                  <option value="true">启用</option>
-                  <option value="false">关闭</option>
+                <div class="label"><span>Node 浏览器代理模式</span></div>
+                <select class="input" id="device-browser-mode">
+                  <option value="auto">auto（接入后自动启用）</option>
+                  <option value="off">off（禁用浏览器控制）</option>
                 </select>
               </div>
             </div>
-            <div class="muted small" style="margin-top:4px">💡 以上两项功能需要容器内已安装内部浏览器（Chromium）才能使用。启用后 AI 代理可操控容器内浏览器执行任务。与下方「Chrome 插件」远端控制无关。</div>
-            <div class="row" style="margin-top:8px">
-              <button class="btn btn-primary" id="btn-browser-save-config">保存配置</button>
-              <button class="btn btn-warning" id="btn-browser-restart" style="display:none">重启 Gateway 生效</button>
+            <div id="device-auto-approve-warning" style="display:none;margin-top:8px;padding:10px 14px;background:#3a1a1a;border:1px solid #f85149;border-radius:6px;color:#ff6b6b;font-size:13px;line-height:1.6">
+              ⚠️ <b>高危操作：</b>开启自动审批后，任何知道 Gateway Token 的设备都可以<b>无需人工确认</b>直接接入并获得完整操作权限。<br>
+              这等同于授予远端设备<b>完全的 AI 代理操控权</b>（包括浏览器、命令执行等）。仅建议在完全可信的局域网环境中使用。
+            </div>
+
+            <div class="sep"></div>
+
+            <!-- 命令执行安全 -->
+            <div class="grid">
+              <div style="grid-column: span 6;" class="field">
+                <div class="label"><span>命令执行安全策略 (tools.exec.security)</span></div>
+                <select class="input" id="device-exec-security">
+                  <option value="ask">ask（每次确认，推荐）</option>
+                  <option value="deny">deny（禁止执行）</option>
+                  <option value="allow">allow（自动允许）</option>
+                </select>
+                <div class="muted small" style="margin-top:4px">控制 AI 代理在远端节点上执行命令时的审批策略</div>
+              </div>
+              <div style="grid-column: span 6;" class="field">
+                <div class="label"><span>禁止执行的命令 (denyCommands)</span></div>
+                <textarea class="input" id="device-deny-commands" rows="3" placeholder="每行一个命令，如：&#10;rm -rf /&#10;shutdown&#10;reboot" style="font-family:var(--mono);font-size:12px"></textarea>
+                <div class="muted small" style="margin-top:4px">在 gateway.nodes.denyCommands 中配置，禁止 Node 执行的命令</div>
+              </div>
+            </div>
+
+            <div class="row" style="margin-top:12px">
+              <button class="btn btn-primary" id="btn-device-save-security">保存安全配置</button>
+              <button class="btn btn-warning" id="btn-device-restart-gw" style="display:none">重启 Gateway 生效</button>
             </div>
           </div>
 
-          <!-- 安装指引 -->
+          <!-- 使用说明 -->
           <div class="card" style="grid-column: span 12;">
             <details>
-              <summary style="font-weight:900;font-size:16px;cursor:pointer">📖 Chrome 插件安装与使用指引（点击展开）</summary>
+              <summary style="font-weight:900;font-size:16px;cursor:pointer">📖 Node 模式说明（点击展开）</summary>
               <div class="sep"></div>
-
-              <div style="padding:4px 0">
-                <div style="font-weight:700;font-size:14px;margin-bottom:8px">官方插件：OpenClaw Browser Bridge</div>
-                <div class="muted small" style="line-height:1.7;margin-bottom:12px">
-                  远端浏览器安装 <b>OpenClaw Browser Bridge</b> 插件后，插件会通过 WSS/WebSocket <b>主动连接</b>到本服务器（经由 Caddy HTTPS 转发）。<br>
-                  ✅ 不需要命令行启动 Chrome　✅ 不需要在远端开放任何端口　✅ 可穿越 NAT/防火墙　✅ 配对码 + 密码双重认证
-                </div>
-                <div style="margin-bottom:16px">
-                  <button class="btn btn-primary" id="btn-browser-ext-download" style="font-size:14px">📥 下载插件 (OpenClaw-Browser-Bridge.zip)</button>
-                  <span class="muted small" style="margin-left:8px">下载后解压，在 Chrome 中加载已解压的扩展程序</span>
-                </div>
-              </div>
-
-              <div style="font-weight:700;font-size:14px;margin-bottom:8px">安装步骤</div>
               <div style="line-height:1.8;font-size:13px">
                 <div style="margin-bottom:12px">
-                  <b>步骤 1：获取插件</b><br>
-                  <span class="muted small">点击上方「下载插件」按钮下载 ZIP 文件，然后解压到任意目录。<br>
-                  或者在已安装 OpenClaw 的机器上执行：<code style="user-select:all">openclaw browser extension install</code></span>
+                  <b>什么是 Node 模式？</b><br>
+                  <span class="muted small">远端机器运行 <code>openclaw node run</code> 后，会自动连接到 Gateway 并注册为一个 Node 节点。
+                  Gateway 可以通过该节点远程操控浏览器（Headless Chrome）和执行命令。</span>
                 </div>
                 <div style="margin-bottom:12px">
-                  <b>步骤 2：加载插件到 Chrome</b><br>
+                  <b>支持平台</b><br>
                   <span class="muted small">
-                    ① 在远端机器的 Chrome 地址栏输入 <code style="user-select:all">chrome://extensions</code> 并回车<br>
-                    ② 打开右上角 <b>「开发者模式」</b>开关<br>
-                    ③ 点击 <b>「加载已解压的扩展程序」</b><br>
-                    ④ 选择解压后的插件文件夹<br>
-                    ⑤ 插件加载后，工具栏会出现图标，点击 📌 固定到工具栏
+                    ✅ <b>macOS</b> — 完整支持，推荐使用 <code>npm i -g openclaw</code> 安装<br>
+                    ✅ <b>Linux</b> — 完整支持（Ubuntu / Debian / CentOS 等），Docker 容器中也可运行<br>
+                    ✅ <b>Windows</b> — 完整支持，需 Node.js 18+ 环境<br>
+                    ❌ <b>iOS / Android</b> — 不支持。移动端无法运行 Node.js 和 Headless Chrome，因此不能作为远端 Node 节点。移动设备可以通过浏览器访问 Web 管理面板进行管理和监控，但无法被 AI 代理远程操控。
                   </span>
                 </div>
                 <div style="margin-bottom:12px">
-                  <b>步骤 3：信任证书（自签名证书时需要）</b><br>
+                  <b>连接方式</b><br>
                   <span class="muted small">
-                    ① 在远端 Chrome 中打开面板 HTTPS 地址（如 <code style="user-select:all" id="browser-guide-server-url">https://192.168.x.x</code>）<br>
-                    ② 浏览器会提示"您的连接不是私密连接"，点击 <b>「高级」→「继续前往」</b><br>
-                    ③ 看到面板登录页即代表证书已被信任<br>
-                    ⚠️ 信任操作每个浏览器只需做一次，后续插件可直接通过 WSS 连接
+                    🔒 <b>TLS 加密</b> — 通过 Caddy 独立 TLS 端口代理到 Gateway，命令已自动包含证书兼容设置：<br>
+                    <code>NODE_TLS_REJECT_UNAUTHORIZED=0 OPENCLAW_GATEWAY_TOKEN=&lt;token&gt; openclaw node run --host &lt;ip&gt; --port &lt;tls_port&gt; --tls</code><br>
+                    💡 TLS 端口在安装时由用户指定，Caddy 自动提供 TLS 证书。
                   </span>
                 </div>
                 <div style="margin-bottom:12px">
-                  <b>步骤 4：配置连接</b><br>
+                  <b>前置要求</b><br>
                   <span class="muted small">
-                    ① 在上方「配对码管理」中点击 <b>「生成新配对码」</b>，获得 6 位配对码<br>
-                    ② 点击远端 Chrome 工具栏的插件图标，打开弹窗<br>
-                    ③ 填入本服务器 HTTPS 地址（如 <code style="user-select:all">https://192.168.x.x</code>）<br>
-                    ④ 填入配对码，如果面板设置了登录密码也一并填入<br>
-                    ⑤ 点击「连接」，状态变为绿色即成功
+                    ① 远端机器需安装 Node.js 18+（<code>node --version</code> 验证）<br>
+                    ② 安装 <code>openclaw</code> CLI（<code>npm i -g openclaw</code> 或 <code>brew install openclaw-cli</code>）<br>
+                    ③ 远端机器需安装 Chrome / Chromium（Node 会自动管理 Headless 实例）<br>
+                    ④ 远端机器需能访问到本 Gateway 的地址（局域网 / Tailscale / WireGuard / 公网）
                   </span>
                 </div>
                 <div style="margin-bottom:12px">
-                  <b>步骤 5：验证</b><br>
+                  <b>安全模型</b><br>
                   <span class="muted small">
-                    连接成功后，上方「已连接的浏览器」区域会显示该设备。
-                    点击「测试」按钮可以获取远端浏览器的标签页列表，确认控制链路正常。
+                    ① Node 配对需要 Gateway Auth Token + 人工审批（除非开启自动审批）<br>
+                    ② 配对后 Node 获得 operator 级别权限，可被 AI 代理远程操控<br>
+                    ③ 可通过 <code>denyCommands</code> 和 <code>tools.exec.security</code> 限制远端命令执行<br>
+                    ④ 建议仅在可信局域网或 VPN 环境中使用
                   </span>
                 </div>
-              </div>
-
-              <div class="sep"></div>
-              <div class="muted small" style="padding:8px 12px;background:#1a2a1a;border-radius:6px;color:#3fb950;line-height:1.6">
-                💡 <b>安全说明</b>：插件通过 WSS（加密 WebSocket）连接，使用配对码 + 密码双重认证，连接仅在局域网内建立。
-                删除配对码会立即断开对应的浏览器连接。建议仅在可信的局域网环境中使用此功能。<br>
-                📚 详细文档：<a href="https://docs.openclaw.ai/tools/browser" target="_blank" rel="noopener" style="color:#58a6ff">docs.openclaw.ai/tools/browser</a>
               </div>
             </details>
-          </div>
-        </div>
-      </section>
-
-      <!-- Trading -->
-      <section class="page" id="page-trading" data-title="交易系统">
-        <div class="grid">
-          <div class="card" style="grid-column: span 12;">
-            <div class="row" style="justify-content:space-between">
-              <div>
-                <div style="font-weight:900;font-size:18px">交易系统</div>
-                <div class="muted" style="margin-top:4px;font-size:13px">独立容器应用 · OpenClaw 会定期自动更新代码</div>
-              </div>
-              <div class="row">
-                <button class="btn" id="btn-trading-refresh">刷新</button>
-              </div>
-            </div>
-            <div class="sep"></div>
-
-            <div id="trading-not-installed">
-              <div class="grid">
-                <div style="grid-column: span 6;" class="field"><div class="label"><span>GitHub Token</span></div><input class="input" type="password" id="trading-gh-token" /></div>
-                <div style="grid-column: span 6;" class="field"><div class="label"><span>仓库地址</span></div><input class="input" id="trading-repo" placeholder="https://github.com/user/repo" /></div>
-              </div>
-              <div class="row" style="margin-top:12px">
-                <button class="btn btn-primary" id="btn-trading-install">下载安装</button>
-              </div>
-              <div class="muted small" id="trading-install-status" style="margin-top:10px"></div>
-            </div>
-
-            <div id="trading-installed" hidden>
-              <div class="row" style="justify-content:space-between">
-                <div class="row">
-                  <span class="badge">版本/Commit</span>
-                  <span id="trading-commit" class="muted"></span>
-                </div>
-                <div class="row">
-                  <button class="btn btn-warning" id="btn-trading-update">更新</button>
-                </div>
-              </div>
-              <div class="sep"></div>
-              <div class="grid">
-                <div style="grid-column: span 6;">
-                  <h2>策略参数（JSON）</h2>
-                  <textarea class="input" id="strategy-params" style="min-height:220px;font-family:var(--mono)"></textarea>
-                  <div class="row" style="margin-top:10px">
-                    <button class="btn btn-primary" id="btn-strategy-save">保存策略参数</button>
-                  </div>
-                </div>
-                <div style="grid-column: span 6;">
-                  <h2>自动交易</h2>
-                  <div class="muted small">默认建议关闭。开启会使用真实资金下单，请自行确认风险。</div>
-                  <div class="sep"></div>
-                  <div class="row">
-                    <button class="btn btn-danger" id="btn-auto-trade">（占位）开关</button>
-                    <span class="dim small">当前页仅展示，实际接入后再打通。</span>
-                  </div>
-                </div>
-              </div>
-            </div>
           </div>
         </div>
       </section>

@@ -1582,6 +1582,7 @@ function Get-DeployConfig {
 
     $config = @{
         GatewayPort  = [int]$OPENCLAW_PORT
+        GatewayTlsPort = 0
         WebPort      = [int]$WEB_PANEL_PORT
         HttpPort     = 0
         HttpsPort    = 0
@@ -1827,27 +1828,23 @@ function Get-DeployConfig {
     $config.SshPort = $sshPort
     $config.PortArgs += @("-p", "$($config.SshPort):22")
 
-    # ─── 远端浏览器控制（仅局域网 IP 模式提供选项）─────────
-    $isLanIp = $false
-    if ($config.Domain -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') {
-        if ($config.Domain -match '^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.)') {
-            $isLanIp = $true
+    # Gateway TLS 端口（Node 远程接入，所有 HTTPS 模式通用）
+    $gwTlsPort = Find-AvailablePort -PreferredPort 18790 -RangeStart 18790 -RangeEnd 18899
+    Write-Host ""
+    Write-Host "  💡 Gateway TLS 端口用于远端 Node 通过 TLS 加密连接到 Gateway" -ForegroundColor DarkGray
+    Write-Host "  Gateway TLS 端口（Node远程接入）[默认 ${gwTlsPort}]: " -NoNewline -ForegroundColor White
+    $customGwTls = Read-Host
+    if ($customGwTls -match '^\d+$' -and [int]$customGwTls -ge 1 -and [int]$customGwTls -le 65535) {
+        $gwTlsPort = [int]$customGwTls
+        if (-not (Test-PortAvailable $gwTlsPort)) {
+            $procInfo = Get-PortProcess $gwTlsPort
+            $procLabel = if ($procInfo) { " ($procInfo)" } else { "" }
+            Write-Warn "端口 $gwTlsPort 已被占用${procLabel}"
+            $gwTlsPort = Find-AvailablePort -PreferredPort $gwTlsPort -RangeStart 18790 -RangeEnd 18899
         }
     }
-    if ($isLanIp) {
-        Write-Host ""
-        Write-Host "  🌐 检测到局域网环境 ($($config.Domain))，可开启远端浏览器控制功能。" -ForegroundColor White
-        Write-Host "     该功能允许局域网内其他电脑上的 Chrome 通过插件连接到本服务器，" -ForegroundColor DarkGray
-        Write-Host "     AI 代理可远程操控浏览器。" -ForegroundColor DarkGray
-        Write-Host "     是否开启远端浏览器控制？[y/N] : " -NoNewline -ForegroundColor White
-        $bbChoice = (Read-Host).Trim().ToLower()
-        if ($bbChoice -eq 'y' -or $bbChoice -eq 'yes') {
-            $config.BrowserBridgeEnabled = $true
-            Write-OK "已开启远端浏览器控制（通过 HTTPS/WSS 端口连接，无需额外端口）"
-        } else {
-            Write-Info "已跳过远端浏览器控制"
-        }
-    }
+    $config.GatewayTlsPort = $gwTlsPort
+    $config.PortArgs += @("-p", "$($config.GatewayTlsPort):18790")
 
     # 显示配置摘要
     Write-Host ""
@@ -1857,10 +1854,8 @@ function Get-DeployConfig {
         Write-Host "     HTTP   $($config.HttpPort) → 容器 80  (证书验证+跳转)" -ForegroundColor Gray
     }
     Write-Host "     HTTPS  $($config.HttpsPort) → 容器 443 (主入口)" -ForegroundColor Gray
+    Write-Host "     GW-TLS $($config.GatewayTlsPort) → 容器 18790 (Node远程接入)" -ForegroundColor Gray
     Write-Host "     SSH    $($config.SshPort) → 容器 22  (远程登录)" -ForegroundColor Gray
-    if ($config.BrowserBridgeEnabled) {
-        Write-Host "     浏览器控制: 已开启（通过 HTTPS/WSS）" -ForegroundColor Gray
-    }
     if ($config.CertMode -eq "internal") {
         Write-Host "     证书: 自签证书（Caddy Internal）" -ForegroundColor Yellow
     } else {
@@ -1884,6 +1879,7 @@ function Get-DeployConfig {
         if ($config.HttpPort -and $config.HttpPort -gt 0) { $fwPortList += $config.HttpPort }
     }
     if ($config.HttpsPort -and $config.HttpsPort -gt 0) { $fwPortList += $config.HttpsPort }
+    if ($config.GatewayTlsPort -and $config.GatewayTlsPort -gt 0) { $fwPortList += $config.GatewayTlsPort }
     if ($config.SshPort -and $config.SshPort -gt 0) { $fwPortList += $config.SshPort }
     $fwPortsText = ($fwPortList | Sort-Object -Unique) -join ','
     $defaultAutoOpen = "Y"
@@ -1995,6 +1991,7 @@ function Show-Completion {
             if ($HttpPort -and $HttpPort -gt 0) { $portList += $HttpPort }
         }
         if ($HttpsPort -and $HttpsPort -gt 0) { $portList += $HttpsPort }
+        if ($script:actualGatewayTlsPort -and $script:actualGatewayTlsPort -gt 0) { $portList += $script:actualGatewayTlsPort }
         if ($SshPort -and $SshPort -gt 0) { $portList += $SshPort }
         if ($portList.Count -gt 0 -and $AutoOpenFirewall) {
             $ports = ($portList | Sort-Object -Unique) -join ','
@@ -3236,6 +3233,7 @@ function Main {
                     $script:upgradeMode = $true
                     $deployConfig = @{
                         GatewayPort  = if ($upgradeConfig.port) { [int]$upgradeConfig.port } else { [int]$OPENCLAW_PORT }
+                        GatewayTlsPort = if ($upgradeConfig.gateway_tls_port) { [int]$upgradeConfig.gateway_tls_port } else { 18790 }
                         WebPort      = if ($upgradeConfig.web_port) { [int]$upgradeConfig.web_port } else { [int]$WEB_PANEL_PORT }
                         HttpPort     = if ($upgradeConfig.http_port) { [int]$upgradeConfig.http_port } else { 0 }
                         HttpsPort    = if ($upgradeConfig.https_port) { [int]$upgradeConfig.https_port } else { 0 }
@@ -3265,8 +3263,10 @@ function Main {
                         )
                     }
                     $deployConfig.PortArgs += @("-p", "$($deployConfig.SshPort):22")
+                    $deployConfig.PortArgs += @("-p", "$($deployConfig.GatewayTlsPort):18790")
 
                     $script:actualGatewayPort = $deployConfig.GatewayPort
+                    $script:actualGatewayTlsPort = $deployConfig.GatewayTlsPort
                     $script:actualPanelPort   = $deployConfig.WebPort
                     $script:deployDomain      = $deployConfig.Domain
                     $script:certMode          = $deployConfig.CertMode
@@ -3969,6 +3969,7 @@ function Main {
                 $requiredMappings += @{ HostPort = [int]$deployConfig.WebPort; ContainerPort = 3000 }
             }
             $requiredMappings += @{ HostPort = [int]$deployConfig.SshPort; ContainerPort = 22 }
+            $requiredMappings += @{ HostPort = [int]$deployConfig.GatewayTlsPort; ContainerPort = 18790 }
 
             $conflicts = @()
             foreach ($m in $requiredMappings) {
@@ -4029,6 +4030,7 @@ function Main {
                     elseif ($c.ContainerPort -eq 80) { $deployConfig.HttpPort = $newPort }
                     elseif ($c.ContainerPort -eq 443) { $deployConfig.HttpsPort = $newPort }
                     elseif ($c.ContainerPort -eq 22) { $deployConfig.SshPort = $newPort }
+                    elseif ($c.ContainerPort -eq 18790) { $deployConfig.GatewayTlsPort = $newPort }
                 }
 
                 if ($deployConfig.HttpsEnabled) {
@@ -4049,6 +4051,7 @@ function Main {
                     )
                 }
                 $deployConfig.PortArgs += @("-p", "$($deployConfig.SshPort):22")
+                $deployConfig.PortArgs += @("-p", "$($deployConfig.GatewayTlsPort):18790")
 
                 $script:actualGatewayPort = $deployConfig.GatewayPort
                 $script:actualPanelPort   = $deployConfig.WebPort
@@ -4117,6 +4120,7 @@ function Main {
             # Write config for container's start-services.sh (Caddy reads domain from here)
             $dockerConfigJson = @{
                 port       = $deployConfig.GatewayPort
+                gateway_tls_port = $deployConfig.GatewayTlsPort
                 web_port   = $deployConfig.WebPort
                 http_port  = $deployConfig.HttpPort
                 https_port = $deployConfig.HttpsPort
@@ -4280,6 +4284,7 @@ function Main {
                             if ($containerPort -eq 3000)  { $deployConfig.WebPort = $newPort }
                             if ($containerPort -eq 80)    { $deployConfig.HttpPort = $newPort }
                             if ($containerPort -eq 443)   { $deployConfig.HttpsPort = $newPort }
+                            if ($containerPort -eq 18790) { $deployConfig.GatewayTlsPort = $newPort }
 
                             $runArgs[$i + 1] = "${ipPrefix}${newPort}:${containerPort}"
                         }
@@ -4535,6 +4540,9 @@ function Main {
                         }
                         if ($deployConfig.HttpsPort -and $deployConfig.HttpsPort -gt 0) {
                             $fwPortList += $deployConfig.HttpsPort
+                        }
+                        if ($deployConfig.GatewayTlsPort -and $deployConfig.GatewayTlsPort -gt 0) {
+                            $fwPortList += $deployConfig.GatewayTlsPort
                         }
                     } else {
                         $fwPortList += $deployConfig.GatewayPort

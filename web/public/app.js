@@ -340,8 +340,7 @@ const ROUTES = [
   { id: 'openclaw-engine', title: 'OpenClaw 控制台' },
   { id: 'openclaw-ai', title: '接入模型配置' },
   { id: 'messaging', title: '消息平台' },
-  { id: 'browser', title: '远端浏览器控制' },
-  { id: 'trading', title: '交易系统' },
+  { id: 'browser', title: '远端设备管理' },
   { id: 'plugins', title: '插件市场' },
   { id: 'terminal', title: '终端' },
   { id: 'settings', title: '系统设置' },
@@ -375,11 +374,10 @@ function setActiveRoute(route){
 
   // hooks
   if (route === 'dashboard') refreshStatus();
-  if (route === 'openclaw-engine') { refreshOpenClaw(); loadPairingList(); }
+  if (route === 'openclaw-engine') { refreshOpenClaw(); }
   if (route === 'openclaw-ai') { loadAIConfig(); }
   if (route === 'messaging') { loadMessagingConfig(); }
-  if (route === 'browser') loadBrowserConfig();
-  if (route === 'trading') refreshTrading();
+  if (route === 'browser') loadDeviceManagement();
   if (route === 'plugins') refreshPlugins();
   if (route === 'terminal') {
     bindTerminalInteraction();
@@ -638,12 +636,10 @@ async function refreshStatus(){
     statusEl.innerHTML = `Gateway <span class="gw-label ${cls}">${online ? 'Online' : 'Offline'}</span>`;
   }
 
-  // 局域网环境始终显示远端浏览器控制 tab
+  // 远端设备管理 tab 始终可见
   const browserNav = document.querySelector('#nav a[data-route="browser"]');
   if (browserNav) {
-    const host = location.hostname;
-    const isLan = /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|localhost$)/.test(host);
-    browserNav.style.display = (isLan || s.browserBridgeEnabled) ? '' : 'none';
+    browserNav.style.display = '';
   }
 
     const elapsed = ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt;
@@ -1609,60 +1605,6 @@ $('btn-oc-refresh').addEventListener('click', async ()=>{
   const r = await refreshOpenClaw({ retries: 1 });
   if (r?.error) toast('状态刷新失败', r.error);
 });
-
-$('btn-pairing-refresh')?.addEventListener('click', () => loadPairingList());
-
-async function loadPairingList() {
-  const listEl = $('pairing-pending-list');
-  if (!listEl) return;
-  try {
-    const r = await api('/api/openclaw/pairing/list');
-    if (!r.success) { listEl.innerHTML = '<div class="muted small">读取失败: ' + esc(r.error || '') + '</div>'; return; }
-    const pending = r.pending || [];
-    if (!pending.length) {
-      listEl.innerHTML = '<div class="muted small" style="color:#8b949e">暂无待审批的配对请求</div>';
-      return;
-    }
-    listEl.innerHTML = pending.map((p) => {
-      const age = Math.round((Date.now() - (p.ts || 0)) / 1000);
-      const ageStr = age < 60 ? age + '秒前' : Math.round(age / 60) + '分钟前';
-      const name = esc(p.displayName || p.clientId || '未知设备');
-      const plat = esc(p.platform || '');
-      const role = esc(p.role || 'operator');
-      return '<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:#1a1a2e;border-radius:6px;margin-bottom:4px">'
-        + '<span style="flex:1;font-size:12px"><b>' + name + '</b>'
-        + (plat ? ' <span class="muted small">(' + plat + ')</span>' : '')
-        + ' · <span class="muted small">' + role + '</span>'
-        + ' · <span class="muted small">' + ageStr + '</span></span>'
-        + '<button class="btn btn-primary" style="font-size:12px;padding:2px 12px" data-approve-id="' + esc(p.requestId) + '">审批通过</button>'
-        + '</div>';
-    }).join('');
-    listEl.querySelectorAll('[data-approve-id]').forEach((btn) => {
-      btn.addEventListener('click', () => approvePairing(btn.dataset.approveId, btn));
-    });
-  } catch (e) {
-    listEl.innerHTML = '<div class="muted small" style="color:#ff453a">加载失败</div>';
-  }
-}
-
-async function approvePairing(requestId, btn) {
-  const resultEl = $('pairing-result');
-  btn.disabled = true; btn.textContent = '审批中...';
-  if (resultEl) { resultEl.textContent = ''; resultEl.style.color = ''; }
-  try {
-    const r = await api('/api/openclaw/pairing/approve', { method: 'POST', body: { requestId } });
-    if (r.success) {
-      if (resultEl) { resultEl.textContent = '✅ 审批成功 (deviceId: ' + (r.deviceId || '').slice(0, 8) + '…)'; resultEl.style.color = '#30d158'; }
-      setTimeout(() => loadPairingList(), 500);
-    } else {
-      if (resultEl) { resultEl.textContent = '❌ ' + (r.error || '审批失败'); resultEl.style.color = '#ff453a'; }
-    }
-  } catch (e) {
-    if (resultEl) { resultEl.textContent = '❌ 网络错误'; resultEl.style.color = '#ff453a'; }
-  } finally {
-    btn.disabled = false; btn.textContent = '审批通过';
-  }
-}
 
 // --- Config Export ---
 $('btn-oc-config-export')?.addEventListener('click', async () => {
@@ -3179,218 +3121,187 @@ qa('[data-save-msg]').forEach(btn => {
 });
 
 // ------------------------
-// 远端浏览器控制 (插件方式)
+// 远端设备管理 (Node 模式)
 // ------------------------
-let _browserPairCodes = [];
-let _browserOnline = [];
-
-async function loadBrowserConfig(){
-  const d = await api('/api/browser/config');
-  if (d.error){ toast('加载浏览器配置失败', d.error); return; }
-
-  // 状态卡片
-  const gwOk = d.gatewayBrowser?.listening;
-  $('browser-gw-status').textContent = gwOk ? '✅ 已启用' : '❌ 未启用';
-  $('browser-gw-status').style.color = gwOk ? '#3fb950' : '#f85149';
-  $('browser-sandbox-status').textContent = d.sandboxEnabled ? '✅ 已启用' : '⚠️ 未启用';
-  $('browser-sandbox-status').style.color = d.sandboxEnabled ? '#3fb950' : '#d29922';
-
-  // 开关下拉
-  if ($('browser-enabled-select')) $('browser-enabled-select').value = String(!!d.browser?.enabled);
-  if ($('browser-sandbox-select')) $('browser-sandbox-select').value = String(!!d.sandboxEnabled);
-
-  // 在线浏览器
-  _browserOnline = d.connectedBrowsers || [];
-  $('browser-online-count').textContent = _browserOnline.length;
-  renderBrowserOnline();
-
-  // 配对码
-  _browserPairCodes = d.pairCodes || [];
-  renderBrowserPairCodes();
-
-  if ($('btn-browser-restart')) $('btn-browser-restart').style.display = 'none';
-
-  // 指引中动态填入服务器地址（使用专用 bridge 端口）
-  const guideUrl = $('browser-guide-server-url');
-  if (guideUrl) {
-    if (d.browserBridgeEnabled && d.browserBridgePort > 0) {
-      const host = location.hostname;
-      guideUrl.textContent = `http://${host}:${d.browserBridgePort}`;
-    } else {
-      guideUrl.textContent = location.origin;
-    }
-  }
-}
-
-function renderBrowserOnline(){
-  const el = $('browser-online-list');
-  if (!el) return;
-  if (!_browserOnline.length){
-    el.innerHTML = '<div class="muted" style="text-align:center;padding:20px">暂无在线浏览器</div>';
-    return;
-  }
-  el.innerHTML = _browserOnline.map((b, i) => `
-    <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
-      <span style="color:#3fb950;font-size:16px">●</span>
-      <b style="min-width:100px">${esc(b.name||'Chrome')}</b>
-      <span class="muted small">配对码: <code>${esc(b.pairCode)}</code></span>
-      <span class="muted small">连接于: ${new Date(b.connectedAt).toLocaleString()}</span>
-      <span style="flex:1"></span>
-      <button class="btn btn-sm" onclick="testBrowserBridge('${esc(b.pairCode)}')">测试</button>
-    </div>
-  `).join('');
-}
-
-function renderBrowserPairCodes(){
-  const el = $('browser-pair-codes-list');
-  if (!el) return;
-  if (!_browserPairCodes.length){
-    el.innerHTML = '<div class="muted" style="text-align:center;padding:12px">暂无配对码</div>';
-    return;
-  }
-  // 标记哪些在线
-  const onlineCodes = new Set(_browserOnline.map(b => b.pairCode));
-  el.innerHTML = _browserPairCodes.map(p => {
-    const online = onlineCodes.has(p.code);
-    return `
-    <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
-      <span style="color:${online ? '#3fb950' : '#666'};font-size:14px">${online ? '●' : '○'}</span>
-      <code style="font-size:15px;font-weight:700;letter-spacing:2px;user-select:all;color:#58a6ff">${esc(p.code)}</code>
-      <span style="min-width:80px">${esc(p.name||'')}</span>
-      <span class="muted small">${online ? '在线' : '离线'}</span>
-      <span class="muted small">创建: ${new Date(p.createdAt).toLocaleDateString()}</span>
-      <span style="flex:1"></span>
-      <button class="btn btn-sm" onclick="copyPairCode('${esc(p.code)}')" title="复制">📋</button>
-      <button class="btn btn-sm btn-danger" onclick="deletePairCode('${esc(p.code)}')">删除</button>
-    </div>`;
-  }).join('');
-}
-
 function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 
-async function testBrowserBridge(pairCode){
-  toast('正在测试…');
-  const r = await api('/api/browser/test', { method:'POST', body:{ pairCode } });
-  if (r.reachable){
-    const count = r.targets?.length || 0;
-    toast('✅ 连接正常', `${r.name || 'Chrome'} — 共 ${count} 个标签页`);
-  } else {
-    toast('❌ 测试失败', r.error || '');
+async function loadDeviceManagement() {
+  // 并行加载: setup command + pairing list + security config
+  const [cmdRes, pairRes, secRes] = await Promise.all([
+    api('/api/node/setup-command'),
+    api('/api/openclaw/pairing/list'),
+    api('/api/node/security')
+  ]);
+
+  // 快速连接命令
+  const cmdEl = $('device-setup-command');
+  if (cmdEl) {
+    if (cmdRes.success && cmdRes.hasToken) {
+      cmdEl.textContent = cmdRes.command;
+    } else {
+      cmdEl.textContent = cmdRes.command || '# 加载失败';
+    }
+  }
+
+  // 配对审批列表
+  renderPairingList(pairRes);
+
+  // 已配对设备列表
+  renderPairedList(pairRes);
+
+  // 安全配置
+  if (secRes.success) {
+    if ($('device-auto-approve')) $('device-auto-approve').value = String(!!secRes.autoApprove);
+    if ($('device-browser-mode')) $('device-browser-mode').value = secRes.browserMode || 'auto';
+    if ($('device-exec-security')) $('device-exec-security').value = secRes.execSecurity || 'ask';
+    if ($('device-deny-commands')) $('device-deny-commands').value = (secRes.denyCommands || []).join('\n');
+    toggleAutoApproveWarning();
   }
 }
-window.testBrowserBridge = testBrowserBridge;
 
-function copyPairCode(code){
-  navigator.clipboard.writeText(code).then(
-    () => toast('已复制配对码', code),
+function renderPairingList(r) {
+  const listEl = $('pairing-pending-list');
+  if (!listEl) return;
+  if (!r || !r.success) {
+    listEl.innerHTML = '<div class="muted small">读取失败: ' + esc(r?.error || '') + '</div>';
+    return;
+  }
+  const pending = r.pending || [];
+  if (!pending.length) {
+    listEl.innerHTML = '<div class="muted small" style="color:#8b949e">暂无待审批的配对请求</div>';
+    return;
+  }
+  listEl.innerHTML = pending.map((p) => {
+    const age = Math.round((Date.now() - (p.ts || 0)) / 1000);
+    const ageStr = age < 60 ? age + '秒前' : Math.round(age / 60) + '分钟前';
+    const name = esc(p.displayName || p.clientId || '未知设备');
+    const plat = esc(p.platform || '');
+    const mode = esc(p.clientMode || 'operator');
+    const role = esc(p.role || 'operator');
+    return '<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:#1a1a2e;border-radius:6px;margin-bottom:4px">'
+      + '<span style="flex:1;font-size:12px"><b>' + name + '</b>'
+      + (plat ? ' <span class="muted small">(' + plat + ')</span>' : '')
+      + ' · <span class="muted small">' + mode + '</span>'
+      + ' · <span class="muted small">' + role + '</span>'
+      + ' · <span class="muted small">' + ageStr + '</span></span>'
+      + '<button class="btn btn-primary" style="font-size:12px;padding:2px 12px" data-approve-id="' + esc(p.requestId) + '">审批通过</button>'
+      + '</div>';
+  }).join('');
+  listEl.querySelectorAll('[data-approve-id]').forEach((btn) => {
+    btn.addEventListener('click', () => approvePairing(btn.dataset.approveId, btn));
+  });
+}
+
+function renderPairedList(r) {
+  const listEl = $('device-paired-list');
+  if (!listEl) return;
+  if (!r || !r.success) {
+    listEl.innerHTML = '<div class="muted" style="text-align:center;padding:20px;color:#ff453a">加载失败</div>';
+    return;
+  }
+  const paired = r.paired || [];
+  if (!paired.length) {
+    listEl.innerHTML = '<div class="muted" style="text-align:center;padding:20px">暂无已配对设备</div>';
+    return;
+  }
+  listEl.innerHTML = paired.map((d) => {
+    const name = esc(d.displayName || d.clientId || '未知');
+    const plat = esc(d.platform || '');
+    const mode = esc(d.clientMode || 'operator');
+    const roles = (d.roles || [d.role || 'operator']).map(esc).join(', ');
+    const time = d.approvedAtMs ? new Date(d.approvedAtMs).toLocaleString() : '—';
+    const devId = esc(d.deviceId || '');
+    return '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);flex-wrap:wrap">'
+      + '<span style="color:#3fb950;font-size:14px">●</span>'
+      + '<b style="min-width:80px">' + name + '</b>'
+      + (plat ? '<span class="muted small">(' + plat + ')</span>' : '')
+      + '<span class="muted small">' + mode + '</span>'
+      + '<span class="muted small">角色: ' + roles + '</span>'
+      + '<span class="muted small">审批于: ' + time + '</span>'
+      + '<span style="flex:1"></span>'
+      + '<code class="muted small" title="Device ID">' + devId.slice(0, 8) + '…</code>'
+      + '<button class="btn btn-sm btn-danger" data-unpair-id="' + devId + '" style="font-size:11px;padding:2px 8px">取消配对</button>'
+      + '</div>';
+  }).join('');
+  listEl.querySelectorAll('[data-unpair-id]').forEach((btn) => {
+    btn.addEventListener('click', () => unpairDevice(btn.dataset.unpairId));
+  });
+}
+
+async function approvePairing(requestId, btn) {
+  const resultEl = $('pairing-result');
+  btn.disabled = true; btn.textContent = '审批中...';
+  if (resultEl) { resultEl.textContent = ''; resultEl.style.color = ''; }
+  try {
+    const r = await api('/api/openclaw/pairing/approve', { method: 'POST', body: { requestId } });
+    if (r.success) {
+      if (resultEl) { resultEl.textContent = '✅ 审批成功 (deviceId: ' + (r.deviceId || '').slice(0, 8) + '…)'; resultEl.style.color = '#30d158'; }
+      setTimeout(() => loadDeviceManagement(), 500);
+    } else {
+      if (resultEl) { resultEl.textContent = '❌ ' + (r.error || '审批失败'); resultEl.style.color = '#ff453a'; }
+    }
+  } catch (e) {
+    if (resultEl) { resultEl.textContent = '❌ 网络错误'; resultEl.style.color = '#ff453a'; }
+  } finally {
+    btn.disabled = false; btn.textContent = '审批通过';
+  }
+}
+
+async function unpairDevice(deviceId) {
+  if (!confirm('确定取消该设备的配对？设备将无法继续接入 Gateway。')) return;
+  const r = await api('/api/node/unpair', { method: 'POST', body: { deviceId } });
+  if (r.success) {
+    toast('已取消配对');
+    loadDeviceManagement();
+  } else {
+    toast('操作失败', r.error || '');
+  }
+}
+
+function toggleAutoApproveWarning() {
+  const warn = $('device-auto-approve-warning');
+  const val = $('device-auto-approve')?.value;
+  if (warn) warn.style.display = val === 'true' ? '' : 'none';
+}
+
+$('device-auto-approve')?.addEventListener('change', toggleAutoApproveWarning);
+
+// 复制快速连接命令
+$('btn-copy-setup-cmd')?.addEventListener('click', () => {
+  const text = $('device-setup-command')?.textContent || '';
+  navigator.clipboard.writeText(text).then(
+    () => toast('已复制连接命令'),
     () => toast('复制失败')
   );
-}
-window.copyPairCode = copyPairCode;
-
-async function deletePairCode(code){
-  if (!confirm(`确定删除配对码 ${code}？如果该设备在线将被立即断开。`)) return;
-  const r = await api(`/api/browser/pair-code/${code}`, { method:'DELETE' });
-  if (r.success){
-    toast('已删除');
-    loadBrowserConfig();
-  } else {
-    toast('删除失败', r.error || '');
-  }
-}
-window.deletePairCode = deletePairCode;
-
-// 生成新配对码
-$('btn-browser-gen-code')?.addEventListener('click', async ()=>{
-  const name = $('browser-new-name')?.value.trim() || '';
-  const r = await api('/api/browser/pair-code', { method:'POST', body:{ name } });
-  if (r.success){
-    toast('配对码已生成', r.code);
-    if ($('browser-new-name')) $('browser-new-name').value = '';
-    loadBrowserConfig();
-  } else {
-    toast('生成失败', r.error || '');
-  }
 });
 
-// 保存配置
-$('btn-browser-save-config')?.addEventListener('click', async ()=>{
-  const browserEnabled = ($('browser-enabled-select')?.value || 'false') === 'true';
-  const sandboxEnabled = ($('browser-sandbox-select')?.value || 'false') === 'true';
-  const r = await api('/api/browser/config', { method:'POST', body:{ browserEnabled, sandboxEnabled } });
-  if (r.success){
-    toast('配置已保存', '需重启 Gateway 生效');
-    if ($('btn-browser-restart')) $('btn-browser-restart').style.display = '';
+// 刷新
+$('btn-device-refresh')?.addEventListener('click', () => loadDeviceManagement());
+$('btn-pairing-refresh')?.addEventListener('click', () => loadDeviceManagement());
+
+// 保存安全配置
+$('btn-device-save-security')?.addEventListener('click', async () => {
+  const autoApprove = ($('device-auto-approve')?.value || 'false') === 'true';
+  const browserMode = $('device-browser-mode')?.value || 'auto';
+  const execSecurity = $('device-exec-security')?.value || 'ask';
+  const denyCommands = ($('device-deny-commands')?.value || '').split('\n').map(s => s.trim()).filter(Boolean);
+
+  const r = await api('/api/node/security', { method: 'POST', body: { autoApprove, browserMode, execSecurity, denyCommands } });
+  if (r.success) {
+    toast('安全配置已保存', '部分配置需重启 Gateway 生效');
+    if ($('btn-device-restart-gw')) $('btn-device-restart-gw').style.display = '';
   } else {
     toast('保存失败', r.error || '');
   }
 });
 
 // 重启 Gateway
-$('btn-browser-restart')?.addEventListener('click', async ()=>{
-  const r = await api('/api/openclaw/start', { method:'POST' });
+$('btn-device-restart-gw')?.addEventListener('click', async () => {
+  const r = await api('/api/openclaw/start', { method: 'POST' });
   toast(r.success ? 'Gateway 已重启' : '重启失败', r.error || '');
-  if (r.success){
-    if ($('btn-browser-restart')) $('btn-browser-restart').style.display = 'none';
-    setTimeout(()=> loadBrowserConfig(), 2000);
-  }
-});
-
-// 刷新
-$('btn-browser-refresh')?.addEventListener('click', loadBrowserConfig);
-
-// 下载浏览器插件
-$('btn-browser-ext-download')?.addEventListener('click', ()=>{
-  window.location.href = '/api/browser-extension/download';
-});
-
-// ------------------------
-// Trading (legacy endpoints retained)
-// ------------------------
-async function refreshTrading(){
-  const d = await api('/api/trading');
-  if (d.error) return;
-
-  $('trading-not-installed').hidden = !!d.installed;
-  $('trading-installed').hidden = !d.installed;
-
-  if (d.installed){
-    $('trading-commit').textContent = d.commit || '—';
-    $('strategy-params').value = d.strategyParams ? JSON.stringify(d.strategyParams, null, 2) : '';
-  }
-}
-
-$('btn-trading-refresh').addEventListener('click', refreshTrading);
-$('btn-trading-install').addEventListener('click', async ()=>{
-  const token = $('trading-gh-token').value;
-  const repo = $('trading-repo').value;
-  if (!token || !repo) return toast('缺少参数', '请填写 GitHub Token 与仓库地址');
-
-  $('trading-install-status').textContent = '安装中...';
-  const r = await api('/api/trading/install', { method:'POST', body:{ token, repo } });
-  if (r.success){
-    $('trading-install-status').textContent = '安装成功';
-    toast('安装成功', '');
-    setTimeout(refreshTrading, 800);
-  }else{
-    $('trading-install-status').textContent = '安装失败：' + (r.error||'');
-    toast('安装失败', r.error||'');
-  }
-});
-
-$('btn-trading-update').addEventListener('click', async ()=>{
-  const r = await api('/api/trading/update', { method:'POST' });
-  toast(r.success ? '更新成功' : '更新失败', r.output || r.error || '');
-  if (r.success) setTimeout(refreshTrading, 800);
-});
-
-$('btn-strategy-save').addEventListener('click', async ()=>{
-  try{
-    const parsed = JSON.parse($('strategy-params').value || '{}');
-    const r = await api('/api/trading', { method:'POST', body: parsed });
-    toast(r.success ? '已保存' : '保存失败', r.error||'');
-  }catch{
-    toast('JSON 格式错误', '请检查策略参数');
+  if (r.success) {
+    if ($('btn-device-restart-gw')) $('btn-device-restart-gw').style.display = 'none';
+    setTimeout(() => loadDeviceManagement(), 2000);
   }
 });
 
