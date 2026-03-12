@@ -3955,7 +3955,9 @@ function announceTabsToRelay() {
               type: target.type || 'page',
               title: target.title || '',
               url: target.url || '',
-              attached: true
+              attached: true,
+              browserContextId: target.browserContextId || 'bridge-default-context',
+              canAccessOpener: false
             },
             waitingForDebugger: false
           }
