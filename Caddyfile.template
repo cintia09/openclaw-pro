@@ -2,7 +2,16 @@ ${GLOBAL_OPTIONS}
 http://${DOMAIN_HTTP} {
     # 允许浏览器插件通过 ws:// (非 TLS) 连接 WebSocket，绕过自签名证书问题
     handle /api/ws/* {
-        reverse_proxy 127.0.0.1:3000
+        reverse_proxy 127.0.0.1:3000 {
+            header_up Upgrade {http.request.header.Upgrade}
+            header_up Connection {http.request.header.Connection}
+            header_up X-Real-IP {remote}
+            header_up X-Forwarded-For {remote}
+            flush_interval -1
+            transport http {
+                read_timeout 0
+            }
+        }
     }
     handle {
         redir https://${DOMAIN_HTTP}{uri} permanent
@@ -17,9 +26,18 @@ ${DOMAIN} {
         reverse_proxy 127.0.0.1:6080
     }
 
-    # WebSocket for log streaming
+    # WebSocket for log streaming, terminal, browser-bridge
     handle /api/ws/* {
-        reverse_proxy 127.0.0.1:3000
+        reverse_proxy 127.0.0.1:3000 {
+            header_up Upgrade {http.request.header.Upgrade}
+            header_up Connection {http.request.header.Connection}
+            header_up X-Real-IP {remote}
+            header_up X-Forwarded-For {remote}
+            flush_interval -1
+            transport http {
+                read_timeout 0
+            }
+        }
     }
 
     # API（管理面板后端）

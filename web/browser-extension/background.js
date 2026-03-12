@@ -87,12 +87,6 @@ function buildWsUrl(forceWs, port) {
 let _wssFailed = false; // 记住 wss 是否失败过，后续自动使用 ws
 let _wsPort = 0;        // 成功连接过的 ws:// 端口，0 表示未确定
 
-// IP 地址(含 IPv4/IPv6)的 HTTPS 永远无法获得有效 TLS 证书，直接跳过 WSS
-function _isIpAddress(url) {
-  const host = url.replace(/^https?:\/\//, '').replace(/[:/].*$/, '');
-  return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || /^\[/.test(host);
-}
-
 // ws:// 回退端口列表: 3001 (专用 Bridge 端口), 80 (Caddy HTTP), 3000 (Node.js 直连)
 const _WS_FALLBACK_PORTS = [3001, 80, 3000];
 let _wsPortIndex = 0; // 当前尝试的端口索引
@@ -102,7 +96,9 @@ function connect() {
   connState = 'connecting';
   broadcastState();
 
-  const needWs = _wssFailed || /^http:\/\//i.test(config.serverUrl) || (/^https:\/\//i.test(config.serverUrl) && _isIpAddress(config.serverUrl));
+  // 优先走 WSS（通过 Caddy HTTPS 转发），失败后自动回退 ws://
+  // 即使是 IP + 自签名证书，如果用户已在浏览器中信任证书，WSS 也能工作
+  const needWs = _wssFailed || /^http:\/\//i.test(config.serverUrl);
 
   let url;
   if (needWs && !_wsPort) {
