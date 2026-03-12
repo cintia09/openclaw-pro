@@ -948,14 +948,12 @@ first_time_setup() {
       echo ""
       echo -e "  ${CYAN}检测到局域网环境 (${detected_ip})${NC}"
       echo -e "  可开启远端浏览器控制：局域网内 Chrome 通过插件连接本服务器，AI 代理可远程操控浏览器。"
+      echo -e "  ${YELLOW}浏览器插件通过 HTTPS(WSS) 端口连接，无需额外端口。${NC}"
       local bb_ans=""
       read -p "  是否开启远端浏览器控制？[y/N]: " bb_ans || true
       bb_ans="$(echo "$bb_ans" | tr '[:upper:]' '[:lower:]')"
       if [ "$bb_ans" = "y" ] || [ "$bb_ans" = "yes" ]; then
         BROWSER_BRIDGE_ENABLED="true"
-        ask_port 3001 3002 "浏览器控制" 3001
-        BRIDGE_PORT="$PICKED_PORT"
-        PORT_ARGS="$PORT_ARGS -p ${BRIDGE_PORT}:3001"
       fi
     fi
 
@@ -1026,10 +1024,7 @@ EOF
             fi
             ufw allow "${SSH_PORT}/tcp"
 
-            if [ "${BROWSER_BRIDGE_ENABLED:-false}" = "true" ] && [ "${BRIDGE_PORT:-0}" -gt 0 ] 2>/dev/null; then
-                ufw allow "${BRIDGE_PORT}/tcp"
-                success "ufw 放行浏览器控制端口: ${BRIDGE_PORT}"
-            fi
+
 
             ufw --force enable
             success "ufw 防火墙已启用"
@@ -1694,9 +1689,7 @@ _do_full_update() {
     else
         PORT_ARGS="-p ${gw_port}:18789 -p ${web_port}:3000 -p ${ssh_port}:22"
     fi
-    if [ "$bridge_enabled" = "true" ] && [ "${bridge_port:-0}" -gt 0 ] 2>/dev/null; then
-        PORT_ARGS="$PORT_ARGS -p ${bridge_port}:3001"
-    fi
+
 
     # 清除旧 SSH host key（容器重建后 key 会变）
     ssh-keygen -R "[localhost]:${ssh_port}" 2>/dev/null || true

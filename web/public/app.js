@@ -738,7 +738,13 @@ async function checkForUpdate(force = false) {
       // Show/hide hot update & full update hints on settings page
       const hpBtn = $('btn-hotpatch');
       const fullNote = $('settings-full-update-note');
-      if (hpBtn) hpBtn.style.display = u.requiresFullUpdate ? 'none' : '';
+      if (hpBtn) {
+        hpBtn.style.display = u.requiresFullUpdate ? 'none' : '';
+        if (!u.requiresFullUpdate) {
+          hpBtn.textContent = '⚡ 热更新（不重启容器）';
+          hpBtn.onclick = () => doHotPatch(false);
+        }
+      }
       if (fullNote) fullNote.style.display = u.requiresFullUpdate ? '' : 'none';
     } else if (u.latestVersion) {
       if (u.currentVersion === u.latestVersion) {

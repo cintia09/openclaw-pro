@@ -3947,8 +3947,7 @@ app.get('/api/browser/config', async (req, res) => {
       gatewayBrowser,
       pairCodes,
       connectedBrowsers,
-      browserBridgeEnabled: dockerCfg.browser_bridge_enabled === true || dockerCfg.browser_bridge_enabled === 'true',
-      browserBridgePort: parseInt(dockerCfg.browser_bridge_port, 10) || 0
+      browserBridgeEnabled: dockerCfg.browser_bridge_enabled === true || dockerCfg.browser_bridge_enabled === 'true'
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -9324,46 +9323,7 @@ server.listen(PORT, '0.0.0.0', () => {
   checkOrphanInstallTask(); // C7: 启动时检测孤儿安装进程 (DFMEA T2)
   console.log(`[web] OpenClaw Web 管理面板启动: http://0.0.0.0:${PORT}`);
 
-  // ─── Browser Bridge 独立 WebSocket 端口 ─────────────────
-  // 在 PORT+1 (默认 3001) 开启独立 HTTP+WS 服务，专供浏览器插件连接
-  // 不经过 Caddy/TLS，直接 ws:// 访问，解除对 80 端口的依赖
-  // 仅在配置中开启 browser_bridge_enabled 时启动
-  const dockerCfg = readDockerConfig();
-  const bridgeEnabled = dockerCfg.browser_bridge_enabled === true || dockerCfg.browser_bridge_enabled === 'true';
-  if (WebSocketServer && browserBridgeWss && bridgeEnabled) {
-    const BRIDGE_PORT = PORT + 1;
-    const bridgeServer = http.createServer((req, res) => {
-      // 只响应健康检查
-      if (req.url === '/health') {
-        res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end('ok');
-      } else {
-        res.writeHead(404);
-        res.end();
-      }
-    });
-    bridgeServer.on('upgrade', (req, socket, head) => {
-      let pathname = '';
-      try { pathname = new URL(req.url, 'http://localhost').pathname; } catch { pathname = (req.url || '').split('?')[0]; }
-      if (pathname === '/api/ws/browser-bridge') {
-        browserBridgeWss.handleUpgrade(req, socket, head, (ws) => {
-          browserBridgeWss.emit('connection', ws, req);
-        });
-      } else {
-        socket.destroy();
-      }
-    });
-    bridgeServer.on('error', (err) => {
-      if (err?.code === 'EADDRINUSE') {
-        console.warn(`[browser-bridge] 端口 ${BRIDGE_PORT} 已被占用，独立 Bridge 服务未启动 (仍可通过主端口 ${PORT} 连接)`);
-      } else {
-        console.warn(`[browser-bridge] 独立 Bridge 服务启动失败: ${err?.message}`);
-      }
-    });
-    bridgeServer.listen(BRIDGE_PORT, '0.0.0.0', () => {
-      console.log(`[browser-bridge] 独立 WebSocket 端口: ws://0.0.0.0:${BRIDGE_PORT}/api/ws/browser-bridge`);
-    });
-  }
+  // Browser Bridge 现通过 Caddy WSS 代理（主 HTTPS 端口），不再需要独立端口
 });
 
 server.on('error', (err) => {
