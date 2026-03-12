@@ -5667,6 +5667,7 @@ function runOpenClawTask(command, title, operationType = 'installing', options =
   const escaped = String(command).replace(/'/g, `'"'"'`);
   const child = exec(`bash --noprofile --norc -lc '${escaped}'`, {
     timeout: 2700000,
+    maxBuffer: 200 * 1024 * 1024,
     env: { ...process.env, TERM: 'dumb' }
   });
   task.pid = Number(child.pid || 0) || 0;
@@ -5712,16 +5713,14 @@ function runOpenClawTask(command, title, operationType = 'installing', options =
       } else if (metadataSync?.configChanged || metadataSync?.updateCheckChanged) {
         appendInstallLog(task, `[openclaw] ${opLabel}后已同步元数据：version=${metadataSync.version}${metadataSync.tag ? ` tag=${metadataSync.tag}` : ''}\n`);
       }
-      // C3: 确保 watchdog 存活后再提交 gateway 重启 (DFMEA G1)
+      // A/B swap 已在安装脚本内完成 Gateway 停止→启动→健康检查，无需额外重启
+      // 仅确保 watchdog 存活以便后续监控
       ensureGatewayWatchdog((wdErr) => {
         if (wdErr) {
           appendInstallLog(task, `[openclaw][warn] ensureGatewayWatchdog 失败: ${wdErr.message}\n`);
         }
       });
-      const restartState = queueGatewayRestart(`${operationType}-complete`, taskId);
-      task.gatewayRestartQueued = true;
-      task.gatewayRestartState = restartState;
-      appendInstallLog(task, `[openclaw] ${opLabel}完成，已提交 Gateway 自动重启请求。\n`);
+      appendInstallLog(task, `[openclaw] ${opLabel}完成（A/B 切换已启动并验证新 Gateway）。\n`);
     }
     if (task.status === 'failed') {
       const lines = String(task.log || '')
@@ -5789,6 +5788,7 @@ function checkOrphanInstallTask() {
 function buildOpenClawUninstallCommand() {
   return [
     'set -euo pipefail',
+    'trap \'echo "[openclaw][error] 脚本异常退出 line=$LINENO exit=$?" >&2\' ERR',
     'echo "[openclaw] 开始卸载 OpenClaw..."',
     'NPM_PREFIX="$(npm config get prefix 2>/dev/null || echo /usr/local)"',
     'OPENCLAW_STATE_ROOT="/root/.openclaw"',
@@ -6240,6 +6240,7 @@ function buildOpenClawSourceInstallCommand({ repo, tag, tarballUrl }) {
 
   return [
     'set -euo pipefail',
+    'trap \'echo "[openclaw][error] 脚本异常退出 line=$LINENO exit=$?" >&2\' ERR',
     `OPENCLAW_REPO="${safeRepo}"`,
     `OPENCLAW_TAG="${safeTag.replace(/"/g, '')}"`,
     `OPENCLAW_TARBALL_URL="${safeTarball.replace(/"/g, '')}"`,
@@ -6420,18 +6421,19 @@ function buildOpenClawSourceInstallCommand({ repo, tag, tarballUrl }) {
     'rm -rf "$STAGE_SRC_DIR"',
     'mkdir -p /root/.openclaw "$WORK_BASE"',
     'cp -a "$EXTRACT_DIR" "$STAGE_SRC_DIR"',
-    'rm -rf "$PERSIST_SRC_DIR"',
-    'mv -Tf "$STAGE_SRC_DIR" "$PERSIST_SRC_DIR"',
-    'ln -sfn "$PERSIST_SRC_DIR" "$SRC_DIR"',
-    'if [ ! -f "$SRC_DIR/openclaw.mjs" ] && [ -f "$SRC_DIR/dist/openclaw.mjs" ]; then ln -sf "$SRC_DIR/dist/openclaw.mjs" "$SRC_DIR/openclaw.mjs"; fi',
-    'if [ ! -f "$SRC_DIR/openclaw.mjs" ]; then echo "[openclaw] 编译产物缺失: $SRC_DIR/openclaw.mjs"; exit 4; fi',
-    'if [ ! -f "$SRC_DIR/dist/entry.js" ] && [ -f "$SRC_DIR/dist/index.js" ]; then ln -sfn index.js "$SRC_DIR/dist/entry.js"; fi',
-    'if [ ! -f "$SRC_DIR/dist/entry.mjs" ] && [ -f "$SRC_DIR/dist/index.mjs" ]; then ln -sfn index.mjs "$SRC_DIR/dist/entry.mjs"; fi',
-    'if [ ! -f "$SRC_DIR/dist/entry.js" ] && [ ! -f "$SRC_DIR/dist/entry.mjs" ] && [ ! -f "$SRC_DIR/dist/index.js" ] && [ ! -f "$SRC_DIR/dist/index.mjs" ]; then echo "[openclaw] 编译产物缺失: $SRC_DIR/dist/entry|index.(m)js"; exit 4; fi',
+    '# A/B 模式: 安装到 staging 目录 (Gateway 不中断)',
+    'NEXT_SRC_DIR="$OPENCLAW_STATE_ROOT/openclaw-source-next"',
+    'rm -rf "$NEXT_SRC_DIR" 2>/dev/null || true',
+    'mv -Tf "$STAGE_SRC_DIR" "$NEXT_SRC_DIR"',
+    'if [ ! -f "$NEXT_SRC_DIR/openclaw.mjs" ] && [ -f "$NEXT_SRC_DIR/dist/openclaw.mjs" ]; then ln -sf "$NEXT_SRC_DIR/dist/openclaw.mjs" "$NEXT_SRC_DIR/openclaw.mjs"; fi',
+    'if [ ! -f "$NEXT_SRC_DIR/openclaw.mjs" ]; then echo "[openclaw] 编译产物缺失: $NEXT_SRC_DIR/openclaw.mjs"; exit 4; fi',
+    'if [ ! -f "$NEXT_SRC_DIR/dist/entry.js" ] && [ -f "$NEXT_SRC_DIR/dist/index.js" ]; then ln -sfn index.js "$NEXT_SRC_DIR/dist/entry.js"; fi',
+    'if [ ! -f "$NEXT_SRC_DIR/dist/entry.mjs" ] && [ -f "$NEXT_SRC_DIR/dist/index.mjs" ]; then ln -sfn index.mjs "$NEXT_SRC_DIR/dist/entry.mjs"; fi',
+    'if [ ! -f "$NEXT_SRC_DIR/dist/entry.js" ] && [ ! -f "$NEXT_SRC_DIR/dist/entry.mjs" ] && [ ! -f "$NEXT_SRC_DIR/dist/index.js" ] && [ ! -f "$NEXT_SRC_DIR/dist/index.mjs" ]; then echo "[openclaw] 编译产物缺失: $NEXT_SRC_DIR/dist/entry|index.(m)js"; exit 4; fi',
     'mkdir -p /root/.openclaw',
     'printf "{\\n  \\\"repo\\\": \\\"%s\\\",\\n  \\\"tag\\\": \\\"%s\\\",\\n  \\\"tarballUrl\\\": \\\"%s\\\",\\n  \\\"installedAt\\\": \\\"%s\\\"\\n}\\n" "$OPENCLAW_REPO" "$OPENCLAW_TAG" "$OPENCLAW_TARBALL_URL" "$(date -Iseconds)" > /root/.openclaw/openclaw-source-install.json',
-    'echo "[openclaw] source build install completed: $OPENCLAW_REPO@$OPENCLAW_TAG"',
-    'node "$SRC_DIR/openclaw.mjs" --version 2>/dev/null || node "$SRC_DIR/openclaw.mjs" -v 2>/dev/null || true'
+    'echo "[openclaw] source build staging 完成: $OPENCLAW_REPO@$OPENCLAW_TAG"',
+    'node "$NEXT_SRC_DIR/openclaw.mjs" --version 2>/dev/null || node "$NEXT_SRC_DIR/openclaw.mjs" -v 2>/dev/null || true'
   ].join('\n');
 }
 
@@ -6444,6 +6446,7 @@ function buildOpenClawReleaseAssetInstallCommand({ repo, tag, binaryAsset }) {
   const safeTag = String(tag || '').trim();
   return [
     'set -euo pipefail',
+    'trap \'echo "[openclaw][error] 脚本异常退出 line=$LINENO exit=$?" >&2\' ERR',
     `OPENCLAW_REPO="${safeRepo.replace(/"/g, '')}"`,
     `OPENCLAW_TAG="${safeTag.replace(/"/g, '')}"`,
     `OPENCLAW_ASSET_NAME="${assetName.replace(/"/g, '')}"`,
@@ -6571,16 +6574,13 @@ function buildOpenClawReleaseAssetInstallCommand({ repo, tag, binaryAsset }) {
     '    install_asset_deps https://registry.npmjs.org',
     '  fi',
     'fi',
-    'echo "[openclaw] 安装编译包到持久目录: $PERSIST_SRC_DIR"',
-    'STAGE_PERSIST_SRC_DIR="$OPENCLAW_STATE_ROOT/openclaw-source.asset.stage.$$"',
-    'rm -rf "$STAGE_PERSIST_SRC_DIR" "$PERSIST_SRC_DIR"',
-    'mkdir -p "$(dirname "$STAGE_PERSIST_SRC_DIR")"',
-    'mv -Tf "$ASSET_ROOT" "$STAGE_PERSIST_SRC_DIR"',
-    'mv -Tf "$STAGE_PERSIST_SRC_DIR" "$PERSIST_SRC_DIR"',
-    'ln -sfn "$PERSIST_SRC_DIR" "$WORK_SRC_DIR"',
+    'echo "[openclaw] 安装编译包到 staging 目录 (A/B 模式，Gateway 不中断)..."',
+    'NEXT_SRC_DIR="$OPENCLAW_STATE_ROOT/openclaw-source-next"',
+    'rm -rf "$NEXT_SRC_DIR" 2>/dev/null || true',
+    'mv -Tf "$ASSET_ROOT" "$NEXT_SRC_DIR"',
     'printf "{\\n  \\\"repo\\\": \\\"%s\\\",\\n  \\\"tag\\\": \\\"%s\\\",\\n  \\\"assetName\\\": \\\"%s\\\",\\n  \\\"assetUrl\\\": \\\"%s\\\",\\n  \\\"installedAt\\\": \\\"%s\\\"\\n}\\n" "$OPENCLAW_REPO" "$OPENCLAW_TAG" "$OPENCLAW_ASSET_NAME" "$OPENCLAW_ASSET_URL" "$(date -Iseconds)" > /root/.openclaw/openclaw-source-install.json',
-    'echo "[openclaw] release 资产安装完成: $OPENCLAW_ASSET_NAME"',
-    'node "$PERSIST_SRC_DIR/openclaw.mjs" --version 2>/dev/null || node "$PERSIST_SRC_DIR/openclaw.mjs" -v 2>/dev/null || true'
+    'echo "[openclaw] release 资产 staging 完成: $OPENCLAW_ASSET_NAME"',
+    'node "$NEXT_SRC_DIR/openclaw.mjs" --version 2>/dev/null || node "$NEXT_SRC_DIR/openclaw.mjs" -v 2>/dev/null || true'
   ].join('\n');
 }
 
@@ -6588,7 +6588,8 @@ function buildOpenClawPreferredInstallCommand(release, options = {}) {
   const mode = normalizeOpenClawInstallMode(options?.mode || process.env.OPENCLAW_INSTALL_MODE || 'auto');
   const assetCmd = buildOpenClawReleaseAssetInstallCommand(release);
   const safeAssetCmd = assetCmd || 'false';
-  const npmCmd = buildOpenClawNpmInstallCommand();
+  const targetVersion = String(release?.tag || '').replace(/^v/i, '').trim() || 'latest';
+  const npmCmd = buildOpenClawNpmInstallCommand(targetVersion);
   const sourceCmd = buildOpenClawSourceInstallCommand(release);
   const selectedAsset = String(release?.binaryAsset?.name || '').trim();
   const selectedAssetSource = String(release?.binaryAsset?.source || 'github-release').trim() || 'github-release';
@@ -6662,7 +6663,7 @@ function buildOpenClawPreferredInstallCommand(release, options = {}) {
   ].join('\n');
 
   const autoModeBlock = [
-    'if runtime_ready_and_latest; then',
+    'if current_already_at_target; then',
     '  echo "[openclaw] 当前运行版本已满足目标版本，跳过安装。"',
     '  exit 0',
     'fi',
@@ -6727,6 +6728,7 @@ function buildOpenClawPreferredInstallCommand(release, options = {}) {
 
   return [
     'set -euo pipefail',
+    'trap \'echo "[openclaw][error] 脚本异常退出 line=$LINENO exit=$?" >&2\' ERR',
     `INSTALL_MODE="${safeMode}"`,
     `TARGET_TAG="${safeTag}"`,
     'TARGET_VERSION="${TARGET_TAG#v}"',
@@ -6737,44 +6739,64 @@ function buildOpenClawPreferredInstallCommand(release, options = {}) {
     'echo "[openclaw] install mode: ${INSTALL_MODE}"',
     'echo "[openclaw] release tag: ${TARGET_TAG:-unknown}"',
     'echo "[openclaw] selected release asset: ${RELEASE_ASSET_INFO} (source=${RELEASE_ASSET_SOURCE})"',
+    'NEXT_SRC_DIR="/root/.openclaw/openclaw-source-next"',
+    'PREV_SRC_DIR="/root/.openclaw/openclaw-source-prev"',
+    'PERSIST_SRC_DIR="/root/.openclaw/openclaw-source"',
+    'WORK_SRC_DIR="/root/.openclaw/openclaw"',
+    '# 清理残留 staging 目录',
+    'rm -rf "$NEXT_SRC_DIR" 2>/dev/null || true',
     'verify_runtime_entry() {',
-    '  if [ -f /root/.openclaw/openclaw-source/openclaw.mjs ]; then',
-    '    if [ ! -f /root/.openclaw/openclaw-source/dist/entry.js ] && [ ! -f /root/.openclaw/openclaw-source/dist/entry.mjs ] && [ ! -f /root/.openclaw/openclaw-source/dist/index.js ] && [ ! -f /root/.openclaw/openclaw-source/dist/index.mjs ]; then',
+    '  local check_dir="${1:-$NEXT_SRC_DIR}"',
+    '  if [ -f "$check_dir/openclaw.mjs" ]; then',
+    '    if [ ! -f "$check_dir/dist/entry.js" ] && [ ! -f "$check_dir/dist/entry.mjs" ] && [ ! -f "$check_dir/dist/index.js" ] && [ ! -f "$check_dir/dist/index.mjs" ]; then',
     '      return 1',
     '    fi',
     '    if command -v timeout >/dev/null 2>&1; then',
-    '      timeout 30 node --experimental-sqlite /root/.openclaw/openclaw-source/openclaw.mjs --version >/dev/null 2>&1 || return 1',
+    '      timeout 30 node --experimental-sqlite "$check_dir/openclaw.mjs" --version >/dev/null 2>&1 || return 1',
     '    else',
-    '      node --experimental-sqlite /root/.openclaw/openclaw-source/openclaw.mjs --version >/dev/null 2>&1 || return 1',
+    '      node --experimental-sqlite "$check_dir/openclaw.mjs" --version >/dev/null 2>&1 || return 1',
     '    fi',
     '    return 0',
     '  fi',
-    '  if command -v openclaw >/dev/null 2>&1 || [ -x /root/.npm-global/bin/openclaw ] || [ -x /usr/local/bin/openclaw ]; then',
-    '    return 0',
+    '  # 仅当检查当前运行目录(PERSIST_SRC_DIR)时才 fallback 到全局命令',
+    '  if [ "$check_dir" = "$PERSIST_SRC_DIR" ]; then',
+    '    if command -v openclaw >/dev/null 2>&1 || [ -x /root/.npm-global/bin/openclaw ] || [ -x /usr/local/bin/openclaw ]; then',
+    '      return 0',
+    '    fi',
     '  fi',
     '  return 1',
     '}',
     'current_openclaw_version() {',
+    '  local check_dir="${1:-$NEXT_SRC_DIR}"',
     '  local raw=""',
-    '  if command -v openclaw >/dev/null 2>&1; then',
-    '    raw="$(openclaw --version 2>/dev/null || openclaw -v 2>/dev/null || true)"',
-    '  elif [ -x /root/.npm-global/bin/openclaw ]; then',
-    '    raw="$(/root/.npm-global/bin/openclaw --version 2>/dev/null || /root/.npm-global/bin/openclaw -v 2>/dev/null || true)"',
-    '  elif [ -x /usr/local/bin/openclaw ]; then',
-    '    raw="$(/usr/local/bin/openclaw --version 2>/dev/null || /usr/local/bin/openclaw -v 2>/dev/null || true)"',
+    '  if [ -f "$check_dir/openclaw.mjs" ]; then',
+    '    raw="$(node --experimental-sqlite "$check_dir/openclaw.mjs" --version 2>/dev/null || true)"',
     '  fi',
-    '  if [ -z "$raw" ] && [ -f /root/.openclaw/openclaw-source/package.json ]; then',
-    '    raw="$(node -e "try{const p=require(\\"/root/.openclaw/openclaw-source/package.json\\");console.log(p.version||\\"\\")}catch(e){}" 2>/dev/null || true)"',
+    '  if [ -z "$raw" ]; then',
+    '    if [ -f "$check_dir/package.json" ]; then',
+    '      raw="$(node -e "try{const p=require(\\"$check_dir/package.json\\");console.log(p.version||\\"\\")}catch(e){}" 2>/dev/null || true)"',
+    '    fi',
+    '  fi',
+    '  # 仅当检查当前运行目录时才 fallback 到全局命令',
+    '  if [ -z "$raw" ] && [ "$check_dir" = "$PERSIST_SRC_DIR" ]; then',
+    '    if command -v openclaw >/dev/null 2>&1; then',
+    '      raw="$(openclaw --version 2>/dev/null || openclaw -v 2>/dev/null || true)"',
+    '    elif [ -x /root/.npm-global/bin/openclaw ]; then',
+    '      raw="$(/root/.npm-global/bin/openclaw --version 2>/dev/null || /root/.npm-global/bin/openclaw -v 2>/dev/null || true)"',
+    '    elif [ -x /usr/local/bin/openclaw ]; then',
+    '      raw="$(/usr/local/bin/openclaw --version 2>/dev/null || /usr/local/bin/openclaw -v 2>/dev/null || true)"',
+    '    fi',
     '  fi',
     '  raw="$(printf "%s" "$raw" | tr -d "\\r" | grep -Eo "[0-9]+\\.[0-9]+\\.[0-9]+([-.][0-9A-Za-z.]+)?" | head -n1 || true)"',
     '  printf "%s" "$raw"',
     '}',
     'version_matches_target() {',
+    '  local check_dir="${1:-$NEXT_SRC_DIR}"',
     '  if [ -z "$TARGET_VERSION" ]; then',
     '    return 0',
     '  fi',
     '  local current',
-    '  current="$(current_openclaw_version)"',
+    '  current="$(current_openclaw_version "$check_dir")"',
     '  if [ -z "$current" ]; then',
     '    echo "[openclaw] WARN: 未读取到当前版本，按入口可用继续"',
     '    return 0',
@@ -6786,8 +6808,129 @@ function buildOpenClawPreferredInstallCommand(release, options = {}) {
     '  echo "[openclaw] 版本校验未通过: current=${current} target=${TARGET_VERSION}"',
     '  return 1',
     '}',
-    'runtime_ready_and_latest() { verify_runtime_entry && version_matches_target; }',
-    modeBlock
+    '# 对 staging NEXT_SRC_DIR 验证',
+    'runtime_ready_and_latest() { verify_runtime_entry "$NEXT_SRC_DIR" && version_matches_target "$NEXT_SRC_DIR"; }',
+    '# 对当前运行版本（PERSIST_SRC_DIR）验证',
+    'current_already_at_target() { verify_runtime_entry "$PERSIST_SRC_DIR" && version_matches_target "$PERSIST_SRC_DIR"; }',
+    modeBlock,
+    '',
+    '# ===== A/B 切换: 停止 Gateway → 替换 → 启动 Gateway → 验证 → 回退 =====',
+    'echo "[openclaw][A/B] 安装成功，开始执行版本切换..."',
+    'if [ ! -d "$NEXT_SRC_DIR" ]; then',
+    '  echo "[openclaw][error] staging 目录丢失: $NEXT_SRC_DIR"',
+    '  exit 50',
+    'fi',
+    '# 步骤 1: 停止 Gateway 进程',
+    'echo "[openclaw][A/B] 步骤 1/4: 停止 Gateway..."',
+    'AB_GW_PID="$(pgrep -x openclaw-gateway 2>/dev/null || pgrep -x openclaw-gatewa 2>/dev/null || true)"',
+    'AB_HAD_GATEWAY=0',
+    'if [ -n "$AB_GW_PID" ]; then',
+    '  AB_HAD_GATEWAY=1',
+    '  echo "[openclaw][A/B] 发现 Gateway PID=$AB_GW_PID，正在停止..."',
+    '  kill -TERM "$AB_GW_PID" 2>/dev/null || true',
+    '  pkill -TERM -P "$AB_GW_PID" 2>/dev/null || true',
+    '  _ab_waited=0',
+    '  while [ "$_ab_waited" -lt 5 ] && kill -0 "$AB_GW_PID" 2>/dev/null; do',
+    '    sleep 1',
+    '    _ab_waited=$((_ab_waited + 1))',
+    '  done',
+    'fi',
+    'pkill -9 -x "openclaw-gateway" 2>/dev/null || true',
+    'pkill -9 -x "openclaw-gatewa" 2>/dev/null || true',
+    '# 用 pgrep + grep -v 排除自身及父进程，防止 pkill -f 匹配脚本自身命令行',
+    '_SELF_PIDS="^($$|$PPID)\\$"',
+    'pgrep -f "openclaw.mjs gateway" 2>/dev/null | grep -vE "$_SELF_PIDS" | xargs -r kill -9 2>/dev/null || true',
+    'pgrep -f "openclaw.*gateway run" 2>/dev/null | grep -vE "$_SELF_PIDS" | xargs -r kill -9 2>/dev/null || true',
+    'sleep 1',
+    'echo "[openclaw][A/B] Gateway 已停止"',
+    '',
+    '# 步骤 2: 原子切换目录',
+    'echo "[openclaw][A/B] 步骤 2/4: 执行版本目录切换..."',
+    'rm -rf "$PREV_SRC_DIR" 2>/dev/null || true',
+    'if [ -d "$PERSIST_SRC_DIR" ] || [ -L "$PERSIST_SRC_DIR" ]; then',
+    '  mv -f "$PERSIST_SRC_DIR" "$PREV_SRC_DIR" 2>/dev/null || true',
+    '  echo "[openclaw][A/B] 旧版本已暂存到 $PREV_SRC_DIR"',
+    'fi',
+    'mv -Tf "$NEXT_SRC_DIR" "$PERSIST_SRC_DIR"',
+    'ln -sfn "$PERSIST_SRC_DIR" "$WORK_SRC_DIR"',
+    'echo "[openclaw][A/B] 版本目录切换完成: openclaw-source → 新版本"',
+    '',
+    '# 步骤 3: 启动 Gateway 并验证',
+    'echo "[openclaw][A/B] 步骤 3/4: 启动 Gateway 并验证..."',
+    'AB_GATEWAY_OK=0',
+    'AB_LAUNCH_CMD=""',
+    'if [ -f "$PERSIST_SRC_DIR/openclaw.mjs" ]; then',
+    '  AB_LAUNCH_CMD="node --experimental-sqlite $PERSIST_SRC_DIR/openclaw.mjs gateway run --force --allow-unconfigured"',
+    'elif command -v openclaw >/dev/null 2>&1; then',
+    '  AB_LAUNCH_CMD="openclaw gateway run --force --allow-unconfigured"',
+    'elif [ -x /root/.npm-global/bin/openclaw ]; then',
+    '  AB_LAUNCH_CMD="/root/.npm-global/bin/openclaw gateway run --force --allow-unconfigured"',
+    'fi',
+    'if [ -n "$AB_LAUNCH_CMD" ]; then',
+    '  GATEWAY_LOG="/root/.openclaw/logs/openclaw-gateway.log"',
+    '  mkdir -p "$(dirname "$GATEWAY_LOG")" 2>/dev/null || true',
+    '  echo "" >> "$GATEWAY_LOG"',
+    '  echo "===== [$(date -u +%FT%T.%3NZ)] A/B swap: starting new Gateway =====" >> "$GATEWAY_LOG"',
+    '  nohup bash --noprofile --norc -lc "$AB_LAUNCH_CMD" >> "$GATEWAY_LOG" 2>&1 &',
+    '  AB_GW_NEW_PID=$!',
+    '  echo "[openclaw][A/B] Gateway 已启动 PID=$AB_GW_NEW_PID，等待健康检查..."',
+    '  AB_HEALTH_WAIT=0',
+    '  AB_HEALTH_TIMEOUT=300',
+    '  AB_GW_PORT="${OPENCLAW_GATEWAY_PORT:-18789}"',
+    '  while [ "$AB_HEALTH_WAIT" -lt "$AB_HEALTH_TIMEOUT" ]; do',
+    '    if curl -sf --max-time 3 "http://127.0.0.1:${AB_GW_PORT}/health" >/dev/null 2>&1; then',
+    '      AB_GATEWAY_OK=1',
+    '      break',
+    '    fi',
+    '    if ! kill -0 "$AB_GW_NEW_PID" 2>/dev/null; then',
+    '      echo "[openclaw][A/B] Gateway 进程意外退出"',
+    '      break',
+    '    fi',
+    '    sleep 3',
+    '    AB_HEALTH_WAIT=$((AB_HEALTH_WAIT + 3))',
+    '    if [ "$((AB_HEALTH_WAIT % 15))" -eq 0 ]; then',
+    '      echo "[openclaw][A/B] 等待 Gateway 健康检查... ${AB_HEALTH_WAIT}s/${AB_HEALTH_TIMEOUT}s"',
+    '    fi',
+    '  done',
+    'else',
+    '  echo "[openclaw][A/B] 未找到 Gateway 启动命令，跳过健康检查"',
+    '  AB_GATEWAY_OK=1',
+    'fi',
+    '',
+    '# 步骤 4: 验证结果, 失败则回退',
+    'if [ "$AB_GATEWAY_OK" = "1" ]; then',
+    '  echo "[openclaw][A/B] ✅ Gateway 健康检查通过，版本切换成功!"',
+    '  rm -rf "$PREV_SRC_DIR" 2>/dev/null || true',
+    '  FINAL_VER="$(current_openclaw_version "$PERSIST_SRC_DIR")"',
+    '  echo "[openclaw][A/B] 当前版本: ${FINAL_VER:-unknown}"',
+    'else',
+    '  echo "[openclaw][A/B] ❌ Gateway 健康检查失败，执行版本回退..."',
+    '  # 停止新 Gateway',
+    '  pkill -9 -x "openclaw-gateway" 2>/dev/null || true',
+    '  pkill -9 -x "openclaw-gatewa" 2>/dev/null || true',
+    '  pgrep -f "openclaw.mjs gateway" 2>/dev/null | grep -vE "$_SELF_PIDS" | xargs -r kill -9 2>/dev/null || true',
+    '  pgrep -f "openclaw.*gateway run" 2>/dev/null | grep -vE "$_SELF_PIDS" | xargs -r kill -9 2>/dev/null || true',
+    '  sleep 1',
+    '  # 回退目录',
+    '  if [ -d "$PREV_SRC_DIR" ] || [ -L "$PREV_SRC_DIR" ]; then',
+    '    rm -rf "$PERSIST_SRC_DIR" 2>/dev/null || true',
+    '    mv -f "$PREV_SRC_DIR" "$PERSIST_SRC_DIR"',
+    '    ln -sfn "$PERSIST_SRC_DIR" "$WORK_SRC_DIR"',
+    '    echo "[openclaw][A/B] 已回退到旧版本"',
+    '    # 重启旧版本 Gateway',
+    '    if [ "$AB_HAD_GATEWAY" = "1" ] && [ -f "$PERSIST_SRC_DIR/openclaw.mjs" ]; then',
+    '      ROLLBACK_CMD="node --experimental-sqlite $PERSIST_SRC_DIR/openclaw.mjs gateway run --force --allow-unconfigured"',
+    '      echo "" >> "$GATEWAY_LOG"',
+    '      echo "===== [$(date -u +%FT%T.%3NZ)] A/B rollback: restarting old Gateway =====" >> "$GATEWAY_LOG"',
+    '      nohup bash --noprofile --norc -lc "$ROLLBACK_CMD" >> "$GATEWAY_LOG" 2>&1 &',
+    '      echo "[openclaw][A/B] 旧版本 Gateway 已重启 PID=$!"',
+    '    fi',
+    '  else',
+    '    echo "[openclaw][A/B][warn] 无旧版本可回退"',
+    '  fi',
+    '  echo "[openclaw][A/B] ❌ 更新失败且已回退，Gateway 健康检查超时"',
+    '  exit 51',
+    'fi'
   ].join('\n');
 }
 
@@ -7409,97 +7552,60 @@ app.post('/api/openclaw/uninstall', (req, res) => {
   }
 });
 
-function buildOpenClawNpmInstallCommand() {
+function buildOpenClawNpmInstallCommand(targetVersion) {
+  const safeVersion = String(targetVersion || 'latest').replace(/[^a-zA-Z0-9._-]/g, '');
+  const pkg = safeVersion === 'latest' ? 'openclaw@latest' : `openclaw@${safeVersion}`;
   return [
     'set -euo pipefail',
+    'trap \'echo "[openclaw][error] 脚本异常退出 line=$LINENO exit=$?" >&2\' ERR',
+    'echo "[openclaw][npm] A/B 隔离安装模式（Gateway 不中断）"',
     'for bin in node npm; do',
     '  if ! command -v "$bin" >/dev/null 2>&1; then',
     '    echo "[openclaw] 缺少镜像内依赖: $bin（请重新构建镜像，不在运行时安装系统依赖）"',
     '    exit 11',
     '  fi',
     'done',
-    'npm config set registry https://registry.npmmirror.com',
     'npm config set fetch-retries 6',
     'npm config set fetch-retry-mintimeout 2000',
     'npm config set fetch-retry-maxtimeout 20000',
-    'NPM_PREFIX="$(npm config get prefix 2>/dev/null || echo /usr/local)"',
     'OPENCLAW_STATE_ROOT="/root/.openclaw"',
-    'PERSIST_SRC_DIR="$OPENCLAW_STATE_ROOT/openclaw-source"',
-    'WORK_SRC_DIR="$OPENCLAW_STATE_ROOT/openclaw"',
+    'NEXT_SRC_DIR="$OPENCLAW_STATE_ROOT/openclaw-source-next"',
+    'STAGING_PREFIX="$OPENCLAW_STATE_ROOT/npm-staging"',
     'mkdir -p "$OPENCLAW_STATE_ROOT" "$OPENCLAW_STATE_ROOT/logs" "$OPENCLAW_STATE_ROOT/cache/openclaw" "$OPENCLAW_STATE_ROOT/locks"',
-    'OPENCLAW_LIB_DIR="${NPM_PREFIX}/lib/node_modules"',
-    'OPENCLAW_BIN="${NPM_PREFIX}/bin/openclaw"',
+    '# 清理上次可能残留的 staging 目录',
+    'rm -rf "$NEXT_SRC_DIR" "$STAGING_PREFIX" 2>/dev/null || true',
+    'mkdir -p "$STAGING_PREFIX"',
+    '# 选择 registry',
     'MIRROR_LATEST="$(npm view openclaw version --registry=https://registry.npmmirror.com 2>/dev/null || true)"',
     'NPMJS_LATEST="$(npm view openclaw version --registry=https://registry.npmjs.org 2>/dev/null || true)"',
-    'VERSION_QUERY_FAILED=0',
-    'if [ -z "$MIRROR_LATEST" ] && [ -z "$NPMJS_LATEST" ]; then',
-    '  VERSION_QUERY_FAILED=1',
-    '  echo "[openclaw][warn] npm view 查询失败（两个源均不可用），跳过版本对齐检查"',
-    'fi',
+    'INSTALL_REGISTRY="https://registry.npmmirror.com"',
     'if [ -n "$NPMJS_LATEST" ] && [ "$MIRROR_LATEST" != "$NPMJS_LATEST" ]; then',
     '  echo "[openclaw] 镜像最新(${MIRROR_LATEST:-unknown})落后于 npmjs(${NPMJS_LATEST})，直接使用 npmjs 源安装..."',
-    '  npm config set registry https://registry.npmjs.org',
+    '  INSTALL_REGISTRY="https://registry.npmjs.org"',
     'fi',
-    '# --- backup-then-install-in-place: 备份旧版本而非预删除 (DFMEA N1) ---',
-    'BACKUP_LIB_DIR="/root/.npm-global-backup"',
-    'rm -rf "$BACKUP_LIB_DIR" 2>/dev/null || true',
-    'if [ -d "${OPENCLAW_LIB_DIR}/openclaw" ]; then',
-    '  mkdir -p "$BACKUP_LIB_DIR"',
-    '  cp -a "${OPENCLAW_LIB_DIR}/openclaw" "$BACKUP_LIB_DIR/openclaw"',
-    '  echo "[openclaw] 旧版本已备份到 $BACKUP_LIB_DIR"',
-    'fi',
-    'rm -rf "${OPENCLAW_LIB_DIR}"/.openclaw-* >/dev/null 2>&1 || true',
     'npm cache verify >/dev/null 2>&1 || true',
-    '# --- 验证安装结果的函数 (DFMEA N4/N2) ---',
-    'verify_installed_openclaw() {',
-    '  [ -f "${OPENCLAW_LIB_DIR}/openclaw/package.json" ] || return 1',
-    '  local has_entry=0',
-    '  [ -f "${OPENCLAW_LIB_DIR}/openclaw/openclaw.mjs" ] && has_entry=1',
-    '  [ -f "${OPENCLAW_LIB_DIR}/openclaw/dist/openclaw.mjs" ] && has_entry=1',
-    '  [ -f "${OPENCLAW_LIB_DIR}/openclaw/dist/entry.js" ] && has_entry=1',
-    '  [ -f "${OPENCLAW_LIB_DIR}/openclaw/dist/index.js" ] && has_entry=1',
-    '  [ -f "${OPENCLAW_LIB_DIR}/openclaw/dist/index.mjs" ] && has_entry=1',
-    '  [ "$has_entry" = "1" ] || return 1',
-    '  if command -v openclaw >/dev/null 2>&1; then',
-    '    openclaw -v >/dev/null 2>&1 || return 1',
-    '  elif [ -x "$OPENCLAW_BIN" ]; then',
-    '    "$OPENCLAW_BIN" -v >/dev/null 2>&1 || return 1',
-    '  fi',
-    '  return 0',
-    '}',
-    '# --- 安装失败时还原备份 (DFMEA N1) ---',
-    'restore_openclaw_backup() {',
-    '  if [ -d "$BACKUP_LIB_DIR/openclaw" ]; then',
-    '    echo "[openclaw] 安装失败，还原旧版本..."',
-    '    rm -rf "${OPENCLAW_LIB_DIR}/openclaw" 2>/dev/null || true',
-    '    mv "$BACKUP_LIB_DIR/openclaw" "${OPENCLAW_LIB_DIR}/openclaw"',
-    '    npm rebuild -g openclaw 2>/dev/null || true',
-    '    echo "[openclaw] 旧版本已还原"',
-    '  else',
-    '    echo "[openclaw][warn] 无可还原的备份"',
-    '  fi',
-    '}',
+    '# --- npm install 到隔离 prefix (不影响运行中 Gateway) ---',
     'OPENCLAW_NPM_LAST_ERROR=""',
-    'run_npm_global_install() {',
-    '  local pkg="$1"',
-    '  local label="$2"',
+    'run_npm_staging_install() {',
+    '  local label="$1"',
+    '  local registry="$2"',
     '  local rc=0',
     '  local tmp_log="$OPENCLAW_STATE_ROOT/logs/npm-install-${label}.log"',
     '  rm -f "$tmp_log"',
     '  set +e',
     '  if command -v timeout >/dev/null 2>&1; then',
-    '    echo "[openclaw] ${label}: timeout 900s npm install -g ${pkg} --prefer-online --no-audit --no-fund"',
-    '    timeout 900 npm install -g "$pkg" --prefer-online --no-audit --no-fund 2>&1 | tee "$tmp_log"',
+    `    echo "[openclaw] \${label}: timeout 900s npm install -g ${pkg} --prefix $STAGING_PREFIX --registry=\${registry}"`,
+    `    timeout 900 npm install -g "${pkg}" --prefix "$STAGING_PREFIX" --registry="\${registry}" --prefer-online --no-audit --no-fund 2>&1 | tee "$tmp_log"`,
     '    rc=${PIPESTATUS[0]}',
     '  else',
-    '    echo "[openclaw] ${label}: npm install -g ${pkg} --prefer-online --no-audit --no-fund"',
-    '    npm install -g "$pkg" --prefer-online --no-audit --no-fund 2>&1 | tee "$tmp_log"',
+    `    echo "[openclaw] \${label}: npm install -g ${pkg} --prefix $STAGING_PREFIX --registry=\${registry}"`,
+    `    npm install -g "${pkg}" --prefix "$STAGING_PREFIX" --registry="\${registry}" --prefer-online --no-audit --no-fund 2>&1 | tee "$tmp_log"`,
     '    rc=${PIPESTATUS[0]}',
     '  fi',
     '  set -e',
     '  if [ "$rc" -ne 0 ]; then',
     '    if [ "$rc" -eq 124 ]; then',
-    '      OPENCLAW_NPM_LAST_ERROR="[openclaw][error] npm install 超时(900s): ${pkg}"',
+    `      OPENCLAW_NPM_LAST_ERROR="[openclaw][error] npm install 超时(900s): ${pkg}"`,
     '    else',
     '      tail_msg="$(tail -n 1 "$tmp_log" 2>/dev/null || true)"',
     '      [ -z "$tail_msg" ] && tail_msg="npm install exit=${rc}"',
@@ -7511,122 +7617,48 @@ function buildOpenClawNpmInstallCommand() {
     '    return "$rc"',
     '  fi',
     '  echo "[openclaw] ${label}: 安装成功"',
-    '  return "$rc"',
+    '  return 0',
     '}',
-    'if ! run_npm_global_install openclaw@latest "first_install"; then',
-    '  echo "[openclaw] npm install 首次失败，尝试清理并重试..."',
+    'if ! run_npm_staging_install "first_install" "$INSTALL_REGISTRY"; then',
+    '  echo "[openclaw] npm install 首次失败，尝试清理并重试(npmjs)..."',
     '  npm cache verify >/dev/null 2>&1 || true',
-    '  npm config set registry https://registry.npmjs.org',
-    '  if ! run_npm_global_install openclaw@latest "retry_install"; then',
+    '  rm -rf "$STAGING_PREFIX" 2>/dev/null || true',
+    '  mkdir -p "$STAGING_PREFIX"',
+    '  if ! run_npm_staging_install "retry_install" "https://registry.npmjs.org"; then',
     '    [ -n "$OPENCLAW_NPM_LAST_ERROR" ] && echo "$OPENCLAW_NPM_LAST_ERROR"',
-    '    restore_openclaw_backup',
+    '    rm -rf "$STAGING_PREFIX" 2>/dev/null || true',
     '    exit 31',
     '  fi',
     'fi',
-    '# 首次安装成功后验证 (DFMEA N4/N2)',
-    'if ! verify_installed_openclaw; then',
-    '  echo "[openclaw][warn] 首次安装验证失败，尝试 rebuild..."',
-    '  npm rebuild -g openclaw 2>/dev/null || true',
+    '# 验证 staging prefix 安装结果',
+    'STAGING_LIB_DIR="$STAGING_PREFIX/lib/node_modules/openclaw"',
+    'if [ ! -f "$STAGING_LIB_DIR/package.json" ]; then',
+    '  echo "[openclaw][error] staging prefix 安装后 package.json 缺失"',
+    '  rm -rf "$STAGING_PREFIX" 2>/dev/null || true',
+    '  exit 31',
     'fi',
-    '# 安装成功，清理备份',
-    'rm -rf "$BACKUP_LIB_DIR" 2>/dev/null || true',
-    'if [ ! -x "$OPENCLAW_BIN" ] && [ -f "${OPENCLAW_LIB_DIR}/openclaw/openclaw.mjs" ]; then',
-    '  ln -sf "${OPENCLAW_LIB_DIR}/openclaw/openclaw.mjs" "$OPENCLAW_BIN" || true',
+    '# 将 staging 目录移动到 NEXT_SRC_DIR 供 A/B swap 使用',
+    'rm -rf "$NEXT_SRC_DIR" 2>/dev/null || true',
+    'mv -f "$STAGING_LIB_DIR" "$NEXT_SRC_DIR"',
+    '# 确保入口文件和兼容 symlink',
+    'if [ ! -f "$NEXT_SRC_DIR/openclaw.mjs" ] && [ -f "$NEXT_SRC_DIR/dist/openclaw.mjs" ]; then',
+    '  ln -sfn "$NEXT_SRC_DIR/dist/openclaw.mjs" "$NEXT_SRC_DIR/openclaw.mjs"',
     'fi',
-    'case ":$PATH:" in',
-    '  *":${NPM_PREFIX}/bin:"*) ;;',
-    '  *) export PATH="$PATH:${NPM_PREFIX}/bin" ;;',
-    'esac',
-    'sync_openclaw_pkg_to_source() {',
-    '  NPM_ROOT="$(npm root -g 2>/dev/null || true)"',
-    '  OPENCLAW_PKG_DIR="$NPM_ROOT/openclaw"',
-    '  echo "[openclaw] npm root -g: ${NPM_ROOT:-unknown}"',
-    '  echo "[openclaw] package candidate: $OPENCLAW_PKG_DIR"',
-    '  if [ ! -d "$OPENCLAW_PKG_DIR" ]; then',
-    '    ALT_PKG_DIR="${OPENCLAW_LIB_DIR}/openclaw"',
-    '    if [ -d "$ALT_PKG_DIR" ]; then',
-    '      echo "[openclaw] npm root 未发现 openclaw，改用 prefix 路径: $ALT_PKG_DIR"',
-    '      OPENCLAW_PKG_DIR="$ALT_PKG_DIR"',
-    '    fi',
+    'if [ ! -f "$NEXT_SRC_DIR/dist/entry.js" ] && [ -f "$NEXT_SRC_DIR/dist/index.js" ]; then ln -sfn index.js "$NEXT_SRC_DIR/dist/entry.js"; fi',
+    'if [ ! -f "$NEXT_SRC_DIR/dist/entry.mjs" ] && [ -f "$NEXT_SRC_DIR/dist/index.mjs" ]; then ln -sfn index.mjs "$NEXT_SRC_DIR/dist/entry.mjs"; fi',
+    '# 语法验证',
+    'if [ -f "$NEXT_SRC_DIR/openclaw.mjs" ] && command -v node >/dev/null 2>&1; then',
+    '  if ! node --check "$NEXT_SRC_DIR/openclaw.mjs" 2>/dev/null; then',
+    '    echo "[openclaw][error] openclaw.mjs 语法检查失败"',
+    '    rm -rf "$NEXT_SRC_DIR" "$STAGING_PREFIX" 2>/dev/null || true',
+    '    exit 31',
     '  fi',
-    '  if [ ! -d "$OPENCLAW_PKG_DIR" ]; then',
-    '    echo "[openclaw] 预构建包缺失: $OPENCLAW_PKG_DIR"',
-    '    return 14',
-    '  fi',
-    '  rm -rf "$PERSIST_SRC_DIR"',
-    '  ln -sfn "$OPENCLAW_PKG_DIR" "$PERSIST_SRC_DIR"',
-    '  ln -sfn "$PERSIST_SRC_DIR" "$WORK_SRC_DIR"',
-    '  if [ ! -f "$PERSIST_SRC_DIR/openclaw.mjs" ] && [ -f "$PERSIST_SRC_DIR/dist/openclaw.mjs" ]; then',
-    '    ln -sfn "$PERSIST_SRC_DIR/dist/openclaw.mjs" "$PERSIST_SRC_DIR/openclaw.mjs"',
-    '  fi',
-    '  if [ ! -f "$PERSIST_SRC_DIR/dist/entry.js" ] && [ -f "$PERSIST_SRC_DIR/dist/index.js" ]; then ln -sfn index.js "$PERSIST_SRC_DIR/dist/entry.js"; fi',
-    '  if [ ! -f "$PERSIST_SRC_DIR/dist/entry.mjs" ] && [ -f "$PERSIST_SRC_DIR/dist/index.mjs" ]; then ln -sfn index.mjs "$PERSIST_SRC_DIR/dist/entry.mjs"; fi',
-    '  if [ ! -f "$PERSIST_SRC_DIR/openclaw.mjs" ] || { [ ! -f "$PERSIST_SRC_DIR/dist/entry.js" ] && [ ! -f "$PERSIST_SRC_DIR/dist/entry.mjs" ] && [ ! -f "$PERSIST_SRC_DIR/dist/index.js" ] && [ ! -f "$PERSIST_SRC_DIR/dist/index.mjs" ]; }; then',
-    '    echo "[openclaw] 预构建包关键产物不完整（缺少 openclaw.mjs 或 dist/entry|index.(m)js），回退源码构建"',
-    '    return 15',
-    '  fi',
-    '  return 0',
-    '}',
-    'CURRENT_VER=""',
-    'SYNC_OK=0',
-    'if sync_openclaw_pkg_to_source; then SYNC_OK=1; else SYNC_OK=0; fi',
-    'if command -v openclaw >/dev/null 2>&1; then',
-    '  CURRENT_VER="$(openclaw -v 2>/dev/null || openclaw --version 2>/dev/null || true)"',
-    'elif [ -x "$OPENCLAW_BIN" ]; then',
-    '  CURRENT_VER="$("$OPENCLAW_BIN" -v 2>/dev/null || "$OPENCLAW_BIN" --version 2>/dev/null || true)"',
     'fi',
-    '# 提取纯数字版本号（openclaw -v 输出可能含 "OpenClaw 2026.3.8 (commit)" 等前后缀）',
-    'CURRENT_VER="$(printf "%s" "$CURRENT_VER" | tr -d "\\r" | grep -Eo "[0-9]+\\.[0-9]+\\.[0-9]+([-.][-0-9A-Za-z.]+)?" | head -n1 || true)"',
-    'echo "[openclaw] version alignment check: current=${CURRENT_VER:-empty} npmjs=${NPMJS_LATEST:-empty} sync_ok=${SYNC_OK} query_failed=${VERSION_QUERY_FAILED}"',
-    'if [ "$VERSION_QUERY_FAILED" != "1" ] && { [ "$SYNC_OK" != "1" ] || { [ -n "$NPMJS_LATEST" ] && [ -n "$CURRENT_VER" ] && [ "$CURRENT_VER" != "$NPMJS_LATEST" ]; }; }; then',
-    '  if [ "$SYNC_OK" != "1" ]; then',
-    '    echo "[openclaw] 预构建包校验失败，尝试从 npmjs 重新安装一次..."',
-    '  else',
-    '    echo "[openclaw] 镜像版本(${CURRENT_VER:-unknown})落后于 npmjs 最新(${NPMJS_LATEST})，切换 npmjs 对齐..."',
-    '  fi',
-    '  npm config set registry https://registry.npmjs.org',
-    '  # === 安全对齐：backup-then-install-in-place (DFMEA N4/N2/N1) ===',
-    '  ALIGN_PKG="${NPMJS_LATEST:+openclaw@$NPMJS_LATEST}"',
-    '  ALIGN_PKG="${ALIGN_PKG:-openclaw@latest}"',
-    '  ALIGN_LABEL="npmjs对齐安装"',
-    '  ALIGN_OK=0',
-    '  # 备份当前版本',
-    '  rm -rf "$BACKUP_LIB_DIR" 2>/dev/null || true',
-    '  if [ -d "${OPENCLAW_LIB_DIR}/openclaw" ]; then',
-    '    mkdir -p "$BACKUP_LIB_DIR"',
-    '    cp -a "${OPENCLAW_LIB_DIR}/openclaw" "$BACKUP_LIB_DIR/openclaw"',
-    '    echo "[openclaw] 对齐前已备份旧版本到 $BACKUP_LIB_DIR"',
-    '  fi',
-    '  echo "[openclaw] ${ALIGN_LABEL}: 原地安装 ${ALIGN_PKG}..."',
-    '  set +e',
-    '  if command -v timeout >/dev/null 2>&1; then',
-    '    echo "[openclaw] ${ALIGN_LABEL}: timeout 900s npm install -g ${ALIGN_PKG} --prefer-online --no-audit --no-fund"',
-    '    timeout 900 npm install -g "$ALIGN_PKG" --prefer-online --no-audit --no-fund 2>&1 | tee "$OPENCLAW_STATE_ROOT/logs/npm-install-align.log"',
-    '    ALIGN_RC=${PIPESTATUS[0]}',
-    '  else',
-    '    npm install -g "$ALIGN_PKG" --prefer-online --no-audit --no-fund 2>&1 | tee "$OPENCLAW_STATE_ROOT/logs/npm-install-align.log"',
-    '    ALIGN_RC=${PIPESTATUS[0]}',
-    '  fi',
-    '  set -e',
-    '  # 验证安装结果',
-    '  if [ "$ALIGN_RC" -eq 0 ] && verify_installed_openclaw; then',
-    '    ALIGN_OK=1',
-    '    echo "[openclaw] 对齐安装成功且验证通过"',
-    '    rm -rf "$BACKUP_LIB_DIR" 2>/dev/null || true',
-    '  else',
-    '    echo "[openclaw] 对齐安装失败或验证未通过 (rc=${ALIGN_RC})"',
-    '    restore_openclaw_backup',
-    '  fi',
-    '  sync_openclaw_pkg_to_source',
-    'fi',
-    'if command -v openclaw >/dev/null 2>&1; then',
-    '  openclaw -v || openclaw --version',
-    'elif [ -x "$OPENCLAW_BIN" ]; then',
-    '  "$OPENCLAW_BIN" -v || "$OPENCLAW_BIN" --version',
-    'else',
-    '  echo "[openclaw] update failed: openclaw binary not found under ${NPM_PREFIX}/bin"',
-    '  exit 127',
-    'fi'
+    '# 版本读取验证',
+    'STAGED_VER="$(node -e "try{console.log(require(\\"/root/.openclaw/openclaw-source-next/package.json\\").version||\\"\\")}catch(e){}" 2>/dev/null || true)"',
+    'echo "[openclaw] npm staging 安装完成: version=${STAGED_VER:-unknown}"',
+    '# 清理 staging prefix',
+    'rm -rf "$STAGING_PREFIX" 2>/dev/null || true'
   ].join('\n');
 }
 
@@ -7669,6 +7701,80 @@ app.get('/api/openclaw/dependencies', (req, res) => {
     res.json({ success: true, ...audit });
   } catch (e) {
     res.status(500).json({ success: false, error: e?.message || '依赖审计失败' });
+  }
+});
+
+// --- 版本列表 API: 获取 npm 已发布版本供用户选择历史版本安装 ---
+app.get('/api/openclaw/versions', async (_req, res) => {
+  try {
+    const registries = ['https://registry.npmjs.org', 'https://registry.npmmirror.com'];
+    let versions = [];
+    for (const registry of registries) {
+      const raw = runCommandText(`npm view openclaw versions --json --registry=${registry} 2>/dev/null || true`, 15000);
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            versions = parsed.map(v => String(v).trim()).filter(Boolean);
+            break;
+          }
+        } catch {}
+      }
+    }
+    if (!versions.length) {
+      return res.json({ success: true, versions: [], error: '无法获取版本列表' });
+    }
+    // 逆序 (最新在前)
+    versions.reverse();
+    const installed = getInstalledOpenClawVersion();
+    res.json({ success: true, versions, installedVersion: installed || '' });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e?.message || '获取版本列表失败' });
+  }
+});
+
+// --- 安装指定版本 API ---
+app.post('/api/openclaw/install-version', async (req, res) => {
+  try {
+    const version = String(req.body?.version || '').trim();
+    if (!version || !/^\d+\.\d+\.\d+/.test(version)) {
+      return res.status(400).json({ success: false, error: '版本号格式无效' });
+    }
+    if (isTaskRunning(installLogs, activeInstallTaskId)) {
+      return res.json({ success: true, taskId: activeInstallTaskId, reused: true });
+    }
+    const opState = getOpenClawOperationState();
+    if (opState.type !== 'idle') {
+      return res.status(409).json({ success: false, error: `操作进行中: ${opState.type}`, operationState: opState });
+    }
+
+    const repo = resolveOpenClawSourceRepo(true);
+    // 构造 release 对象 (指定版本使用 npm 源)
+    const tag = `v${version}`;
+    const binaryAsset = resolveOpenClawNpmDistTarballAsset(tag);
+    const release = {
+      repo,
+      tag,
+      tarballUrl: `https://codeload.github.com/${repo}/tar.gz/refs/tags/${encodeURIComponent(tag)}`,
+      assets: [],
+      binaryAsset,
+      publishedAt: '',
+      name: tag
+    };
+    const mode = 'auto';
+    const command = buildOpenClawPreferredInstallCommand(release, { mode });
+    const taskId = runOpenClawTask(
+      command,
+      `安装 OpenClaw v${version}（指定版本）`,
+      'installing',
+      { release }
+    );
+    if (!taskId) {
+      return res.status(409).json({ success: false, error: '任务创建失败：存在并发操作占用' });
+    }
+    res.json({ success: true, taskId, version, release: { repo, tag } });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e?.message || '安装任务创建失败' });
   }
 });
 

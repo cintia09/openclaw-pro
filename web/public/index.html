@@ -164,21 +164,21 @@
             </div>
             <div class="sep"></div>
             <div class="grid">
-              <div class="card" style="grid-column: span 4;">
+              <div class="card" style="grid-column: span 6;">
                 <h2>安装状态</h2>
                 <div class="kpi"><div>
                   <div class="big" id="oc-installed">—</div>
                   <div class="sub" id="oc-version">—</div>
                 </div></div>
+                <div style="margin-top:12px">
+                  <h2 style="margin-bottom:6px">Gateway 状态</h2>
+                  <div class="kpi"><div>
+                    <div class="big" id="oc-gateway">—</div>
+                    <div class="sub">后台进程检测</div>
+                  </div></div>
+                </div>
               </div>
-              <div class="card" style="grid-column: span 4;">
-                <h2>Gateway</h2>
-                <div class="kpi"><div>
-                  <div class="big" id="oc-gateway">—</div>
-                  <div class="sub">后台进程检测</div>
-                </div></div>
-              </div>
-              <div class="card" style="grid-column: span 4;">
+              <div class="card" style="grid-column: span 6;">
                 <h2>操作</h2>
                 <div class="row">
                   <button class="btn btn-primary" id="btn-oc-install">安装</button>
@@ -192,8 +192,13 @@
                   <input type="file" id="config-import-file" accept=".tar.gz,.tgz,.tar,.gz,application/gzip,application/x-gzip,application/x-tar" style="display:none" />
                 </div>
                 <div class="muted small" id="oc-update-status" style="margin-top:10px">更新状态：自动检查中</div>
-                <div class="muted small" style="margin-top:4px">当前：<span id="oc-current-ver">—</span> · 最新：<span id="oc-latest-ver">—</span></div>
-                <div class="muted small" style="margin-top:10px">安装按钮会自动判断是否需要更新，详细日志请到“日志”页面查看</div>
+                <div class="muted small" style="margin-top:4px">当前：<span id="oc-current-ver">—</span> · 最新：<span id="oc-latest-ver">—</span></div>                <div class="row" style="margin-top:8px;align-items:center;gap:6px">
+                  <select id="oc-version-select" style="padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:12px;min-width:140px">
+                    <option value="">选择历史版本...</option>
+                  </select>
+                  <button class="btn" id="btn-oc-install-version" title="安装选择的指定版本" disabled>安装此版本</button>
+                  <button class="btn" id="btn-oc-load-versions" title="从 npm 加载所有可用版本列表" style="font-size:11px">加载版本列表</button>
+                </div>                <div class="muted small" style="margin-top:10px">安装按钮会自动判断是否需要更新，详细日志请到“日志”页面查看</div>
               </div>
             </div>
             <!-- 操作日志窗口 -->

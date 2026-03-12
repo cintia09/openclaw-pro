@@ -1064,6 +1064,19 @@ function syncOpenClawButtons(){
     startBtn.textContent = statusDetecting ? '检测中...' : (restartBusy ? '启动中...' : '重启 Gateway');
     startBtn.disabled = statusDetecting || !!installBusy || !!repairBusy || !!restartBusy || !canRestartGateway;
   }
+
+  const versionInstallBtn = $('btn-oc-install-version');
+  const versionSelect = $('oc-version-select');
+  const versionLoadBtn = $('btn-oc-load-versions');
+  if (versionInstallBtn) {
+    versionInstallBtn.disabled = statusDetecting || !!installBusy || !!repairBusy || !!restartBusy || !versionSelect?.value;
+  }
+  if (versionLoadBtn) {
+    versionLoadBtn.disabled = statusDetecting || !!installBusy;
+  }
+  if (versionSelect) {
+    versionSelect.disabled = statusDetecting || !!installBusy;
+  }
 }
 
 // ------------------------
@@ -1349,10 +1362,7 @@ async function refreshOpenClaw(opts = {}){
   } else {
     $('oc-version').textContent = '—';
   }
-  if (installBusyNow && installPhaseNow === 'install') {
-    const gwLabel = '安装中';
-    setStatusBadge('oc-gateway', 'pending', gwLabel, true);
-  } else if (!d.installed && !d.gatewayRunning && !restartBusyNow) {
+  if (!d.installed && !d.gatewayRunning && !restartBusyNow) {
     setStatusBadge('oc-gateway', 'offline', '未安装', false);
   } else if (restartBusyNow) {
     setStatusBadge('oc-gateway', 'pending', '启动中', true);
@@ -2151,6 +2161,81 @@ $('btn-oc-uninstall')?.addEventListener('click', async ()=>{
   } finally {
     if (!taskStarted) {
       ocUninstallRunning = false;
+      ocInstallPhase = 'auto';
+      syncOpenClawButtons();
+    }
+  }
+});
+
+// --- 历史版本选择安装 ---
+$('btn-oc-load-versions')?.addEventListener('click', async () => {
+  const btn = $('btn-oc-load-versions');
+  const sel = $('oc-version-select');
+  if (!btn || !sel) return;
+  btn.disabled = true;
+  btn.textContent = '加载中...';
+  try {
+    const r = await api('/api/openclaw/versions', { timeoutMs: 30000 });
+    if (!r?.versions?.length) {
+      toast('加载失败', r?.error || '未获取到版本列表');
+      return;
+    }
+    sel.innerHTML = '<option value="">选择历史版本...</option>';
+    for (const v of r.versions) {
+      const opt = document.createElement('option');
+      opt.value = v;
+      opt.textContent = v + (r.installedVersion === v ? ' (当前)' : '');
+      sel.appendChild(opt);
+    }
+    toast('版本列表已加载', `共 ${r.versions.length} 个版本`);
+  } catch (e) {
+    toast('加载失败', e.message || String(e));
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '加载版本列表';
+  }
+});
+
+$('oc-version-select')?.addEventListener('change', () => {
+  const sel = $('oc-version-select');
+  const btn = $('btn-oc-install-version');
+  if (btn) btn.disabled = !sel?.value;
+});
+
+$('btn-oc-install-version')?.addEventListener('click', async () => {
+  const sel = $('oc-version-select');
+  const version = sel?.value;
+  if (!version) return toast('请选择版本', '请先从下拉列表中选择要安装的版本');
+  if (ocInstallRunning || ocUninstallRunning) {
+    return toast('任务进行中', '安装/更新任务正在执行，请稍候');
+  }
+  const ok = window.confirm(`确认安装 OpenClaw v${version}？\n将使用 A/B 备份更新模式，Gateway 仅在切换版本时短暂停止。`);
+  if (!ok) return toast('已取消', '未执行安装');
+
+  ocInstallRunning = true;
+  ocInstallPhase = 'install';
+  syncOpenClawButtons();
+  let taskStarted = false;
+  try {
+    appendOcLogLine(`📦 开始安装指定版本: v${version}`);
+    const r = await api('/api/openclaw/install-version', { method: 'POST', body: { version }, timeoutMs: 90000 });
+    if (!r?.taskId) {
+      const detail = r?.error || '安装任务创建失败';
+      appendOcLogLine(`❌ 安装启动失败: ${detail}`);
+      toast('安装失败', detail);
+      return;
+    }
+    toast('开始安装', `正在安装 v${version}...`);
+    appendOcLogLine('✅ 安装任务已启动');
+    appendOcLogLine(`📋 目标版本: v${version}`);
+    taskStarted = true;
+    pollTask(r.taskId);
+  } catch (e) {
+    appendOcLogLine(`❌ 请求失败: ${e.message || e}`);
+    toast('请求失败', e.message || String(e));
+  } finally {
+    if (!taskStarted) {
+      ocInstallRunning = false;
       ocInstallPhase = 'auto';
       syncOpenClawButtons();
     }
