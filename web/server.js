@@ -9261,13 +9261,20 @@ if (WebSocketServer) {
         writeDockerConfig(dcfg);
         changed = true;
       }
-      if (!ocfg.browser || !ocfg.browser.enabled) {
-        if (!ocfg.browser) ocfg.browser = {};
+      if (!ocfg.browser) ocfg.browser = {};
+      if (!ocfg.browser.enabled) {
         ocfg.browser.enabled = true;
-        writeOpenClawConfig(ocfg);
         changed = true;
       }
-      if (changed) console.log('[browser-bridge] 已自动启用浏览器控制配置');
+      // Docker 容器内无本地 Chrome，默认使用 extension relay profile
+      if (!ocfg.browser.defaultProfile) {
+        ocfg.browser.defaultProfile = 'chrome';
+        changed = true;
+      }
+      if (changed) {
+        writeOpenClawConfig(ocfg);
+        console.log('[browser-bridge] 已自动启用浏览器控制配置 (defaultProfile=chrome)');
+      }
     } catch (e) {
       console.error('[browser-bridge] 自动启用配置失败:', e.message);
     }
