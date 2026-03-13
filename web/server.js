@@ -1132,6 +1132,18 @@ function keepLastLines(text, maxLines = 200) {
 
 function extractLogTimestampMs(line) {
   const text = String(line || '');
+  const startedAtMatch = text.match(/\bstartedAt=(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:?\d{2})?)\b/i);
+  if (startedAtMatch?.[1]) {
+    const startedText = String(startedAtMatch[1]);
+    const hasOffset = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(startedText);
+    if (hasOffset) {
+      const ts = Date.parse(startedText.replace(' ', 'T'));
+      if (Number.isFinite(ts)) return ts;
+    } else {
+      const ts = parseLocalLogTimestampToMs(startedText);
+      if (Number.isFinite(ts)) return ts;
+    }
+  }
   const localMatch = text.match(/\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]/);
   if (localMatch?.[1]) {
     const ts = parseLocalLogTimestampToMs(localMatch[1]);
@@ -1274,6 +1286,7 @@ function mergeLogBlocksByTimeline(blocksText, { foldWatchdog = true, maxLines = 
   const entries = [];
   const knownSourcePattern = /^(watchdog|web-panel|gateway|gateway-runtime|gateway-legacy|openclaw-install|openclaw-repair|install|logs)$/i;
   const taskStartTs = new Map();
+  const sourceStartTs = new Map();
   const lastTsBySource = new Map();
   let source = 'logs';
   let seq = 0;
@@ -1299,13 +1312,18 @@ function mergeLogBlocksByTimeline(blocksText, { foldWatchdog = true, maxLines = 
       if (Number.isFinite(ts)) taskStartTs.set(markerMatch[2], ts);
     }
     let inferredTs = extractLogTimestampMs(normalized);
+    if (inferredTs > 0 && /\bstartedAt=\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/i.test(normalized) && source) {
+      sourceStartTs.set(source, inferredTs);
+    }
     // C10: extract task= and elapsed= independently (they may appear in either order)
     if (!inferredTs) {
       const taskIdMatch = normalized.match(/\btask=([^\s]+)/i);
       const elapsedMatch = normalized.match(/\belapsed=(\d+)s/i)
         || normalized.match(/安装进行中[.…]*\s*(\d+)s/);
-      if (taskIdMatch?.[1] && elapsedMatch?.[1]) {
-        const baseTs = taskStartTs.get(taskIdMatch[1]);
+      if (elapsedMatch?.[1]) {
+        const taskBaseTs = taskIdMatch?.[1] ? taskStartTs.get(taskIdMatch[1]) : 0;
+        const sourceBaseTs = source ? sourceStartTs.get(source) : 0;
+        const baseTs = taskBaseTs || sourceBaseTs;
         if (Number.isFinite(baseTs)) {
           inferredTs = baseTs + (Number(elapsedMatch[1]) * 1000);
         }
@@ -1630,6 +1648,16 @@ function sanitizeOpenClawConfig(cfg) {
     }
   }
 
+  // gateway.auth.token: normalize format to avoid hidden-char mismatch during node pairing auth.
+  if (cfg?.gateway?.auth && typeof cfg.gateway.auth === 'object' && Object.prototype.hasOwnProperty.call(cfg.gateway.auth, 'token')) {
+    const rawToken = cfg.gateway.auth.token;
+    const normalizedToken = normalizeGatewayAuthToken(rawToken);
+    if (String(rawToken || '') !== normalizedToken) {
+      cfg.gateway.auth.token = normalizedToken;
+      removed.push('gateway.auth.token(normalized)');
+    }
+  }
+
   return { changed: removed.length > 0, removed };
 }
 
@@ -1656,6 +1684,22 @@ function deepMerge(target, source) {
     }
   }
   return target;
+}
+
+function normalizeGatewayAuthToken(raw) {
+  let token = String(raw || '');
+  // Remove invisible control chars that often come from copy/paste across terminals/editors.
+  token = token.replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  if (!token) return '';
+  token = token.replace(/^Bearer\s+/i, '').trim();
+  if ((token.startsWith('"') && token.endsWith('"')) || (token.startsWith("'") && token.endsWith("'"))) {
+    token = token.slice(1, -1).trim();
+  }
+  return token;
+}
+
+function shellSingleQuote(value) {
+  return `'${String(value || '').replace(/'/g, `'"'"'`)}'`;
 }
 
 // ============================================================
@@ -3843,7 +3887,7 @@ const BROWSER_CONTROL_PORT = 18791;
 function getGatewayAuthToken() {
   try {
     const cfg = readJson(CONFIG_PATH, {});
-    return cfg?.gateway?.auth?.token || '';
+    return normalizeGatewayAuthToken(cfg?.gateway?.auth?.token || '');
   } catch { return ''; }
 }
 
@@ -3857,7 +3901,7 @@ app.get('/api/node/setup-command', (req, res) => {
     if (!token) {
       return res.json({ success: true, command: '# Gateway Auth Token 未配置，请先在 openclaw.json 中设置 gateway.auth.token', hasToken: false });
     }
-    const command = `NODE_TLS_REJECT_UNAUTHORIZED=0 OPENCLAW_GATEWAY_TOKEN=${token} openclaw node run --host ${host} --port ${gatewayTlsPort} --tls`;
+    const command = `NODE_TLS_REJECT_UNAUTHORIZED=0 OPENCLAW_GATEWAY_TOKEN=${shellSingleQuote(token)} openclaw node run --host ${host} --port ${gatewayTlsPort} --tls`;
     res.json({ success: true, command, hasToken: true, host, port: gatewayTlsPort });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
@@ -7163,7 +7207,7 @@ app.get('/api/openclaw/gateway-link', (req, res) => {
     const cfg = readJson(CONFIG_PATH, {});
     const ocSnapshot = getOpenClawInstallationSnapshot();
     const authMode = String(cfg?.gateway?.auth?.mode || 'none').trim() || 'none';
-    const rawToken = String(cfg?.gateway?.auth?.token || '').trim();
+    const rawToken = normalizeGatewayAuthToken(cfg?.gateway?.auth?.token || '');
     const hostHeader = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
     const protoHeader = String(req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim().toLowerCase();
     const hostname = (hostHeader.split(':')[0] || '127.0.0.1').trim();
