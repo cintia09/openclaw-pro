@@ -721,6 +721,13 @@ prompt_deploy_config(){
   fi
   HTTPS_PORT="$(find_available_port "$HTTPS_PORT" 8443 8499)"
 
+  GW_TLS_PORT="${GW_TLS_PORT:-18790}"
+  [ "$GW_TLS_PORT" -eq 0 ] && GW_TLS_PORT=18790
+  if has_tty; then
+    GW_TLS_PORT="$(prompt_port_or_default "Gateway TLS 端口" "$GW_TLS_PORT")"
+  fi
+  GW_TLS_PORT="$(find_available_port "$GW_TLS_PORT" 18800 18999)"
+
   SSH_PORT="${SSH_PORT:-2222}"
   [ "$SSH_PORT" -eq 0 ] && SSH_PORT=2222
   SSH_PORT="$(find_available_port "$SSH_PORT" 2223 2299)"
@@ -729,7 +736,12 @@ prompt_deploy_config(){
 
   [ -z "$BROWSER_BRIDGE_ENABLED" ] && BROWSER_BRIDGE_ENABLED="false"
 
-  info "最终端口：Gateway=${GW_PORT}, Web=${WEB_PORT}, SSH=${SSH_PORT}, HTTPS=${HTTPS_PORT}"
+  info "最终端口映射（宿主机 → 容器）："
+  info "  Gateway TLS : ${GW_TLS_PORT} → 18790"
+  info "  HTTPS       : ${HTTPS_PORT} → 443"
+  info "  SSH         : ${SSH_PORT} → 22"
+  info "  Gateway     : 127.0.0.1:${GW_PORT} → 18789 (仅本机)"
+  info "  Web         : 127.0.0.1:${WEB_PORT} → 3000 (仅本机)"
 }
 
 # ─── upgrade detection ────────────────────────────────────────
