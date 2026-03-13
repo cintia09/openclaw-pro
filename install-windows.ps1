@@ -944,11 +944,24 @@ function Test-PortAvailable {
     } catch {
         return $false
     }
-    # Check 2: Also check Docker container port mappings
+    # Check 2: Also check Docker container port mappings (single port and range)
     try {
         $dockerPorts = & docker ps --format "{{.Ports}}" 2>$null
-        if ($dockerPorts -and ($dockerPorts | Out-String) -match ":${Port}->") {
-            return $false
+        if ($dockerPorts) {
+            $portsText = $dockerPorts | Out-String
+            # Match single port mapping :PORT->
+            if ($portsText -match ":${Port}->") {
+                return $false
+            }
+            # Match port range mapping :START-END->  where Port falls within range
+            $rangeMatches = [regex]::Matches($portsText, ':(\d+)-(\d+)->')
+            foreach ($m in $rangeMatches) {
+                $rangeStart = [int]$m.Groups[1].Value
+                $rangeEnd   = [int]$m.Groups[2].Value
+                if ($Port -ge $rangeStart -and $Port -le $rangeEnd) {
+                    return $false
+                }
+            }
         }
     } catch {}
     return $true
@@ -970,13 +983,22 @@ function Get-PortProcess {
                 return "PID: $pid_"
             }
         }
-        # 方式 2: Docker 容器端口映射
+        # 方式 2: Docker 容器端口映射（单端口和范围映射）
         $dockerPorts = & docker ps --format "{{.Names}}|{{.Ports}}" 2>$null
         if ($dockerPorts) {
             foreach ($line in $dockerPorts) {
-                if ($line -match ":${Port}->") {
-                    $cName = ($line -split '\|')[0]
+                $cName = ($line -split '\|')[0]
+                $portsPart = ($line -split '\|', 2)[1]
+                if ($portsPart -match ":${Port}->") {
                     return "Docker 容器: $cName"
+                }
+                $rangeMatches = [regex]::Matches($portsPart, ':(\d+)-(\d+)->')
+                foreach ($m in $rangeMatches) {
+                    $rs = [int]$m.Groups[1].Value
+                    $re = [int]$m.Groups[2].Value
+                    if ($Port -ge $rs -and $Port -le $re) {
+                        return "Docker 容器: $cName (端口范围 ${rs}-${re})"
+                    }
                 }
             }
         }
