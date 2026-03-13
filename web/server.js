@@ -8041,11 +8041,21 @@ app.post('/api/openclaw/pairing/approve', async (req, res) => {
     const token = require('crypto').randomBytes(24).toString('hex');
 
     const role = (entry.role || 'operator').trim() || 'operator';
+    // Merge requested scopes with existing to prevent scope-upgrade loops.
+    // Gateway reads the top-level `scopes` field (not `approvedScopes`) to decide permissions.
+    const requestedScopes = entry.scopes || [];
+    const existingScopes = existing.approvedScopes || existing.scopes || [];
+    const mergedScopes = Array.from(new Set([...existingScopes, ...requestedScopes]));
+    // For operator/admin roles, ensure full operator scope set to prevent repeated scope-upgrade pairing
+    const fullScopes = (role === 'operator' || role === 'admin')
+      ? Array.from(new Set([...mergedScopes, 'operator.admin', 'operator.read', 'operator.write', 'operator.approvals', 'operator.pairing']))
+      : (mergedScopes.length > 0 ? mergedScopes : ['operator.admin']);
+
     const existingTokens = existing.tokens && typeof existing.tokens === 'object' ? { ...existing.tokens } : {};
     existingTokens[role] = {
       token,
       role,
-      scopes: entry.scopes || existing.approvedScopes || ['operator.admin'],
+      scopes: fullScopes,
       createdAtMs: existingTokens[role]?.createdAtMs || now,
       rotatedAtMs: now
     };
@@ -8060,7 +8070,8 @@ app.post('/api/openclaw/pairing/approve', async (req, res) => {
       clientMode: entry.clientMode || existing.clientMode,
       role,
       roles: Array.from(new Set([...(existing.roles || []), ...(entry.roles || [role])])),
-      approvedScopes: entry.scopes || existing.approvedScopes || ['operator.admin'],
+      scopes: fullScopes,
+      approvedScopes: fullScopes,
       tokens: existingTokens,
       approvedAtMs: now,
       isRepair: entry.isRepair || false
