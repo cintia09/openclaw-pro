@@ -3345,6 +3345,7 @@ function Main {
         }
 
         Write-Info "正在准备镜像..."
+        $launched = $false
         try {
             $pushedLocal = $false
             if (Test-Path $localDeployDir) {
@@ -4248,7 +4249,7 @@ function Main {
             $runOutputText = $runResult | Out-String
 
             # Docker Desktop/Windows 偶发端口竞争：自动改端口并重试一次
-            if ($LASTEXITCODE -ne 0 -and $runOutputText -match "port is already allocated" -and $runOutputText -match 'Bind for .*:(\d+)') {
+            if ($LASTEXITCODE -ne 0 -and ($runOutputText -match "port is already allocated" -or $runOutputText -match "address already in use") -and $runOutputText -match '(?:Bind for [^:]*:|address already in use|listen tcp[^:]*:)(\d+)') {
                 $conflictPort = [int]$Matches[1]
                 Write-Warn "检测到端口冲突: $conflictPort，正在自动分配新端口并重试..."
 
@@ -4565,8 +4566,10 @@ function Main {
                 # 检查是否是端口冲突
                 $dockerErr = & docker logs $containerName 2>&1 | Out-String
                 $runOutput = $runOutputText
-                $conflictPort = if ($dockerErr -match 'Bind for.*:(\d+)') { $Matches[1] } else { "" }
-                if ($runOutput -match "port is already allocated" -or $dockerErr -match "port is already allocated") {
+                $conflictPort = ""
+                if ($dockerErr -match '(?:Bind for [^:]*:|address already in use|listen tcp[^:]*:)(\d+)') { $conflictPort = $Matches[1] }
+                elseif ($runOutput -match '(?:Bind for [^:]*:|address already in use|listen tcp[^:]*:)(\d+)') { $conflictPort = $Matches[1] }
+                if ($runOutput -match "port is already allocated" -or $runOutput -match "address already in use" -or $dockerErr -match "port is already allocated" -or $dockerErr -match "address already in use") {
                     if ($conflictPort) {
                         Write-Err "端口 ${conflictPort} 被占用，请关闭占用端口的程序后重试"
                         Write-Host "  💡 查看端口占用: netstat -ano | findstr :${conflictPort}" -ForegroundColor Cyan
@@ -4581,10 +4584,11 @@ function Main {
             Pop-Location
         } catch {
             $errMsg = "$_"
-            if ($errMsg -match "port is already allocated") {
-                # 从 docker 错误消息中提取端口号
-                $conflictPort = if ($errMsg -match 'Bind for.*:(\d+)') { $Matches[1] } else { "?" }
-                Write-Err "端口 ${conflictPort} 已被占用"
+            if ($errMsg -match "port is already allocated" -or $errMsg -match "address already in use") {
+                # 端口冲突详情已在内层输出，此处仅补充解决建议
+                $conflictPort = ""
+                if ($errMsg -match '(?:Bind for [^:]*:|address already in use|listen tcp[^:]*:)(\d+)') { $conflictPort = $Matches[1] }
+                if (-not $conflictPort) { $conflictPort = "?" }
                 Write-Host "" 
                 Write-Host "  💡 解决方法:" -ForegroundColor Cyan
                 Write-Host "     1. 查看占用: netstat -ano | findstr :${conflictPort}" -ForegroundColor White
@@ -5164,6 +5168,7 @@ function Main {
     $sPort  = if ($script:sshPort) { $script:sshPort } else { 2222 }
     $autoFw = if ($null -ne $script:autoOpenFirewall) { [bool]$script:autoOpenFirewall } else { $true }
     $bbEnabled = if ($null -ne $script:browserBridgeEnabled) { [bool]$script:browserBridgeEnabled } else { $false }
+    if ($null -eq $launched) { $launched = $false }
     Show-Completion -DeployLaunched $launched -IsDockerDesktop $dockerDesktopMode -GatewayPort $gwPort -PanelPort $wpPort -Domain $dom -CertMode $cmode -HttpPort $hPort -HttpsPort $hsPort -SshPort $sPort -AutoOpenFirewall $autoFw -BrowserBridgeEnabled $bbEnabled
 
     if ($launched) {
