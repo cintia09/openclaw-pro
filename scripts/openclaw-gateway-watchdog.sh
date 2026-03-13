@@ -85,7 +85,7 @@ log_throttled() {
 
 detect_runtime_version() {
   local candidates file ver
-  candidates="/root/.npm-global/lib/node_modules/openclaw/package.json $SOURCE_ROOT/package.json /usr/local/lib/node_modules/openclaw/package.json /usr/lib/node_modules/openclaw/package.json"
+  candidates="$SOURCE_ROOT/package.json /root/.npm-global/lib/node_modules/openclaw/package.json /usr/local/lib/node_modules/openclaw/package.json /usr/lib/node_modules/openclaw/package.json"
   OPENCLAW_RUNTIME_VERSION=""
   unset OPENCLAW_VERSION OPENCLAW_SERVICE_VERSION
   for file in $candidates; do

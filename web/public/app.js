@@ -1289,14 +1289,12 @@ async function refreshOpenClaw(opts = {}){
     syncOpenClawButtons();
   }
   const retries = Math.max(0, Number(opts.retries ?? 0));
-  const forceCheck = !!opts.force;
   const openclawStatusTimeoutMs = Math.max(2000, Number(opts.timeoutMs ?? 30000));
   let d = null;
   let lastErr = '';
-  const apiUrl = forceCheck ? '/api/openclaw?force=1' : '/api/openclaw';
 
   for (let i = 0; i <= retries; i++) {
-    d = await api(apiUrl, { timeoutMs: openclawStatusTimeoutMs });
+    d = await api('/api/openclaw', { timeoutMs: openclawStatusTimeoutMs });
     if (d && !d.error && Object.prototype.hasOwnProperty.call(d, 'installed')) break;
     lastErr = d?.error || '接口返回异常';
     if (i < retries) {
@@ -1552,7 +1550,7 @@ async function pollTask(taskId){
         setOpenClawStatusLine('更新状态：Gateway 启动中', { active: true, startedAt: Date.now(), totalSec: 60 });
         scheduleGatewayStartupLogPulls(220);
       }
-      refreshOpenClaw({ force: true });
+      refreshOpenClaw();
       refreshStatus();
       return; // C8: 任务结束，不再调度下一次轮询
     }
@@ -1636,10 +1634,7 @@ async function pollRepairTask(taskId){
 
 $('btn-oc-refresh').addEventListener('click', async ()=>{
   appendOcLogLine('🔄 正在刷新状态...');
-  let r = await refreshOpenClaw({ retries: 0, force: true, timeoutMs: 45000 });
-  if (r?.error) {
-    r = await refreshOpenClaw({ retries: 1 });
-  }
+  const r = await refreshOpenClaw({ retries: 1 });
   if (r?.error) {
     appendOcLogLine(`❌ 状态刷新失败：${r.error}`);
     toast('状态刷新失败', r.error);
