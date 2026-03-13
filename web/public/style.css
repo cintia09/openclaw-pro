@@ -521,3 +521,5 @@ pre.terminal .term-line{display:inline}
   .card{padding:14px}
   .terminal{height:460px}
 }
+details summary::-webkit-details-marker{display:none}
+details[open]>summary>span:first-child{transform:rotate(90deg)}
