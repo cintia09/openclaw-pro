@@ -3190,22 +3190,20 @@ function getLocalDockerfileHash() {
   try { return fs.readFileSync(DOCKERFILE_HASH_FILE, 'utf8').trim(); } catch { return ''; }
 }
 
-async function getRemoteDockerfileHashesByRef(ref) {
-  const hashes = [];
+async function getRemoteDockerfileHashesByRef(ref, timeout = 6000) {
   const candidates = ['Dockerfile', 'Dockerfile.lite'];
-  for (const fileName of candidates) {
+  const results = await Promise.all(candidates.map(async (fileName) => {
     try {
       const dfResp = await fetchWithFallback(`${GITHUB_RAW_BASE}/${ref}/${fileName}`, {
         headers: { 'User-Agent': 'openclaw-pro' },
-        timeout: 10000
+        timeout
       });
-      if (!dfResp.ok) continue;
+      if (!dfResp.ok) return null;
       const dockerfileText = await dfResp.text();
-      const hash = crypto.createHash('sha256').update(dockerfileText).digest('hex');
-      if (hash) hashes.push(hash);
-    } catch {}
-  }
-  return [...new Set(hashes)];
+      return crypto.createHash('sha256').update(dockerfileText).digest('hex') || null;
+    } catch { return null; }
+  }));
+  return [...new Set(results.filter(Boolean))];
 }
 
 function normalizeVersionTag(v) {
@@ -3237,7 +3235,7 @@ app.get('/api/update/check', async (req, res) => {
     try {
       const resp = await fetchWithFallback(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
         headers: { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'openclaw-pro' },
-        timeout: 10000
+        timeout: 8000
       });
       if (resp.ok) {
         release = await resp.json();
@@ -3253,7 +3251,7 @@ app.get('/api/update/check', async (req, res) => {
       try {
         const rawResp = await fetchWithFallback(`${GITHUB_RAW_BASE}/main/version.txt`, {
           headers: { 'User-Agent': 'openclaw-pro' },
-          timeout: 8000
+          timeout: 6000
         });
         if (rawResp.ok) {
           latestVersion = (await rawResp.text()).trim();
@@ -3304,7 +3302,10 @@ app.get('/api/update/check', async (req, res) => {
     };
 
     // Check Dockerfile hash against release ref first (avoid false positives from main branch drift)
+    // Wrap entire Dockerfile comparison in a 12s global timeout to prevent stacking
     try {
+      await Promise.race([
+        (async () => {
       const refs = [];
       if (latestVersion) refs.push(latestVersion);
       if (release && release.target_commitish) refs.push(release.target_commitish);
@@ -3366,7 +3367,14 @@ app.get('/api/update/check', async (req, res) => {
         console.log(`[update] Dockerfile changed: local hash differs from ref ${checkedRef}`);
         _dockerfileChangeLogged = true;
       }
-    } catch {}
+        })(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('dockerfile check timeout')), 12000))
+      ]);
+    } catch (dfErr) {
+      if (dfErr?.message === 'dockerfile check timeout') {
+        console.log('[update] Dockerfile comparison timed out (12s), skipping');
+      }
+    }
 
     // hasUpdate 仅由 release 版本变化触发；不会因为 Dockerfile 变化单独触发更新提示。
 
