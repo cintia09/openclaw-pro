@@ -4036,91 +4036,99 @@ app.get('/api/node/connected', async (req, res) => {
     const paired = readJson(DEVICE_PAIRING_PAIRED_PATH, {});
     const nodeEntries = Object.values(paired).filter(e => e.clientMode === 'node');
 
-    // Method 1: Try Gateway HTTP API for connected nodes (most reliable)
-    let gatewayNodes = null;
+    // Parse Gateway log for active node connections.
+    // Gateway 没有 REST API (仅 /health)，CLI 会卡住，所以直接解析日志判断节点在线状态。
+    // 日志格式:
+    //   connected: [ws] node-host connected conn=... remote=IP client=node-host ...
+    //   disconnected: [ws] node-host disconnected code=... conn=...
+    //   failed: [tools] nodes failed: ... node=NAME ... pairing required
+    const connectedNodes = new Map(); // connId -> { displayName, remoteIp, connectedAt }
     try {
-      const token = getGatewayAuthToken();
-      const headers = { 'Accept': 'application/json' };
-      if (token) headers['Authorization'] = `Bearer ${token}`;
-      const gwResp = await new Promise((resolve, reject) => {
-        const gwReq = require('http').get('http://127.0.0.1:18789/api/nodes', { headers, timeout: 3000 }, (resp) => {
-          let data = '';
-          resp.on('data', chunk => data += chunk);
-          resp.on('end', () => {
-            try { resolve(JSON.parse(data)); } catch { resolve(null); }
+      const logText = String(runCommandText(
+        `tail -500 ${GATEWAY_RUNTIME_LOG_FILE} 2>/dev/null || true`, 2000) || '');
+      for (const line of logText.split('\n')) {
+        // node connected: [ws] node-host connected conn=UUID remote=IP client=node-host node ...
+        // Also match generic: [ws] node connected conn=...
+        const connMatch = line.match(/\[ws\]\s+(?:node-host|node)\s+connected\s+conn=(\S+)\s+remote=(\S+)/);
+        if (connMatch) {
+          const connId = connMatch[1];
+          const remoteIp = connMatch[2] || '';
+          const nameMatch = line.match(/client=(\S+)/);
+          connectedNodes.set(connId, {
+            remoteIp: remoteIp.replace(/^::ffff:/, ''),
+            clientId: nameMatch?.[1] || 'node-host',
+            connectedAt: line.slice(0, 30)
           });
-        });
-        gwReq.on('error', () => resolve(null));
-        gwReq.on('timeout', () => { gwReq.destroy(); resolve(null); });
-      });
-      if (gwResp && Array.isArray(gwResp.nodes || gwResp)) {
-        gatewayNodes = gwResp.nodes || gwResp;
+          continue;
+        }
+        // node disconnected: [ws] node-host disconnected ... conn=UUID
+        const disconnMatch = line.match(/\[ws\]\s+(?:node-host|node)\s+disconnected\s+.*?conn=(\S+)/);
+        if (disconnMatch) {
+          connectedNodes.delete(disconnMatch[1]);
+          continue;
+        }
+        // closed before connect: [ws] closed before connect conn=UUID
+        const closedMatch = line.match(/\[ws\]\s+closed before connect\s+conn=(\S+)/);
+        if (closedMatch) {
+          connectedNodes.delete(closedMatch[1]);
+        }
       }
-    } catch { /* Gateway API unavailable */ }
+    } catch { /* log parsing failed, will fallback to offline */ }
 
-    // Method 2: Try CLI for richer data (includes displayName, connected status)
-    let cliDevices = [];
-    try {
-      const cliOut = runCommandText(
-        `cd ${OPENCLAW_SOURCE_DIR} && node openclaw.mjs devices list --json --timeout 3000 2>/dev/null || true`, 5000);
-      if (cliOut) {
-        const jsonStart = cliOut.indexOf('{');
-        const jsonText = jsonStart >= 0 ? cliOut.slice(jsonStart) : cliOut;
-        const parsed = JSON.parse(jsonText.trim());
-        if (Array.isArray(parsed?.nodes)) cliDevices = parsed.nodes.filter(d => d.clientMode === 'node');
-        else if (Array.isArray(parsed?.paired)) cliDevices = parsed.paired.filter(d => d.clientMode === 'node');
-        else if (Array.isArray(parsed?.devices)) cliDevices = parsed.devices.filter(d => d.clientMode === 'node');
-      }
-    } catch { /* CLI unavailable */ }
-
-    // Build a lookup from Gateway API and CLI responses
-    const gwMap = new Map();
-    if (gatewayNodes) {
-      for (const n of gatewayNodes) {
-        const id = n.deviceId || n.id || '';
-        if (id) gwMap.set(id, n);
+    // Also check active TCP connections to Gateway port as secondary signal
+    const connectedIps = new Set();
+    for (const n of connectedNodes.values()) {
+      if (n.remoteIp && n.remoteIp !== '127.0.0.1' && n.remoteIp !== '::1') {
+        connectedIps.add(n.remoteIp);
       }
     }
-    const cliMap = new Map(cliDevices.map(d => [d.deviceId, d]));
-
-    // Method 3: Fallback to netstat IP matching (least reliable with Caddy proxying)
-    const connectedIps = new Set();
-    if (!gatewayNodes) {
-      try {
-        const netstatOut = runCommandText(
-          `netstat -tnp 2>/dev/null | grep ESTABLISHED | grep -E ':(443|18789|18790)\\b' || ss -tnp 2>/dev/null | grep ESTAB | grep -E ':(443|18789|18790)' || true`, 3000);
-        for (const line of String(netstatOut || '').split('\n')) {
-          const parts = line.trim().split(/\s+/);
-          if (parts.length >= 5) {
-            const remote = parts[4] || '';
-            const remoteIp = remote.replace(/:\d+$/, '').replace(/^::ffff:/, '');
-            if (remoteIp && remoteIp !== '127.0.0.1' && remoteIp !== '::1' && remoteIp !== '0.0.0.0') {
-              connectedIps.add(remoteIp);
-            }
+    // Add netstat IPs that are NOT localhost (non-webchat connections)
+    try {
+      const netstatOut = runCommandText(
+        `ss -tnp 2>/dev/null | grep ESTAB | grep ':18789' || netstat -tnp 2>/dev/null | grep ESTABLISHED | grep ':18789' || true`, 2000);
+      for (const line of String(netstatOut || '').split('\n')) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length >= 5) {
+          const remote = parts[4] || parts[3] || '';
+          const remoteIp = remote.replace(/:\d+$/, '').replace(/^::ffff:/, '');
+          if (remoteIp && remoteIp !== '127.0.0.1' && remoteIp !== '::1' && remoteIp !== '0.0.0.0') {
+            connectedIps.add(remoteIp);
           }
         }
-      } catch { /* netstat unavailable */ }
-    }
+      }
+    } catch {}
+
+    const hasActiveConnections = connectedNodes.size > 0 || connectedIps.size > 0;
 
     const nodes = nodeEntries.map(entry => {
-      const gw = gwMap.get(entry.deviceId);
-      const cli = cliMap.get(entry.deviceId);
-      const ip = gw?.remoteIp || cli?.remoteIp || entry.remoteIp || '';
-
-      // Determine connected state: prefer Gateway API > CLI > netstat IP fallback
+      const ip = entry.remoteIp || '';
+      // Check if this node has an active log-tracked connection or matching IP
       let isConnected = false;
-      if (gw) {
-        isConnected = !!(gw.connected || gw.online || gw.status === 'connected' || gw.status === 'online');
-      } else if (cli) {
-        isConnected = !!(cli.connected || cli.online || cli.status === 'connected' || cli.status === 'online');
-      } else if (ip && connectedIps.size > 0) {
-        isConnected = connectedIps.has(ip);
+      if (hasActiveConnections) {
+        // Match by IP from log
+        for (const n of connectedNodes.values()) {
+          if (ip && n.remoteIp === ip) { isConnected = true; break; }
+        }
+        // Match by IP from netstat
+        if (!isConnected && ip && connectedIps.has(ip)) {
+          isConnected = true;
+        }
+      }
+      // Check token last used time — if used within last 5 minutes, likely active
+      if (!isConnected) {
+        const tokens = entry.tokens && typeof entry.tokens === 'object' ? Object.values(entry.tokens) : [];
+        for (const t of tokens) {
+          if (t.lastUsedAtMs && (Date.now() - t.lastUsedAtMs) < 300000) {
+            isConnected = true;
+            break;
+          }
+        }
       }
 
       return {
         deviceId: entry.deviceId,
-        displayName: gw?.displayName || cli?.displayName || entry.displayName || entry.clientId || entry.deviceId?.slice(0, 12),
-        platform: gw?.platform || cli?.platform || entry.platform || 'unknown',
+        displayName: entry.displayName || entry.clientId || entry.deviceId?.slice(0, 12),
+        platform: entry.platform || 'unknown',
         connected: isConnected,
         remoteIp: ip,
         approvedAtMs: entry.approvedAtMs || 0,
