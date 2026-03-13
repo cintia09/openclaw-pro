@@ -4036,94 +4036,122 @@ app.get('/api/node/connected', async (req, res) => {
     const paired = readJson(DEVICE_PAIRING_PAIRED_PATH, {});
     const nodeEntries = Object.values(paired).filter(e => e.clientMode === 'node');
 
-    // Parse Gateway log for active node connections.
-    // Gateway 没有 REST API (仅 /health)，CLI 会卡住，所以直接解析日志判断节点在线状态。
-    // 日志格式:
-    //   connected: [ws] node-host connected conn=... remote=IP client=node-host ...
-    //   disconnected: [ws] node-host disconnected code=... conn=...
-    //   failed: [tools] nodes failed: ... node=NAME ... pairing required
-    const connectedNodes = new Map(); // connId -> { displayName, remoteIp, connectedAt }
+    // --- 方法: 解析 Gateway 的人类可读日志 + JSON 结构化日志 ---
+    // Gateway 没有 REST API (仅 /health)，CLI 挂起，WS 需要复杂握手协议。
+    // 因此解析日志来判断节点在线状态：
+    //   人类可读日志: [ws] <type> connected/disconnected conn=UUID remote=IP ...
+    //   JSON 结构化日志: {"1":{"mode":"node","handshake":"failed",...},"2":"closed before connect conn=..."}
+    //   连接失败标记: [ws] closed before connect conn=UUID ... reason=connect failed
+
+    // connId -> { remoteIp, clientId, connectedAt, displayName }
+    const connectedNodes = new Map();
+    // deviceId -> { remoteIp, connectedAt, forwardedFor } (从 JSON 日志解析)
+    const nodeLastSeen = new Map();
+
+    // 1) 解析人类可读日志
     try {
       const logText = String(runCommandText(
         `tail -500 ${GATEWAY_RUNTIME_LOG_FILE} 2>/dev/null || true`, 2000) || '');
       for (const line of logText.split('\n')) {
-        // node connected: [ws] node-host connected conn=UUID remote=IP client=node-host node ...
-        // Also match generic: [ws] node connected conn=...
-        const connMatch = line.match(/\[ws\]\s+(?:node-host|node)\s+connected\s+conn=(\S+)\s+remote=(\S+)/);
+        // 匹配: [ws] <任意非webchat类型> connected conn=UUID remote=IP ...
+        // 格式: [ws] node-host connected conn=UUID remote=IP client=node-host node ...
+        // 或:   [ws] node connected conn=UUID remote=IP ...
+        const connMatch = line.match(/\[ws\]\s+(\S+)\s+connected\s+conn=(\S+)\s+remote=(\S+)/);
         if (connMatch) {
-          const connId = connMatch[1];
-          const remoteIp = connMatch[2] || '';
-          const nameMatch = line.match(/client=(\S+)/);
+          const clientType = connMatch[1];
+          if (clientType === 'webchat') continue; // 忽略 webchat 连接
+          const connId = connMatch[2];
+          const remoteIp = connMatch[3] || '';
+          const fwdMatch = line.match(/fwd=([^:\s]+)/);
           connectedNodes.set(connId, {
             remoteIp: remoteIp.replace(/^::ffff:/, ''),
-            clientId: nameMatch?.[1] || 'node-host',
+            forwardedFor: fwdMatch?.[1]?.replace(/^::ffff:/, '') || '',
+            clientId: clientType,
             connectedAt: line.slice(0, 30)
           });
           continue;
         }
-        // node disconnected: [ws] node-host disconnected ... conn=UUID
-        const disconnMatch = line.match(/\[ws\]\s+(?:node-host|node)\s+disconnected\s+.*?conn=(\S+)/);
+        // 匹配断开: [ws] <type> disconnected ... conn=UUID
+        const disconnMatch = line.match(/\[ws\]\s+\S+\s+disconnected\s+.*?conn=(\S+)/);
         if (disconnMatch) {
           connectedNodes.delete(disconnMatch[1]);
           continue;
         }
-        // closed before connect: [ws] closed before connect conn=UUID
+        // 匹配连接失败: [ws] closed before connect conn=UUID
         const closedMatch = line.match(/\[ws\]\s+closed before connect\s+conn=(\S+)/);
         if (closedMatch) {
           connectedNodes.delete(closedMatch[1]);
         }
       }
-    } catch { /* log parsing failed, will fallback to offline */ }
+    } catch { /* log parsing failed */ }
 
-    // Also check active TCP connections to Gateway port as secondary signal
-    const connectedIps = new Set();
-    for (const n of connectedNodes.values()) {
-      if (n.remoteIp && n.remoteIp !== '127.0.0.1' && n.remoteIp !== '::1') {
-        connectedIps.add(n.remoteIp);
-      }
-    }
-    // Add netstat IPs that are NOT localhost (non-webchat connections)
+    // 2) 解析 JSON 结构化日志获取节点连接详情（IP、名称等）
+    //    JSON 日志路径: /tmp/openclaw/openclaw-YYYY-MM-DD.log
     try {
-      const netstatOut = runCommandText(
-        `ss -tnp 2>/dev/null | grep ESTAB | grep ':18789' || netstat -tnp 2>/dev/null | grep ESTABLISHED | grep ':18789' || true`, 2000);
-      for (const line of String(netstatOut || '').split('\n')) {
-        const parts = line.trim().split(/\s+/);
-        if (parts.length >= 5) {
-          const remote = parts[4] || parts[3] || '';
-          const remoteIp = remote.replace(/:\d+$/, '').replace(/^::ffff:/, '');
-          if (remoteIp && remoteIp !== '127.0.0.1' && remoteIp !== '::1' && remoteIp !== '0.0.0.0') {
-            connectedIps.add(remoteIp);
+      const today = new Date().toISOString().slice(0, 10);
+      const jsonLogFile = `/tmp/openclaw/openclaw-${today}.log`;
+      const jsonLogText = String(runCommandText(
+        `tail -200 ${jsonLogFile} 2>/dev/null || true`, 2000) || '');
+      for (const line of jsonLogText.split('\n')) {
+        if (!line.includes('"mode":"node"')) continue;
+        try {
+          const entry = JSON.parse(line);
+          const detail = entry['1'];
+          if (!detail || typeof detail !== 'object') continue;
+          if (detail.mode !== 'node') continue;
+          const displayName = detail.clientDisplayName || '';
+          const fwd = (detail.forwardedFor || '').replace(/:\d+$/, '').replace(/^::ffff:/, '') || '';
+          const host = detail.host || '';
+          const cause = detail.cause || '';
+          const ts = entry.time || entry._meta?.date || '';
+          // 找到对应的 paired entry
+          for (const pe of nodeEntries) {
+            if (displayName && pe.displayName === displayName) {
+              const prev = nodeLastSeen.get(pe.deviceId);
+              const prevTs = prev?.ts || '';
+              if (!prevTs || ts > prevTs) {
+                nodeLastSeen.set(pe.deviceId, {
+                  remoteIp: fwd || host || '',
+                  ts,
+                  connected: cause !== 'unauthorized' && cause !== 'invalid-handshake',
+                  cause,
+                });
+              }
+            }
           }
-        }
+        } catch { /* single line parse failed */ }
       }
-    } catch {}
+    } catch { /* JSON log parsing failed */ }
 
-    const hasActiveConnections = connectedNodes.size > 0 || connectedIps.size > 0;
-
+    // 3) 构建结果: 仅依赖日志解析，不使用 lastUsedAtMs（不可靠，webchat 发 node.invoke 也会更新它）
     const nodes = nodeEntries.map(entry => {
-      const ip = entry.remoteIp || '';
-      // Check if this node has an active log-tracked connection or matching IP
       let isConnected = false;
-      if (hasActiveConnections) {
-        // Match by IP from log
-        for (const n of connectedNodes.values()) {
-          if (ip && n.remoteIp === ip) { isConnected = true; break; }
-        }
-        // Match by IP from netstat
-        if (!isConnected && ip && connectedIps.has(ip)) {
-          isConnected = true;
-        }
+      let ip = entry.remoteIp || '';
+
+      // 从人类可读日志匹配
+      for (const n of connectedNodes.values()) {
+        // 按 clientId 或 IP 匹配
+        const nodeIp = n.forwardedFor || n.remoteIp || '';
+        if (ip && nodeIp && nodeIp === ip) { isConnected = true; if (!ip && nodeIp) ip = nodeIp; break; }
+        if (!ip && nodeIp) ip = nodeIp;
       }
-      // Check token last used time — if used within last 5 minutes, likely active
-      if (!isConnected) {
-        const tokens = entry.tokens && typeof entry.tokens === 'object' ? Object.values(entry.tokens) : [];
-        for (const t of tokens) {
-          if (t.lastUsedAtMs && (Date.now() - t.lastUsedAtMs) < 300000) {
+
+      // 从 JSON 日志补充信息
+      const jsonInfo = nodeLastSeen.get(entry.deviceId);
+      if (jsonInfo) {
+        if (!ip && jsonInfo.remoteIp) ip = jsonInfo.remoteIp;
+        // JSON 日志显示最近一次连接是成功的且在人类日志中没有找到断开记录
+        if (!isConnected && jsonInfo.connected) {
+          // 检查时间戳是否在最近 2 分钟内（JSON 日志条目）
+          const entryTime = jsonInfo.ts ? new Date(jsonInfo.ts).getTime() : 0;
+          if (entryTime && (Date.now() - entryTime) < 120000) {
             isConnected = true;
-            break;
           }
         }
       }
+
+      // 清理 IP: 过滤掉 Docker 内部地址（172.17.0.1 等无意义的地址）
+      if (ip === '172.17.0.1' || ip === '127.0.0.1' || ip === '::1') ip = '';
 
       return {
         deviceId: entry.deviceId,
