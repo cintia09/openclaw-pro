@@ -3915,7 +3915,7 @@ app.get('/api/node/security', (req, res) => {
     const autoApprove = cfg?.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true;
     const browserMode = cfg?.gateway?.nodes?.browser?.mode || 'auto';
     const denyCommands = cfg?.gateway?.nodes?.denyCommands || [];
-    const execSecurity = cfg?.tools?.exec?.security || 'ask';
+    const execSecurity = cfg?.tools?.exec?.security || 'allowlist';
     res.json({ success: true, autoApprove, browserMode, denyCommands, execSecurity });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
@@ -3951,7 +3951,7 @@ app.post('/api/node/security', (req, res) => {
     }
 
     // exec security
-    if (execSecurity === 'ask' || execSecurity === 'deny' || execSecurity === 'allow') {
+    if (execSecurity === 'allowlist' || execSecurity === 'deny' || execSecurity === 'full') {
       if (!cfg.tools) cfg.tools = {};
       if (!cfg.tools.exec) cfg.tools.exec = {};
       cfg.tools.exec.security = execSecurity;

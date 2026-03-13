@@ -3276,7 +3276,7 @@ async function loadDeviceManagement() {
   if (secRes.success) {
     if ($('device-auto-approve')) $('device-auto-approve').value = String(!!secRes.autoApprove);
     if ($('device-browser-mode')) $('device-browser-mode').value = secRes.browserMode || 'auto';
-    if ($('device-exec-security')) $('device-exec-security').value = secRes.execSecurity || 'ask';
+    if ($('device-exec-security')) $('device-exec-security').value = secRes.execSecurity || 'allowlist';
     if ($('device-deny-commands')) $('device-deny-commands').value = (secRes.denyCommands || []).join('\n');
     toggleAutoApproveWarning();
   }
@@ -3406,7 +3406,7 @@ $('btn-pairing-refresh')?.addEventListener('click', () => loadDeviceManagement()
 $('btn-device-save-security')?.addEventListener('click', async () => {
   const autoApprove = ($('device-auto-approve')?.value || 'false') === 'true';
   const browserMode = $('device-browser-mode')?.value || 'auto';
-  const execSecurity = $('device-exec-security')?.value || 'ask';
+  const execSecurity = $('device-exec-security')?.value || 'allowlist';
   const denyCommands = ($('device-deny-commands')?.value || '').split('\n').map(s => s.trim()).filter(Boolean);
 
   const r = await api('/api/node/security', { method: 'POST', body: { autoApprove, browserMode, execSecurity, denyCommands } });
