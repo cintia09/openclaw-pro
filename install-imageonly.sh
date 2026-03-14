@@ -20,10 +20,13 @@ IMAGE_TARBALL_LITE="openclaw-pro-image-lite.tar.gz"
 TARGET_DIR="${TARGET_DIR:-$(pwd)}"
 BASE_DIR="${TARGET_DIR}/openclaw-pro"
 TMP_DIR="$BASE_DIR"
-HOME_DIR="$BASE_DIR/home-data"
-ROOT_HOME_DIR="$HOME_DIR/root"
-CONFIG_FILE="$ROOT_HOME_DIR/.openclaw/docker-config.json"
-CONFIG_FILE_LEGACY="$HOME_DIR/.openclaw/docker-config.json"
+STATE_VOLUME_NAME="${STATE_VOLUME_NAME:-openclaw-pro-state}"
+STATE_MOUNT_POINT="/root/.openclaw"
+CONFIG_CACHE_FILE="$BASE_DIR/.docker-config.cache.json"
+LEGACY_HOME_DIR="$BASE_DIR/home-data"
+LEGACY_ROOT_HOME_DIR="$LEGACY_HOME_DIR/root"
+CONFIG_FILE_LEGACY_ROOT="$LEGACY_ROOT_HOME_DIR/.openclaw/docker-config.json"
+CONFIG_FILE_LEGACY="$LEGACY_HOME_DIR/.openclaw/docker-config.json"
 LOG_FILE="$BASE_DIR/install.log"
 ROOT_PASSWORD_FILE="$BASE_DIR/root-initial-password.txt"
 
@@ -40,7 +43,6 @@ has_tty(){ [ -r "$TTY_IN" ] && [ -w "$TTY_IN" ]; }
 
 TAG=""
 IMAGE_TARBALL="$IMAGE_TARBALL_LITE"
-
 GW_PORT="${GW_PORT:-18789}"
 GW_TLS_PORT="${GW_TLS_PORT:-18790}"
 WEB_PORT="${WEB_PORT:-3000}"
@@ -56,6 +58,100 @@ DO_FIREWALL="${DO_FIREWALL:-}"
 BROWSER_BRIDGE_ENABLED="${BROWSER_BRIDGE_ENABLED:-}"
 BRIDGE_PORT="${BRIDGE_PORT:-0}"
 UPGRADE_MODE="false"
+
+ensure_state_volume(){
+  docker volume inspect "$STATE_VOLUME_NAME" >/dev/null 2>&1 || docker volume create "$STATE_VOLUME_NAME" >/dev/null
+}
+
+run_state_helper(){
+  local script="$1"
+  ensure_state_volume
+  docker image inspect "$IMAGE_NAME" >/dev/null 2>&1 || return 1
+
+  docker run --rm \
+    -v "$STATE_VOLUME_NAME:$STATE_MOUNT_POINT" \
+    --entrypoint bash \
+    "$IMAGE_NAME" \
+    -lc "mkdir -p '$STATE_MOUNT_POINT' && $script"
+}
+
+read_state_file(){
+  local relpath="$1"
+  run_state_helper "test -f '$STATE_MOUNT_POINT/$relpath' && cat '$STATE_MOUNT_POINT/$relpath' || true"
+}
+
+write_state_file(){
+  local relpath="$1"
+  local mode="${2:-600}"
+  local dirpart tmpfile
+  dirpart="$(dirname "$relpath")"
+  tmpfile="$(mktemp)"
+  cat > "$tmpfile"
+
+  ensure_state_volume
+  if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
+    rm -f "$tmpfile"
+    return 1
+  fi
+
+  docker run --rm \
+    -v "$STATE_VOLUME_NAME:$STATE_MOUNT_POINT" \
+    -v "$tmpfile:/tmp/openclaw-state-input:ro" \
+    --entrypoint bash \
+    "$IMAGE_NAME" \
+    -lc "mkdir -p '$STATE_MOUNT_POINT/$dirpart' && cat /tmp/openclaw-state-input > '$STATE_MOUNT_POINT/$relpath' && chmod $mode '$STATE_MOUNT_POINT/$relpath'"
+  local rc=$?
+  rm -f "$tmpfile"
+  return $rc
+}
+
+refresh_config_cache(){
+  local tmpfile=""
+  rm -f "$CONFIG_CACHE_FILE" 2>/dev/null || true
+
+  if docker ps --filter "name=^/${CONTAINER_NAME}$" --format '{{.Names}}' | head -1 | grep -q "^${CONTAINER_NAME}$"; then
+    tmpfile="$(mktemp)"
+    if docker exec "$CONTAINER_NAME" sh -c 'cat /root/.openclaw/docker-config.json 2>/dev/null || true' > "$tmpfile" 2>/dev/null && [ -s "$tmpfile" ]; then
+      mv -f "$tmpfile" "$CONFIG_CACHE_FILE"
+      return 0
+    fi
+    rm -f "$tmpfile"
+  fi
+
+  if docker ps -a --filter "name=^/${CONTAINER_NAME}$" --format '{{.Names}}' | head -1 | grep -q "^${CONTAINER_NAME}$"; then
+    tmpfile="$(mktemp)"
+    if docker cp "${CONTAINER_NAME}:/root/.openclaw/docker-config.json" "$tmpfile" >/dev/null 2>&1 && [ -s "$tmpfile" ]; then
+      mv -f "$tmpfile" "$CONFIG_CACHE_FILE"
+      return 0
+    fi
+    rm -f "$tmpfile"
+  fi
+
+  if docker image inspect "$IMAGE_NAME" >/dev/null 2>&1 && docker volume inspect "$STATE_VOLUME_NAME" >/dev/null 2>&1; then
+    tmpfile="$(mktemp)"
+    if read_state_file "docker-config.json" > "$tmpfile" 2>/dev/null && [ -s "$tmpfile" ]; then
+      mv -f "$tmpfile" "$CONFIG_CACHE_FILE"
+      return 0
+    fi
+    rm -f "$tmpfile"
+  fi
+
+  if [ -f "$CONFIG_FILE_LEGACY_ROOT" ]; then
+    cp -f "$CONFIG_FILE_LEGACY_ROOT" "$CONFIG_CACHE_FILE" 2>/dev/null || true
+  elif [ -f "$CONFIG_FILE_LEGACY" ]; then
+    cp -f "$CONFIG_FILE_LEGACY" "$CONFIG_CACHE_FILE" 2>/dev/null || true
+  fi
+}
+
+resolve_config_file(){
+  if [ -f "$CONFIG_CACHE_FILE" ]; then
+    printf '%s' "$CONFIG_CACHE_FILE"
+  elif [ -f "$CONFIG_FILE_LEGACY_ROOT" ]; then
+    printf '%s' "$CONFIG_FILE_LEGACY_ROOT"
+  elif [ -f "$CONFIG_FILE_LEGACY" ]; then
+    printf '%s' "$CONFIG_FILE_LEGACY"
+  fi
+}
 
 # ─── helpers ──────────────────────────────────────────────────
 
@@ -73,10 +169,11 @@ normalize_base_dir(){
   fi
 
   TMP_DIR="$BASE_DIR"
-  HOME_DIR="$BASE_DIR/home-data"
-  ROOT_HOME_DIR="$HOME_DIR/root"
-  CONFIG_FILE="$ROOT_HOME_DIR/.openclaw/docker-config.json"
-  CONFIG_FILE_LEGACY="$HOME_DIR/.openclaw/docker-config.json"
+  CONFIG_CACHE_FILE="$BASE_DIR/.docker-config.cache.json"
+  LEGACY_HOME_DIR="$BASE_DIR/home-data"
+  LEGACY_ROOT_HOME_DIR="$LEGACY_HOME_DIR/root"
+  CONFIG_FILE_LEGACY_ROOT="$LEGACY_ROOT_HOME_DIR/.openclaw/docker-config.json"
+  CONFIG_FILE_LEGACY="$LEGACY_HOME_DIR/.openclaw/docker-config.json"
   LOG_FILE="$BASE_DIR/install.log"
   ROOT_PASSWORD_FILE="$BASE_DIR/root-initial-password.txt"
 }
@@ -97,10 +194,8 @@ get_container_release_tag(){
 }
 
 init_dirs(){
-  mkdir -p "$TMP_DIR" "$HOME_DIR" "$ROOT_HOME_DIR" "$ROOT_HOME_DIR/.openclaw"
-  if [ ! -f "$CONFIG_FILE" ] && [ -f "$CONFIG_FILE_LEGACY" ]; then
-    cp -f "$CONFIG_FILE_LEGACY" "$CONFIG_FILE" 2>/dev/null || true
-  fi
+  mkdir -p "$TMP_DIR"
+  refresh_config_cache || true
   touch "$LOG_FILE" 2>/dev/null || true
 }
 
@@ -227,15 +322,16 @@ apply_port_conflicts(){
 
 safe_json_value(){
   local key="$1"
-  local cfg="$CONFIG_FILE"
-  [ ! -f "$cfg" ] && [ -f "$CONFIG_FILE_LEGACY" ] && cfg="$CONFIG_FILE_LEGACY"
+  local cfg
+  cfg="$(resolve_config_file)"
   [ ! -f "$cfg" ] && return 0
   grep -oE "\"${key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"|\"${key}\"[[:space:]]*:[[:space:]]*[0-9]+|\"${key}\"[[:space:]]*:[[:space:]]*(true|false)" \
     "$cfg" 2>/dev/null | head -1 | sed -E 's/^.*:[[:space:]]*//; s/^"//; s/"$//' || true
 }
 
 load_existing_config(){
-  [ ! -f "$CONFIG_FILE" ] && [ ! -f "$CONFIG_FILE_LEGACY" ] && return 1
+  refresh_config_cache || true
+  [ ! -f "$CONFIG_CACHE_FILE" ] && [ ! -f "$CONFIG_FILE_LEGACY_ROOT" ] && [ ! -f "$CONFIG_FILE_LEGACY" ] && return 1
   local v
   v="$(safe_json_value port)";       [ -n "$v" ] && GW_PORT="$v"
   v="$(safe_json_value gateway_tls_port)"; [ -n "$v" ] && GW_TLS_PORT="$v"
@@ -252,8 +348,24 @@ load_existing_config(){
 }
 
 write_config(){
-  mkdir -p "$(dirname "$CONFIG_FILE")"
-  cat > "$CONFIG_FILE" <<EOF
+  cat <<EOF | write_state_file "docker-config.json" 600
+{
+  "port": ${GW_PORT},
+  "gateway_tls_port": ${GW_TLS_PORT},
+  "web_port": ${WEB_PORT},
+  "ssh_port": ${SSH_PORT},
+  "http_port": ${HTTP_PORT},
+  "https_port": ${HTTPS_PORT},
+  "domain": "${DOMAIN}",
+  "cert_mode": "${CERT_MODE}",
+  "timezone": "${TZ_VALUE}",
+  "https_enabled": ${HTTPS_ENABLED},
+  "browser_bridge_enabled": ${BROWSER_BRIDGE_ENABLED:-false},
+  "browser_bridge_port": ${BRIDGE_PORT:-0},
+  "release_tag": "${TAG:-unknown}"
+}
+EOF
+  cat <<EOF > "$CONFIG_CACHE_FILE"
 {
   "port": ${GW_PORT},
   "gateway_tls_port": ${GW_TLS_PORT},
@@ -803,7 +915,7 @@ prompt_hotpatch_first_if_applicable(){
     printf "⚠️  完整重装风险提示：\n" > "$TTY_IN"
     printf "  - 将删除并重建容器（容器文件系统会重置）\n" > "$TTY_IN"
     printf "  - 容器内手工安装的软件/临时文件可能丢失\n" > "$TTY_IN"
-    printf "  - 挂载的 home-data 与配置会保留\n\n" > "$TTY_IN"
+    printf "  - 状态卷与配置会保留\n\n" > "$TTY_IN"
     continue_install="$(prompt "是否继续执行安装重装流程？[y/N]: ")"
     continue_install="$(echo "$continue_install" | tr '[:upper:]' '[:lower:]')"
     if [ "$continue_install" != "y" ] && [ "$continue_install" != "yes" ]; then
@@ -815,32 +927,30 @@ prompt_hotpatch_first_if_applicable(){
 }
 
 
-reset_home_data_dir(){
-  if rm -rf "$HOME_DIR" 2>/dev/null; then
-    mkdir -p "$ROOT_HOME_DIR/.openclaw"
+reset_persistent_state(){
+  docker volume rm -f "$STATE_VOLUME_NAME" >/dev/null 2>&1 || true
+  rm -f "$CONFIG_CACHE_FILE" >/dev/null 2>&1 || true
+
+  if rm -rf "$LEGACY_HOME_DIR" 2>/dev/null; then
     find "$BASE_DIR" -maxdepth 1 -mindepth 1 \( -name 'system-data' -o -name 'user-*' \) -exec rm -rf {} + 2>/dev/null || true
     return 0
   fi
 
-  warn "普通权限删除 home-data 失败，尝试通过 Docker 提权清理..."
+  warn "普通权限删除旧版 home-data 失败，尝试通过 Docker 提权清理..."
   if docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
     if docker run --rm -v "$BASE_DIR:/work" --entrypoint sh "$IMAGE_NAME" -lc 'rm -rf /work/home-data /work/system-data /work/user-*' >/dev/null 2>&1; then
-      mkdir -p "$ROOT_HOME_DIR/.openclaw"
       return 0
     fi
   fi
 
   if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
-    if sudo rm -rf "$HOME_DIR" >/dev/null 2>&1; then
-      sudo mkdir -p "$ROOT_HOME_DIR/.openclaw" >/dev/null 2>&1 || true
-      sudo chown -R "$(id -u):$(id -g)" "$HOME_DIR" >/dev/null 2>&1 || true
+    if sudo rm -rf "$LEGACY_HOME_DIR" >/dev/null 2>&1; then
       find "$BASE_DIR" -maxdepth 1 -mindepth 1 \( -name 'system-data' -o -name 'user-*' \) -exec rm -rf {} + 2>/dev/null || true
       return 0
     fi
   fi
 
-  warn "未能完全清理 home-data（权限受限），将保留目录继续。"
-  mkdir -p "$ROOT_HOME_DIR/.openclaw"
+  warn "未能完全清理旧版 home-data（权限受限），目录将保留但后续不再使用。"
 }
 
 
@@ -852,7 +962,8 @@ handle_existing_installation(){
   running="$(docker ps   --filter "name=^/${CONTAINER_NAME}$" --format '{{.Names}}' | head -1 || true)"
   # 无容器（含已停止）→ 视为全新安装，残留配置/目录不影响判断
   if [ -z "$exists" ]; then
-    if [ -f "$CONFIG_FILE" ] || [ -f "$CONFIG_FILE_LEGACY" ]; then
+    refresh_config_cache || true
+    if [ -f "$CONFIG_CACHE_FILE" ] || [ -f "$CONFIG_FILE_LEGACY_ROOT" ] || [ -f "$CONFIG_FILE_LEGACY" ]; then
       info "未发现已有容器，但检测到残留配置文件，将按全新安装处理。"
     fi
     return 0
@@ -902,7 +1013,7 @@ handle_existing_installation(){
       3) warn "用户取消安装。"; exit 0 ;;
       2) info "全新重装：删除旧容器与数据"
          docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-         reset_home_data_dir
+         reset_persistent_state
          UPGRADE_MODE="false" ;;
       *) info "重装（保留数据目录）"
          docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
@@ -913,7 +1024,7 @@ handle_existing_installation(){
       4) warn "用户取消安装。"; exit 0 ;;
       3) info "全新重装：删除旧容器与数据"
          docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-         reset_home_data_dir
+         reset_persistent_state
          UPGRADE_MODE="false" ;;
       2) info "重装（保留数据目录）"
          docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
@@ -1004,7 +1115,7 @@ F2B
 # ─── container create & start ─────────────────────────────────
 
 create_and_start(){
-  local host_user host_uid host_gid root_home_dir user_home_dir key_injected ssh_login_user user_ready ssh_hardened
+  local host_user host_uid host_gid key_injected ssh_login_user user_ready ssh_hardened
   host_user="${SUDO_USER:-$(id -un 2>/dev/null || true)}"
   host_uid="$(id -u 2>/dev/null || true)"
   host_gid="$(id -g 2>/dev/null || true)"
@@ -1013,22 +1124,7 @@ create_and_start(){
   user_ready="false"
   ssh_hardened="false"
 
-  # 创建持久化目录（对齐 Windows）
-  # - home-data/root: root 用户数据（挂载到 /root）
-  # - home-data/{username}: 普通用户数据（挂载到 /home/{username}）
-  root_home_dir="$HOME_DIR/root"
-  user_home_dir=""
-
-  mkdir -p "$root_home_dir/.openclaw"
-  chmod 700 "$root_home_dir" || true
-
-  # 创建用户 home 目录
-  if [ -n "$host_user" ] && [ "$host_user" != "root" ]; then
-    user_home_dir="$HOME_DIR/$host_user"
-    mkdir -p "$user_home_dir"
-    chmod 700 "$user_home_dir" || true
-    info "创建用户持久化目录: $user_home_dir"
-  fi
+  ensure_state_volume
 
   write_config
 
@@ -1049,10 +1145,7 @@ create_and_start(){
 
   # Build volume arguments
   local vol_args=()
-  vol_args+=(-v "$root_home_dir:/root")  # root 用户数据
-  if [ -n "$host_user" ] && [ "$host_user" != "root" ] && [ -d "$user_home_dir" ]; then
-    vol_args+=(-v "$user_home_dir:/home/$host_user")  # 普通用户数据
-  fi
+  vol_args+=(-v "$STATE_VOLUME_NAME:$STATE_MOUNT_POINT")
 
   # Build environment variables for user creation
   local env_args=()
@@ -1195,11 +1288,12 @@ create_and_start(){
     info "  - 登录用户: $host_user"
     info "  - 登录命令: ssh ${host_user}@<host> -p ${SSH_PORT}"
     info "  - 容器内提权: 登录后执行 sudo -i"
-    info "  - 用户数据目录: $user_home_dir"
   else
     warn "  - 当前为 root 用户运行，未创建普通用户"
     info "  - 如需普通用户登录，请以非 root 用户重新运行安装脚本"
   fi
+
+  info "  - 状态卷: ${STATE_VOLUME_NAME} -> ${STATE_MOUNT_POINT}"
 
   if [ "$key_injected" = "true" ]; then
     success "  - SSH 公钥: 已自动注入"

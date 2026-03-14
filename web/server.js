@@ -3220,7 +3220,7 @@ function getLocalDockerfileHash() {
 }
 
 async function getRemoteDockerfileHashesByRef(ref, timeout = 6000) {
-  const candidates = ['Dockerfile', 'Dockerfile.lite'];
+  const candidates = ['Dockerfile.lite'];
   const results = await Promise.all(candidates.map(async (fileName) => {
     try {
       const dfResp = await fetchWithFallback(`${GITHUB_RAW_BASE}/${ref}/${fileName}`, {

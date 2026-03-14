@@ -537,54 +537,29 @@ $config = $configJson | ConvertFrom-Json
 Write-Dim "域名: $($config.domain)"
 Write-Dim "HTTP 端口: $($config.http_port)  HTTPS 端口: $($config.https_port)"
 
-# 获取挂载点（home-data 路径）
-$homeDataMount = ""
-$homeRootMount = ""
-$homeUserMount = ""
+# 获取挂载点（状态卷 /root/.openclaw）
+$stateVolumeName = "openclaw-pro-state"
 $rawHostUser = $env:USERNAME
 $hostUser = Convert-ToContainerUserName $rawHostUser
 try {
     $mounts = (& docker inspect $CONTAINER_NAME --format '{{json .Mounts}}' 2>$null) | ConvertFrom-Json
     foreach ($m in $mounts) {
-        if ($m.Destination -eq "/root") {
-            $homeRootMount = $m.Source
-        } elseif ($m.Destination -match '^/home/([^/]+)$') {
-            $homeUserMount = $m.Source
-        }
-    }
-    if ($homeRootMount) {
-        $rootLeaf = Split-Path $homeRootMount -Leaf
-        if ($rootLeaf -eq "root") {
-            $homeDataMount = Split-Path $homeRootMount -Parent
-        } else {
-            $homeDataMount = $homeRootMount
-            $homeRootMount = Join-Path $homeDataMount "root"
+        if ($m.Destination -eq "/root/.openclaw") {
+            if ($m.Name) {
+                $stateVolumeName = $m.Name
+            } elseif ($m.Source) {
+                $stateVolumeName = $m.Source
+            }
         }
     }
 } catch {}
 
-if (-not $homeDataMount) {
-    Write-Err "无法获取 home-data 挂载路径"
-    Read-Host "按回车退出"
-    return
-}
-Write-Dim "数据目录: $homeDataMount"
-Write-Dim "root 目录: $homeRootMount"
-if ($homeUserMount) {
-    Write-Dim "user 目录: $homeUserMount"
-}
+Write-Dim "状态卷: $stateVolumeName"
+try { & docker volume create $stateVolumeName 2>$null | Out-Null } catch {}
 
-$expectedUserMount = ""
 if ($hostUser -and $hostUser -ne "root" -and $hostUser -ne "administrator") {
     if ($rawHostUser -and $rawHostUser -ne $hostUser) {
         Write-Warn "检测到 Windows 用户名 '$rawHostUser' 含不兼容字符，容器 SSH 用户将使用: $hostUser"
-    }
-    $expectedUserMount = Join-Path $homeDataMount $hostUser
-    if (-not (Test-Path $expectedUserMount)) {
-        New-Item -ItemType Directory -Path $expectedUserMount -Force | Out-Null
-    }
-    if ($homeUserMount -and $homeUserMount -ne $expectedUserMount) {
-        Write-Warn "检测到历史用户挂载目录($homeUserMount)，本次将切换为当前用户目录: $expectedUserMount"
     }
 }
 
@@ -643,23 +618,7 @@ try {
 if (-not $currentVersion) { $currentVersion = "unknown" }
 Write-Dim "当前版本: $currentVersion"
 
-# 检测当前镜像版本类型（lite / full）
-$currentEdition = "full"  # 默认假定完整版（向后兼容旧镜像）
-try {
-    if ($isRunning) {
-        $editionStr = (& docker exec $CONTAINER_NAME cat /etc/openclaw-edition 2>$null)
-        if ($editionStr -and $editionStr.Trim() -eq "lite") { $currentEdition = "lite" }
-    }
-    if ($currentEdition -eq "full") {
-        $tmpEd = Join-Path $env:TEMP "openclaw-edition.tmp"
-        & docker cp "${CONTAINER_NAME}:/etc/openclaw-edition" $tmpEd 2>$null
-        if (Test-Path $tmpEd) {
-            $edStr = (Get-Content $tmpEd -Raw).Trim()
-            if ($edStr -eq "lite") { $currentEdition = "lite" }
-            Remove-Item $tmpEd -Force -ErrorAction SilentlyContinue
-        }
-    }
-} catch {}
+$currentEdition = "lite"
 Write-Dim "镜像类型: $currentEdition"
 
 # -- 5. 检查最新版本 --
@@ -672,7 +631,7 @@ try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$GITHUB_REPO/releases/latest" -UseBasicParsing -TimeoutSec 15
     $latestVersion = $release.tag_name
-    $updateAssetName = if ($currentEdition -eq "lite") { "openclaw-pro-image-lite.tar.gz" } else { "openclaw-pro-image.tar.gz" }
+    $updateAssetName = "openclaw-pro-image-lite.tar.gz"
     $imageAsset = $release.assets | Where-Object { $_.name -eq $updateAssetName } | Select-Object -First 1
     if ($imageAsset) {
         $downloadUrl = $imageAsset.browser_download_url
@@ -830,17 +789,12 @@ $runArgs = @(
     "run", "-d",
     "--name", $CONTAINER_NAME,
     "--hostname", "openclaw",
-    "-v", "${homeRootMount}:/root",
+    "-v", "${stateVolumeName}:/root/.openclaw",
     "-e", "TZ=Asia/Shanghai",
     "--restart", "unless-stopped"
 )
 
-if ($homeUserMount -and $homeUserMount.Trim()) {
-    # noop, user mount is rebuilt below from current Windows username
-}
-
-if ($expectedUserMount -and $hostUser -and $hostUser -ne "root" -and $hostUser -ne "administrator") {
-    $runArgs += @("-v", "${expectedUserMount}:/home/$hostUser")
+if ($hostUser -and $hostUser -ne "root" -and $hostUser -ne "administrator") {
     $runArgs += @("-e", "HOST_USER=$hostUser")
 }
 $runArgs += $portMappings

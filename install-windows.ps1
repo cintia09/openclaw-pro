@@ -138,6 +138,68 @@ function Convert-ToContainerUserName {
     return $name
 }
 
+function Get-StateVolumeName {
+    param([string]$ContainerName)
+
+    if ($ContainerName -match '^openclaw-pro-(\d+)$') {
+        return "openclaw-pro-state-$($Matches[1])"
+    }
+    return "openclaw-pro-state"
+}
+
+function Write-StateVolumeFile {
+    param(
+        [string]$VolumeName,
+        [string]$ImageName,
+        [string]$RelativePath,
+        [string]$Content
+    )
+
+    if (-not $VolumeName -or -not $ImageName -or -not $RelativePath) { return $false }
+
+    try { & docker volume create $VolumeName 2>$null | Out-Null } catch { }
+
+    $tmpFile = Join-Path $env:TEMP ("openclaw-state-" + [guid]::NewGuid().ToString() + ".tmp")
+    try {
+        [IO.File]::WriteAllText($tmpFile, $Content, [Text.Encoding]::UTF8)
+        $rel = $RelativePath.Replace("'", "''")
+        $dir = [IO.Path]::GetDirectoryName($RelativePath.Replace('/', '\'))
+        if ([string]::IsNullOrWhiteSpace($dir)) { $dir = "." }
+        $dir = $dir.Replace('\\', '/').Replace("'", "''")
+        & docker run --rm `
+            -v "${VolumeName}:/root/.openclaw" `
+            -v "${tmpFile}:/tmp/openclaw-state-input:ro" `
+            --entrypoint bash `
+            $ImageName `
+            -lc "mkdir -p '/root/.openclaw/$dir' && cat /tmp/openclaw-state-input > '/root/.openclaw/$rel'" 2>$null | Out-Null
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    } finally {
+        Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Read-StateVolumeText {
+    param(
+        [string]$VolumeName,
+        [string]$ImageName,
+        [string]$RelativePath
+    )
+
+    if (-not $VolumeName -or -not $ImageName -or -not $RelativePath) { return "" }
+    try {
+        $rel = $RelativePath.Replace("'", "''")
+        $output = & docker run --rm `
+            -v "${VolumeName}:/root/.openclaw" `
+            --entrypoint bash `
+            $ImageName `
+            -lc "test -f '/root/.openclaw/$rel' && cat '/root/.openclaw/$rel' || true" 2>$null
+        if ($LASTEXITCODE -eq 0) { return ($output | Out-String) }
+    } catch { }
+    return ""
+}
+
 function Write-Suggestion {
     param([string]$Text)
     Write-Host "  💡 $Text" -ForegroundColor Cyan
@@ -1092,7 +1154,7 @@ function Get-ContainerEdition {
     try {
         $ed = (& docker exec $ContainerName sh -lc "cat /etc/openclaw-edition 2>/dev/null || true" 2>$null | Select-Object -First 1)
         $ed = ("$ed").Trim().ToLower()
-        if ($ed -in @('lite','full')) { return $ed }
+        if ($ed -eq 'lite') { return $ed }
     } catch { }
     try {
         $imgRef = (& docker inspect $ContainerName --format '{{.Config.Image}}' 2>$null | Select-Object -First 1)
@@ -1121,7 +1183,7 @@ function Get-RemoteDockerfileHash {
     )
     $tag = ("$ReleaseTag").Trim()
     if (-not $tag) { return "" }
-    $fileName = if (("$Edition").Trim().ToLower() -eq 'lite') { 'Dockerfile.lite' } else { 'Dockerfile' }
+    $fileName = 'Dockerfile.lite'
     $url = "https://raw.githubusercontent.com/$GITHUB_REPO/$tag/$fileName"
     try {
         $resp = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 12 -ErrorAction Stop
@@ -2078,7 +2140,7 @@ function Show-Completion {
         Write-Host "  🔄 升级到新版本：" -ForegroundColor White
         Write-Host "     重新运行安装命令即可，脚本会自动检测版本差异：" -ForegroundColor DarkGray
         Write-Host "     irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1 | iex" -ForegroundColor Cyan
-        Write-Host "     数据目录（home-data/root 与 home-data/用户名）不受影响，升级后原有配置和数据保留。" -ForegroundColor DarkGray
+        Write-Host "     状态卷与配置不受影响，升级后原有数据保留。" -ForegroundColor DarkGray
     } else {
         Write-Host ""
         Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray
@@ -2424,7 +2486,7 @@ function Main {
         # 检测当前目录是否已是部署目录（避免嵌套创建 openclaw-pro/openclaw-pro）
         $currentDir = (Get-Location).Path
         $curLeaf = Split-Path $currentDir -Leaf
-        if ($curLeaf -eq 'openclaw-pro' -or ((Test-Path (Join-Path $currentDir "Dockerfile")) -and
+        if ($curLeaf -eq 'openclaw-pro' -or ((Test-Path (Join-Path $currentDir "Dockerfile.lite")) -and
             (Test-Path (Join-Path $currentDir "start-services.sh")))) {
             $parentDir = Split-Path $currentDir -Parent
             Write-Host ""
@@ -2453,8 +2515,8 @@ function Main {
             if (-not ($ImageOnly -and $ImageOnlyExplicit)) {
                 Write-Host ""
                 Write-Host "  安装目录确认:" -ForegroundColor Cyan
-                Write-Host "     数据目录: $(Join-Path $localDeployDir 'home-data[-N]')" -ForegroundColor White
-                Write-Host "     结构: home-data[-N]/root 与 home-data[-N]/用户名" -ForegroundColor DarkGray
+                Write-Host "     工作目录: $localDeployDir" -ForegroundColor White
+                Write-Host "     状态持久化: Docker volume -> /root/.openclaw" -ForegroundColor DarkGray
                 Write-Host ""
                 Write-Host "     按回车确认，或输入新路径: " -NoNewline -ForegroundColor White
                 $customBaseDir = (Read-Host).Trim()
@@ -2472,7 +2534,7 @@ function Main {
             }
         }
 
-        # 统一目录策略：镜像文件、日志、home-data 全部放在部署目录 openclaw-pro 下
+        # 统一目录策略：镜像文件、日志等工作文件都放在部署目录 openclaw-pro 下
         if (-not (Test-Path $localDeployDir)) { New-Item -ItemType Directory -Path $localDeployDir -Force | Out-Null }
         $homeBaseDir = $localDeployDir
         $TMP_DIR = $localDeployDir
@@ -2511,7 +2573,7 @@ function Main {
             Write-Log "Fetch latest release failed: $_"
         }
 
-        $needDeployPackageDownload = -not (Test-Path "$localDeployDir\Dockerfile")
+        $needDeployPackageDownload = -not (Test-Path "$localDeployDir\Dockerfile.lite")
 
         # ImageOnly 模式下跳过部署包/源码下载
         if ($ImageOnly -and $ImageOnlyExplicit) {
@@ -2812,11 +2874,11 @@ function Main {
                             throw "ZIP 文件为空，无任何条目"
                         }
 
-                        # 4. Check for Dockerfile in the archive
+                        # 4. Check for Dockerfile.lite in the archive
                         $zip = [IO.Compression.ZipFile]::OpenRead($zipFile)
                         $hasDockerfile = $false
                         foreach ($entry in $zip.Entries) {
-                            if ($entry.Name -eq "Dockerfile") {
+                            if ($entry.Name -eq "Dockerfile.lite") {
                                 $hasDockerfile = $true
                                 break
                             }
@@ -2824,7 +2886,7 @@ function Main {
                         $zip.Dispose()
 
                         if (-not $hasDockerfile) {
-                            Write-Warn "ZIP 包中未找到 Dockerfile，可能是错误的包"
+                            Write-Warn "ZIP 包中未找到 Dockerfile.lite，可能是错误的包"
                         }
 
                         $hash = (Get-FileHash $zipFile -Algorithm SHA256).Hash.Substring(0, 12)
@@ -2837,7 +2899,7 @@ function Main {
                         return
                     }
 
-                    # Extract ZIP（home-data 已独立于部署目录，无需备份）
+                    # Extract ZIP（状态已迁移到 Docker volume，无需备份旧宿主机目录）
                     Write-Info "正在解压..."
                     if (Test-Path $localDeployDir) {
                         Remove-Item $localDeployDir -Recurse -Force
@@ -2976,9 +3038,6 @@ function Main {
                         $remoteCandidates = @()
                         $remotePrimary = Get-RemoteDockerfileHash -ReleaseTag $latestReleaseTag -Edition $ed
                         if ($remotePrimary) { $remoteCandidates += $remotePrimary }
-                        $altEdition = if ($ed -eq 'lite') { 'full' } else { 'lite' }
-                        $remoteAlt = Get-RemoteDockerfileHash -ReleaseTag $latestReleaseTag -Edition $altEdition
-                        if ($remoteAlt) { $remoteCandidates += $remoteAlt }
                         $remoteCandidates = @($remoteCandidates | Select-Object -Unique)
 
                         $currentCandidates = @()
@@ -2998,8 +3057,6 @@ function Main {
                             foreach ($itemVersionTag in $itemVersionRefs) {
                                 $curPrimary = Get-RemoteDockerfileHash -ReleaseTag $itemVersionTag -Edition $ed
                                 if ($curPrimary) { $currentCandidates += $curPrimary }
-                                $curAlt = Get-RemoteDockerfileHash -ReleaseTag $itemVersionTag -Edition $altEdition
-                                if ($curAlt) { $currentCandidates += $curAlt }
                             }
                         }
                         $currentCandidates = @($currentCandidates | Select-Object -Unique)
@@ -3031,7 +3088,7 @@ function Main {
                         Write-Host "  ⚠️  完整重装风险提示:" -ForegroundColor Yellow
                         Write-Host "     - 将删除并重建容器（容器文件系统会重置）" -ForegroundColor Yellow
                         Write-Host "     - 容器内手动安装的软件/临时文件可能丢失" -ForegroundColor Yellow
-                        Write-Host "     - 挂载的 home-data（root/用户名）与配置会保留" -ForegroundColor Green
+                        Write-Host "     - 状态卷与配置会保留" -ForegroundColor Green
                         Write-Host ""
                         Write-Host "  是否继续执行安装重装流程？[y/N]: " -NoNewline -ForegroundColor White
                         $continueInstall = (Read-Host).Trim().ToLower()
@@ -3052,7 +3109,7 @@ function Main {
                     Write-Host ""
                     $doReinstall = $hotUpdateReinstallConfirmed
                     if (-not $doReinstall) {
-                        Write-Host "  是否先执行升级重装（删除旧容器，保留配置和 home-data 的 root/用户名数据）？[Y/n]: " -NoNewline -ForegroundColor White
+                        Write-Host "  是否先执行升级重装（删除旧容器，保留状态卷与配置）？[Y/n]: " -NoNewline -ForegroundColor White
                         $upgradeFirst = (Read-Host).Trim().ToLower()
                         if (-not $upgradeFirst -or $upgradeFirst -eq 'y' -or $upgradeFirst -eq 'yes') {
                             $doReinstall = $true
@@ -3079,11 +3136,8 @@ function Main {
                                 $preferredUpgradeContainer = $outdated[0].Name
                             }
                         }
-                        $preferredHomeDataName = "home-data"
-                        if ($preferredUpgradeContainer -match '^openclaw-pro-(\d+)$') {
-                            $preferredHomeDataName = "home-data-$($Matches[1])"
-                        }
-                        Write-Info "将优先执行升级重装（保留配置和 $preferredHomeDataName）"
+                        $preferredStateVolume = Get-StateVolumeName -ContainerName $preferredUpgradeContainer
+                        Write-Info "将优先执行升级重装（保留配置和状态卷 $preferredStateVolume）"
                     }
                 }
             }
@@ -3091,8 +3145,8 @@ function Main {
             if (-not $choice) {
                 Write-Host "  请选择操作:" -ForegroundColor White
                 Write-Host "     [1] 新建一个容器（不删除旧容器）" -ForegroundColor Gray
-                Write-Host "     [2] 重新安装容器（删除旧容器，保留配置和 home-data 的 root/用户名数据，默认沿用旧配置）" -ForegroundColor Gray
-                Write-Host "     [3] 重新安装容器（删除旧容器 + 配置 + home-data 的 root/用户名数据）" -ForegroundColor Gray
+                Write-Host "     [2] 重新安装容器（删除旧容器，保留状态卷与配置，默认沿用旧配置）" -ForegroundColor Gray
+                Write-Host "     [3] 重新安装容器（删除旧容器 + 配置 + 状态卷数据）" -ForegroundColor Gray
                 Write-Host ""
                 Write-Host "  输入选择 [2]: " -NoNewline -ForegroundColor White
                 $choice = (Read-Host).Trim()
@@ -3114,9 +3168,9 @@ function Main {
                     Write-Host ""
                 }
                 if ($choice -eq '3') {
-                    Write-Host "  ⚠️  高风险操作：将删除旧容器 + 配置 + home-data 的 root/用户名数据（不可恢复）" -ForegroundColor Yellow
+                    Write-Host "  ⚠️  高风险操作：将删除旧容器 + 配置 + 状态卷数据（不可恢复）" -ForegroundColor Yellow
                 } else {
-                    Write-Host "  ⚠️  将删除并重建旧容器（配置与 home-data 的 root/用户名数据保留）" -ForegroundColor Yellow
+                    Write-Host "  ⚠️  将删除并重建旧容器（配置与状态卷数据保留）" -ForegroundColor Yellow
                 }
                 Write-Host "  请输入 YES 确认继续: " -NoNewline -ForegroundColor White
                 $confirmReinstall = (Read-Host).Trim()
@@ -3145,7 +3199,8 @@ function Main {
                         break
                     }
                 }
-                Write-Info "将创建新容器: $containerName（数据目录: home-data-$idx，位于部署目录下）"
+                $newStateVolume = Get-StateVolumeName -ContainerName $containerName
+                Write-Info "将创建新容器: $containerName（状态卷: $newStateVolume）"
             } elseif ($choice -eq '2') {
                 # -- 升级模式：读取旧容器对应的配置，删除旧容器后复用相同配置 --
                 $upgradeContainerName = ""
@@ -3186,26 +3241,20 @@ function Main {
                 $containerName = $upgradeContainerName
 
                 # 读取旧容器的配置
-                $upgradeHomeDataName = "home-data"
-                if ($containerName -match '^openclaw-pro-(\d+)$') {
-                    $upgradeHomeDataName = "home-data-$($Matches[1])"
-                }
-                $upgradeConfigCandidates = @(
-                    (Join-Path $homeBaseDir "$upgradeHomeDataName\root\.openclaw\docker-config.json"),
-                    (Join-Path $homeBaseDir "$upgradeHomeDataName\.openclaw\docker-config.json")
-                )
-                $upgradeConfigFile = ($upgradeConfigCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1)
+                $upgradeStateVolume = Get-StateVolumeName -ContainerName $containerName
+                $upgradeConfigFile = ""
                 $upgradeConfig = $null
-                if ($upgradeConfigFile -and (Test-Path $upgradeConfigFile)) {
+                $upgradeConfigText = Read-StateVolumeText -VolumeName $upgradeStateVolume -ImageName "openclaw-pro:latest" -RelativePath "docker-config.json"
+                if ($upgradeConfigText) {
                     try {
-                        $upgradeConfig = Get-Content $upgradeConfigFile -Raw | ConvertFrom-Json
-                        Write-OK "读取到旧容器配置: $upgradeConfigFile"
+                        $upgradeConfig = $upgradeConfigText | ConvertFrom-Json
+                        Write-OK "读取到旧容器配置: $upgradeStateVolume:/root/.openclaw/docker-config.json"
                     } catch {
                         Write-Warn "读取旧配置失败，将重新配置"
                     }
                 } else {
                     Write-Warn "未找到可复用的旧配置文件，将进入部署配置交互"
-                    Write-Log "Upgrade config not found. checked: $($upgradeConfigCandidates -join '; ')"
+                    Write-Log "Upgrade config not found in state volume: $upgradeStateVolume"
                 }
 
                 if ($upgradeConfig) {
@@ -3229,7 +3278,7 @@ function Main {
                         Write-Host "     Gateway 端口: $($upgradeConfig.port)" -ForegroundColor White
                         Write-Host "     Web面板端口: $($upgradeConfig.web_port)" -ForegroundColor White
                     }
-                    Write-Host "     数据目录: $(Join-Path $homeBaseDir $upgradeHomeDataName)" -ForegroundColor White
+                    Write-Host "     状态卷: $upgradeStateVolume" -ForegroundColor White
                     $upgradeSshPort = if ($upgradeConfig.ssh_port) { $upgradeConfig.ssh_port } else { 2222 }
                     Write-Host "     SSH 端口: $upgradeSshPort" -ForegroundColor White
                     if ($upgradeConfig.browser_bridge_enabled) {
@@ -3290,8 +3339,8 @@ function Main {
                 & docker rm -f $containerName 2>&1 | Out-Null
                 Start-Sleep -Seconds 2
                 Write-OK "旧容器已删除"
-                Write-Info "💡 数据目录 ($upgradeHomeDataName) 不会被删除，原有配置和数据均保留"
-                Write-Info "   如需彻底删除数据，请手动删除目录: $(Join-Path $homeBaseDir $upgradeHomeDataName)"
+                Write-Info "💡 状态卷 ($upgradeStateVolume) 不会被删除，原有配置和数据均保留"
+                Write-Info "   如需彻底删除数据，可手动执行: docker volume rm $upgradeStateVolume"
             } else {
                 # [3] 全量重装：删除旧容器，并删除对应配置与数据目录
                 if ($runningContainers.Count -eq 1) {
@@ -3333,17 +3382,22 @@ function Main {
                 }
                 Start-Sleep -Seconds 2  # 等待端口释放
                 Write-OK "旧容器已删除"
+                $delStateVolume = Get-StateVolumeName -ContainerName $containerName
+                try {
+                    & docker volume rm -f $delStateVolume 2>$null | Out-Null
+                    Write-Info "已删除状态卷: $delStateVolume"
+                } catch {
+                    Write-Warn "删除状态卷失败: $delStateVolume"
+                }
+
                 $delHomeDataName = "home-data"
                 if ($containerName -match '^openclaw-pro-(\d+)$') {
                     $delHomeDataName = "home-data-$($Matches[1])"
                 }
+                # 兼容清理：旧版本可能残留宿主机 home-data 目录
                 $delHomeDataPath = Join-Path $homeBaseDir $delHomeDataName
-                $delConfigPath = Join-Path $delHomeDataPath ".openclaw"
-                if (Test-Path $delConfigPath) {
-                    try { Remove-Item $delConfigPath -Recurse -Force -ErrorAction Stop; Write-Info "已删除旧配置目录: $delConfigPath" } catch { Write-Warn "删除旧配置目录失败: $delConfigPath" }
-                }
                 if (Test-Path $delHomeDataPath) {
-                    try { Remove-Item $delHomeDataPath -Recurse -Force -ErrorAction Stop; Write-Info "已删除旧数据目录: $delHomeDataPath" } catch { Write-Warn "删除旧数据目录失败: $delHomeDataPath" }
+                    try { Remove-Item $delHomeDataPath -Recurse -Force -ErrorAction Stop; Write-Info "已删除遗留旧数据目录: $delHomeDataPath" } catch { Write-Warn "删除遗留旧数据目录失败: $delHomeDataPath" }
                 }
             }
         }
@@ -3393,18 +3447,13 @@ function Main {
             if ($LASTEXITCODE -eq 0) {
                 Write-OK "检测到本地镜像 openclaw-pro"
                 $localImageReleaseTag = ""
-                # 根据容器名确定对应的数据目录（openclaw-pro → home-data, openclaw-pro-2 → home-data-2）
-                $tagHomeDataName = "home-data"
-                if ($containerName -match '^openclaw-pro-(\d+)$') {
-                    $tagHomeDataName = "home-data-$($Matches[1])"
-                }
+                $tagStateVolumeName = Get-StateVolumeName -ContainerName $containerName
 
-                # 检测本地镜像的 tag（lite/full/latest）以便与用户选择的镜像类型比对
+                # 检测本地镜像的 tag（lite/latest）以便与当前发布镜像类型比对
                 $localImageEdition = "unknown"
                 try {
                     $localTags = (& docker images --format '{{.Repository}}:{{.Tag}}' 2>$null) -join ';'
                     if ($localTags -match 'openclaw-pro:lite') { $localImageEdition = 'lite' }
-                    elseif ($localTags -match 'openclaw-pro:full') { $localImageEdition = 'full' }
                     elseif ($localTags -match 'openclaw-pro:latest') { $localImageEdition = 'latest' }
                     if ($localTags) { Write-Info "本地镜像标签: $localTags (detected edition: $localImageEdition)" }
                 } catch { }
@@ -3414,7 +3463,7 @@ function Main {
                     try {
                         $mainRepoTag = (& docker image inspect openclaw-pro:latest --format '{{index .RepoTags 0}}' 2>$null | Select-Object -First 1)
                         if ($mainRepoTag -and $mainRepoTag -match ':(v\d+\.\d+\.\d+(?:[-\w\.]*)?)$') {
-                            $derived = ($Matches[1] -replace '(-lite|-full)$','')
+                            $derived = ($Matches[1] -replace '(-lite)$','')
                             if ($derived) {
                                 $localImageReleaseTag = $derived
                                 Write-Info "根据当前主镜像标签推断版本: $localImageReleaseTag"
@@ -3425,10 +3474,7 @@ function Main {
 
                 # 读取保存的镜像 digest，并与当前实际镜像 ID 对比
                 $localImageDigest = ""
-                $imageDigestFile = Join-Path $homeBaseDir "$tagHomeDataName\.openclaw\image-digest.txt"
-                if (Test-Path $imageDigestFile) {
-                    $localImageDigest = (Get-Content $imageDigestFile -ErrorAction SilentlyContinue | Select-Object -First 1)
-                }
+                $localImageDigest = (Read-StateVolumeText -VolumeName $tagStateVolumeName -ImageName "openclaw-pro:latest" -RelativePath "image-digest.txt" | Select-Object -First 1)
                 $currentImageId = (& docker image inspect openclaw-pro --format '{{.Id}}' 2>$null)
                 if ($currentImageId -and $localImageDigest) {
                     if ($currentImageId -eq $localImageDigest) {
@@ -3860,7 +3906,7 @@ function Main {
             if (-not $imageReady -and -not ($ImageOnly -and $ImageOnlyExplicit)) {
                 Write-Info "正在本地构建镜像...（首次约需 5-10 分钟）"
                 $buildOK = $false
-                $dockerfilePath = Join-Path $localDeployDir "Dockerfile"
+                $dockerfilePath = Join-Path $localDeployDir "Dockerfile.lite"
                 $originalDockerfile = Get-Content $dockerfilePath -Raw
                 $mirrorPrefixes = @(
                     $null,                                    # direct (Docker Hub)
@@ -3874,7 +3920,7 @@ function Main {
                         Write-Warn "Docker Hub 连接失败，尝试镜像源: $prefix"
                         $mirroredContent = $originalDockerfile -replace '^FROM ubuntu:', "FROM ${prefix}ubuntu:"
                         $mirroredContent | Set-Content $dockerfilePath -Force -NoNewline
-                        Write-Info "已修改 Dockerfile 使用镜像源"
+                        Write-Info "已修改 Dockerfile.lite 使用镜像源"
                     }
 
                     # 重要: 不能用 | ForEach-Object，PowerShell 5.1 中 pipeline 会导致 $LASTEXITCODE 不可靠
@@ -4071,60 +4117,11 @@ function Main {
                 Write-OK "端口冲突已处理，已更新端口映射"
             }
 
-            # Create home-data directory — 容器数据目录放在用户运行脚本的目录下
-            # openclaw-pro     → home-data
-            # openclaw-pro-2   → home-data-2
-            # openclaw-pro-N   → home-data-N
-            $homeDataName = "home-data"
-            if ($containerName -match '^openclaw-pro-(\d+)$') {
-                $homeDataName = "home-data-$($Matches[1])"
-            }
-            $defaultHomeData = Join-Path $homeBaseDir $homeDataName
-            $defaultRootHomeData = Join-Path $defaultHomeData "root"
-
+            $stateVolumeName = Get-StateVolumeName -ContainerName $containerName
+            try { & docker volume create $stateVolumeName 2>$null | Out-Null } catch { }
             Write-Host ""
-            if (-not ($ImageOnly -and $ImageOnlyExplicit)) {
-                Write-Host "  容器数据目录（父目录）:" -ForegroundColor Cyan
-                Write-Host "     默认路径: $defaultHomeData" -ForegroundColor White
-                Write-Host "     root 数据目录: $defaultRootHomeData" -ForegroundColor DarkGray
-                Write-Host ""
-                Write-Host "     [1] 使用默认路径（推荐）" -ForegroundColor White
-                Write-Host "     [2] 自定义路径" -ForegroundColor White
-                Write-Host ""
-                Write-Host "  输入选择 [1/2，默认1]: " -NoNewline -ForegroundColor White
-                $homeDataChoice = (Read-Host).Trim()
-
-                if ($homeDataChoice -eq '2') {
-                    Write-Host "  请输入数据目录完整路径: " -NoNewline -ForegroundColor White
-                    $customPath = (Read-Host).Trim()
-                    if ($customPath) {
-                        $homeData = $customPath
-                        Write-Info "使用自定义数据目录: $homeData"
-                    } else {
-                        $homeData = $defaultHomeData
-                        Write-Info "输入为空，使用默认路径: $homeData"
-                    }
-                } else {
-                    $homeData = $defaultHomeData
-                }
-
-                Write-OK "数据目录: $homeData"
-            } else {
-                $homeData = $defaultHomeData
-                Write-Info "ImageOnly 模式：跳过数据目录交互，使用默认路径: $homeData"
-                Write-OK "数据目录: $homeData"
-            }
-            if (-not (Test-Path $homeData)) {
-                New-Item -ItemType Directory -Path $homeData -Force | Out-Null
-            }
-            $rootDataDir = Join-Path $homeData "root"
-            if (-not (Test-Path $rootDataDir)) {
-                New-Item -ItemType Directory -Path $rootDataDir -Force | Out-Null
-            }
-            $configDir = Join-Path $rootDataDir ".openclaw"
-            if (-not (Test-Path $configDir)) {
-                New-Item -ItemType Directory -Path $configDir -Force | Out-Null
-            }
+            Write-Info "ImageOnly 模式：使用状态卷 $stateVolumeName"
+            Write-OK "状态卷: $stateVolumeName -> /root/.openclaw"
 
             # Write config for container's start-services.sh (Caddy reads domain from here)
             $dockerConfigJson = @{
@@ -4142,19 +4139,21 @@ function Main {
                 timezone   = "Asia/Shanghai"
                 created    = (Get-Date -Format "o")
             } | ConvertTo-Json -Depth 2
-            $dockerConfigJson | Set-Content (Join-Path $configDir "docker-config.json") -Force
+            if (-not (Write-StateVolumeFile -VolumeName $stateVolumeName -ImageName "openclaw-pro:latest" -RelativePath "docker-config.json" -Content $dockerConfigJson)) {
+                throw "写入状态卷 docker-config.json 失败"
+            }
             if ($latestReleaseTag) {
-                $latestReleaseTag | Set-Content (Join-Path $configDir "image-release-tag.txt") -Force
+                [void](Write-StateVolumeFile -VolumeName $stateVolumeName -ImageName "openclaw-pro:latest" -RelativePath "image-release-tag.txt" -Content $latestReleaseTag)
             }
             # 保存镜像 digest 用于下次完整性校验
             if ($script:loadedImageDigest) {
-                $script:loadedImageDigest | Set-Content (Join-Path $configDir "image-digest.txt") -Force
+                [void](Write-StateVolumeFile -VolumeName $stateVolumeName -ImageName "openclaw-pro:latest" -RelativePath "image-digest.txt" -Content $script:loadedImageDigest)
             } else {
                 # 复用本地镜像时，保存当前镜像 ID
                 try {
                     $curId = (& docker image inspect openclaw-pro --format '{{.Id}}' 2>$null)
                     if ($curId) {
-                        $curId | Set-Content (Join-Path $configDir "image-digest.txt") -Force
+                        [void](Write-StateVolumeFile -VolumeName $stateVolumeName -ImageName "openclaw-pro:latest" -RelativePath "image-digest.txt" -Content $curId)
                     }
                 } catch { }
             }
@@ -4178,20 +4177,11 @@ function Main {
             $hostUser = Convert-ToContainerUserName $rawHostUser
             $hostUid = ""
             $hostGid = ""
-            $userHomeDir = ""
 
             if ($hostUser -and $hostUser -ne "root" -and $hostUser -ne "administrator") {
                 if ($rawHostUser -and $rawHostUser -ne $hostUser) {
                     Write-Warn "检测到 Windows 用户名 '$rawHostUser' 含不兼容字符，容器 SSH 用户将使用: $hostUser"
                 }
-                # Windows 用户没有 UID/GID，容器内会自动分配
-                $userHomeDir = Join-Path $homeData $hostUser
-
-                # 创建用户持久化目录
-                if (-not (Test-Path $userHomeDir)) {
-                    New-Item -ItemType Directory -Path $userHomeDir -Force | Out-Null
-                }
-                Write-Info "创建用户持久化目录: $userHomeDir"
                 $script:hostUserForSSH = $hostUser
             } else {
                 Write-Warn "未检测到可用普通用户，将仅保留 root 密钥登录兜底"
@@ -4214,17 +4204,13 @@ function Main {
                 "--cap-add", "FOWNER",
                 "--cap-add", "SYS_CHROOT",
                 "--cap-add", "AUDIT_WRITE",
-                "-v", "${rootDataDir}:/root",
+                "-v", "${stateVolumeName}:/root/.openclaw",
                 "-e", "TZ=Asia/Shanghai"
             )
 
             # 添加用户环境变量（用于容器内创建同名用户）
             if ($hostUser -and $hostUser -ne "root" -and $hostUser -ne "administrator") {
                 $runArgs += @("-e", "HOST_USER=$hostUser")
-                # 添加用户目录挂载
-                if ($userHomeDir -and (Test-Path $userHomeDir)) {
-                    $runArgs += @("-v", "${userHomeDir}:/home/$hostUser")
-                }
             }
 
             # PowerShell hashtable keys are case-insensitive, so we store lowercase only
@@ -5071,22 +5057,8 @@ function Main {
                 # 恢复后重试启动容器
                 if ($recoverOK) {
                     Write-Info "正在重试启动容器..."
-                    $retryHomeData = if ([string]::IsNullOrWhiteSpace("$homeData")) { $defaultHomeData } else { $homeData }
-                    if ([string]::IsNullOrWhiteSpace("$retryHomeData")) {
-                        $retryHomeDataName = "home-data"
-                        if ($containerName -match '^openclaw-pro-(\d+)$') {
-                            $retryHomeDataName = "home-data-$($Matches[1])"
-                        }
-                        $retryHomeData = Join-Path $homeBaseDir $retryHomeDataName
-                        Write-Info "检测到数据目录变量为空，回退到默认数据目录: $retryHomeData"
-                    }
-                    if (-not (Test-Path $retryHomeData)) {
-                        New-Item -ItemType Directory -Path $retryHomeData -Force | Out-Null
-                    }
-                    $retryRootData = Join-Path $retryHomeData "root"
-                    if (-not (Test-Path $retryRootData)) {
-                        New-Item -ItemType Directory -Path $retryRootData -Force | Out-Null
-                    }
+                    $retryStateVolume = Get-StateVolumeName -ContainerName $containerName
+                    try { & docker volume create $retryStateVolume 2>$null | Out-Null } catch { }
                     try {
                         $containerExists = (& docker ps -a --filter "name=^/$containerName$" --format "{{.Names}}" 2>$null | Select-Object -First 1)
                         if ($containerExists -eq $containerName) {
@@ -5105,7 +5077,7 @@ function Main {
                             "--hostname", "openclaw",
                             "--dns", "8.8.8.8",
                             "--dns", "8.8.4.4",
-                            "-v", "${retryRootData}:/root",
+                            "-v", "${retryStateVolume}:/root/.openclaw",
                             "-e", "TZ=Asia/Shanghai",
                             "--restart", "unless-stopped"
                         )

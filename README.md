@@ -80,7 +80,8 @@ Windows 侧同样采用：
 - 镜像文件：`X/openclaw-pro/openclaw-pro-image-lite.tar.gz`
 - 安装日志：`X/openclaw-pro/install.log`
 - root 初始密码文件：`X/openclaw-pro/root-initial-password.txt`
-- 持久化数据：`X/openclaw-pro/home-data/root` 与 `X/openclaw-pro/home-data/username`
+- 持久化状态卷：`openclaw-pro-state` 挂载到容器 `/root/.openclaw`
+- 旧版 `X/openclaw-pro/home-data` 仅作为历史兼容目录，新安装不再创建或使用
 
 ---
 
@@ -104,16 +105,6 @@ Windows 侧同样采用：
 - Chrome/noVNC 图形浏览器能力。
 - LightGBM 等交易推理依赖。
 - `openclaw` CLI（若缺失，网关会被跳过）。
-
-### Full 镜像（仓库支持）
-
-来源：`Dockerfile`
-
-额外内置：
-
-- Chrome + noVNC。
-- LightGBM/pandas/numpy/baostock。
-- `openclaw` CLI。
 
 ---
 
