@@ -3674,7 +3674,7 @@ function skillCard(s) {
           ${s.description ? `<div class="muted small" style="margin-top:2px">${escapeHtml(s.description)}</div>` : ''}
           ${secDetail}
         </div>
-        ${s.source === 'managed' ? `<button class="btn" style="font-size:12px;padding:2px 10px;white-space:nowrap" data-skill-remove="${escapeHtml(s.name)}">\u79FB\u9664</button>` : ''}
+        ${s.source === 'managed' ? `<button class="btn" style="font-size:12px;padding:2px 10px;white-space:nowrap" data-skill-remove="${escapeHtml(s.name)}">移除</button>` : ''}
       </div>
     </div>`;
 }
@@ -3716,7 +3716,6 @@ function scanSkillCard(s, idx) {
           <div class="muted small" style="margin-top:1px">${escapeHtml(s.description || '')}</div>
           <div class="muted small" style="margin-top:1px;color:#888">📁 ${escapeHtml(s.relPath || s.dirName)}</div>
           ${warningHtml}${errorHtml}
-        </div>
       </div>
     </div>`;
 }
@@ -3762,7 +3761,7 @@ async function refreshPlugins() {
   if (userSkills.length) {
     html += skillGroupHtml('\u7528\u6237\u5B89\u88C5', userSkills, false);
   } else {
-    html += '<div class="muted small" style="padding:12px 0">\u6682\u65E0\u7528\u6237\u5B89\u88C5\u7684 Skill\u3002</div>';
+    html += '<div class="muted small" style="padding:12px 0">暂无用户安装的 Skill。</div>';
   }
   if (extSkills.length) {
     html += skillGroupHtml('\u6269\u5C55 Skills', extSkills, true);

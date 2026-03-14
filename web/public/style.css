@@ -398,6 +398,134 @@ select.input option{font-weight:400;color:var(--text);padding:4px 8px}
 .tab:hover{filter:brightness(1.06)}
 .tab.active{background:linear-gradient(180deg, rgba(255,255,255,.20), rgba(255,255,255,.10)); border-color:rgba(255,255,255,.26); color:#f5f5f7}
 
+.plugin-group{
+  margin-top:14px;
+  border-top:1px solid rgba(255,255,255,.10);
+  padding-top:12px;
+}
+.plugin-group-toggle{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  width:100%;
+  padding:0;
+  border:0;
+  background:none;
+  color:rgba(245,245,247,.82);
+  cursor:pointer;
+  text-align:left;
+}
+.plugin-group-toggle:hover{color:#fff}
+.plugin-group-arrow{
+  color:rgba(142,142,147,.92);
+  width:12px;
+  text-align:center;
+  flex:0 0 auto;
+}
+.plugin-group-title{
+  font-size:13px;
+  font-weight:700;
+}
+.plugin-group-count{
+  margin-left:auto;
+  font-size:12px;
+  color:rgba(209,209,214,.72);
+}
+.plugin-group-body{margin-top:10px}
+
+.plugin-card{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:12px;
+  border-radius:12px;
+  border:1px solid rgba(255,255,255,.10);
+  background:linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.03));
+  padding:12px 14px;
+  margin-bottom:10px;
+}
+.plugin-card.is-warning{border-left:3px solid #ff9800}
+.plugin-card.is-dim{opacity:.62}
+.plugin-card-main{flex:1; min-width:0}
+.plugin-card-head{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+}
+.plugin-card-name{
+  font-size:14px;
+  font-weight:800;
+  color:#f5f5f7;
+  line-height:1.35;
+}
+.plugin-card-desc{
+  margin-top:6px;
+  color:rgba(209,209,214,.84);
+  font-size:12px;
+  line-height:1.65;
+}
+.plugin-card-meta{
+  margin-top:6px;
+  color:rgba(142,142,147,.92);
+  font-size:12px;
+  line-height:1.55;
+}
+.plugin-card-note{
+  margin-top:4px;
+  font-size:12px;
+  line-height:1.55;
+}
+.plugin-card-note.warn{color:#ffb44c}
+.plugin-card-note.error{color:#ff8a80}
+.plugin-card-actions{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex:0 0 auto;
+}
+
+.plugin-badge{
+  display:inline-flex;
+  align-items:center;
+  height:20px;
+  padding:0 7px;
+  border-radius:999px;
+  font-size:11px;
+  font-weight:700;
+  letter-spacing:.01em;
+  border:1px solid transparent;
+}
+.plugin-badge.source-bundled{background:rgba(227,242,253,.14); color:#99ccff; border-color:rgba(153,204,255,.20)}
+.plugin-badge.source-managed{background:rgba(232,245,233,.12); color:#8ed7a0; border-color:rgba(142,215,160,.20)}
+.plugin-badge.source-ext{background:rgba(232,234,246,.12); color:#aeb7ff; border-color:rgba(174,183,255,.20)}
+.plugin-badge.source-ext-name{background:rgba(255,243,224,.12); color:#ffc07d; border-color:rgba(255,192,125,.18)}
+.plugin-badge.warn{background:rgba(255,243,224,.12); color:#ffb44c; border-color:rgba(255,180,76,.18)}
+.plugin-badge.status-update{background:rgba(255,152,0,.14); color:#ffb44c; border-color:rgba(255,180,76,.18)}
+.plugin-badge.status-conflict{background:rgba(255,152,0,.12); color:#ffb44c; border-color:rgba(255,180,76,.18)}
+.plugin-badge.status-installed{background:rgba(76,175,80,.12); color:#8bd48e; border-color:rgba(139,212,142,.18)}
+.plugin-badge.status-overwrite{background:rgba(33,150,243,.12); color:#8ec9ff; border-color:rgba(142,201,255,.18)}
+.plugin-badge.status-invalid{background:rgba(255,68,68,.12); color:#ff9c9c; border-color:rgba(255,156,156,.18)}
+
+.plugin-scan-card{
+  display:flex;
+  gap:10px;
+  align-items:flex-start;
+  border-radius:12px;
+  border:1px solid rgba(255,255,255,.10);
+  padding:11px 12px;
+  margin-bottom:8px;
+  background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+}
+.plugin-scan-card.is-dim{opacity:.62}
+.plugin-scan-check{margin-top:3px}
+.plugin-scan-body{flex:1; min-width:0}
+.plugin-empty{
+  padding:14px 0;
+  color:rgba(209,209,214,.82);
+  font-size:12px;
+}
+
 .oc-inner-tab{
   min-width:138px;
   text-align:center;
@@ -521,5 +649,6 @@ pre.terminal .term-line{display:inline}
   .card{padding:14px}
   .terminal{height:460px}
 }
+
 details summary::-webkit-details-marker{display:none}
 details[open]>summary>span:first-child{transform:rotate(90deg)}

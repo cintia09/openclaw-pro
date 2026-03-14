@@ -4357,7 +4357,7 @@ function reconcileGatewayNodeListWithPresence(nodes, presenceNodes) {
     merged.push({
       ...node,
       _presenceConfirmed: true,
-      _fromPresence: Boolean(node?._fromPresence) || Boolean(presenceNode?._fromPresence)
+      _fromPresence: Boolean(node?._fromPresence)
     });
   }
 
@@ -4518,6 +4518,12 @@ function normalizeNodeStatusSnapshot(raw) {
 
 function shouldAcceptGatewayNodeConnection(gwNode, gatewayInfo, previousGatewayPid, now) {
   if (!gwNode || gwNode.connected !== true) return false;
+
+  // Presence snapshots can lag behind real disconnects.
+  // Only treat presence-derived entries as online when they also map to a real node.list node.
+  if (gwNode?._fromPresence === true && !gwNode?.nodeId) {
+    return false;
+  }
 
   const gatewayStartedAtMs = Number(gatewayInfo?.startedAtMs || 0);
   const gatewayPid = Number(gatewayInfo?.pid || 0);
@@ -8956,17 +8962,26 @@ app.get('/api/logs', (req, res) => {
 // ============================================================
 // Resolve the openclaw package's skills directory (bundled)
 function resolveOpenclawPkgRoot() {
+  const candidateRoots = [
+    '/tmp/openclaw-runtime/openclaw-source',
+    path.join(process.env.HOME || '/root', '.openclaw', 'openclaw-source')
+  ];
+  for (const candidate of candidateRoots) {
+    if (fs.existsSync(path.join(candidate, 'skills')) && fs.existsSync(path.join(candidate, 'extensions'))) {
+      return candidate;
+    }
+  }
   try {
     const npmRoot = execSync('npm root -g 2>/dev/null', { encoding: 'utf8', timeout: 5000 }).trim();
     const candidate = path.join(npmRoot, 'openclaw');
-    if (fs.existsSync(path.join(candidate, 'skills'))) return candidate;
+    if (fs.existsSync(path.join(candidate, 'skills')) && fs.existsSync(path.join(candidate, 'extensions'))) return candidate;
   } catch {}
   // Fallback: common paths
   const fallbacks = ['/root/.npm-global/lib/node_modules/openclaw', '/usr/local/lib/node_modules/openclaw'];
   for (const f of fallbacks) {
-    if (fs.existsSync(path.join(f, 'skills'))) return f;
+    if (fs.existsSync(path.join(f, 'skills')) && fs.existsSync(path.join(f, 'extensions'))) return f;
   }
-  return '/root/.npm-global/lib/node_modules/openclaw';
+  return candidateRoots[0];
 }
 const OPENCLAW_PKG_ROOT = resolveOpenclawPkgRoot();
 const OPENCLAW_BUNDLED_SKILLS_DIR = path.join(OPENCLAW_PKG_ROOT, 'skills');

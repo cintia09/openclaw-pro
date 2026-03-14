@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>OpenClaw 管理面板</title>
-  <link rel="stylesheet" href="/style.css?v=1.2.07" />
+  <link rel="stylesheet" href="/style.css?v=1.2.09" />
   <link rel="stylesheet" href="/vendor/xterm/xterm.css" />
 </head>
 <body>
@@ -760,7 +760,6 @@
             <button class="btn" id="btn-plugins-refresh">刷新</button>
           </div>
 
-          <!-- 说明 -->
           <div style="margin-top:14px;padding:12px 14px;background:#1a1a2e;border-radius:8px;line-height:1.7">
             <div class="muted small">
               <b style="color:#f5f5f7">📖 Skills</b> — Markdown 驱动的知识包，为 Agent 注入专业领域能力（如 GitHub 操作、Notion 读写等）。每个 Skill 是一个包含 <code>SKILL.md</code> 的目录。<br>
@@ -775,12 +774,10 @@
             <button class="tab" data-ptab="extensions">🧩 Extensions</button>
           </div>
 
-          <!-- Skills Tab -->
           <div id="plugins-skills">
             <div style="margin-bottom:14px">
               <div class="muted small" style="margin-bottom:10px">所有已安装 Skills（内置 + 扩展 + 手动安装至 <code>~/.openclaw/skills/</code>）。含安全扫描标记。</div>
 
-              <!-- Scan source input -->
               <div class="muted small" style="margin-bottom:6px;font-weight:600;color:#aaa">扫描 Skill 源</div>
               <div class="row" style="gap:8px;flex-wrap:wrap">
                 <input class="input" id="skill-url-input" placeholder="输入 GitHub/GitLab/Gitee URL" style="flex:1;min-width:200px" />
@@ -793,7 +790,6 @@
               </div>
             </div>
 
-            <!-- Scan results -->
             <div id="skill-scan-results" style="display:none">
               <div style="margin-bottom:8px;padding:8px 12px;background:#1a1a2e;border-radius:8px">
                 <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:6px">
@@ -808,18 +804,15 @@
               </div>
             </div>
 
-            <!-- Install log -->
             <div id="skill-install-log" style="display:none">
               <pre class="terminal" style="height:120px;overflow-y:auto;font-size:11.5px"></pre>
             </div>
 
-            <!-- Installed skills list -->
             <div id="skills-list">
               <div class="muted small">加载中...</div>
             </div>
           </div>
 
-          <!-- Extensions Tab -->
           <div id="plugins-extensions" hidden>
             <div style="margin-bottom:14px">
               <div class="muted small" style="margin-bottom:10px">OpenClaw 内置 40+ Extensions（含 Feishu、Discord、Telegram 等通道）。以下为用户额外安装的 Extensions。</div>
@@ -839,7 +832,6 @@
             </div>
           </div>
 
-          <!-- 操作结果 -->
           <span class="muted small" id="plugins-result" style="margin-top:6px;display:block"></span>
         </div>
       </section>
@@ -963,6 +955,6 @@
 
   <script src="/vendor/xterm/xterm.js"></script>
   <script src="/vendor/xterm/addon-fit.js"></script>
-  <script src="/app.js?v=1.2.13"></script>
+  <script src="/app.js?v=1.2.15"></script>
 </body>
 </html>
