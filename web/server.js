@@ -330,7 +330,8 @@ app.use((err, req, res, next) => {
 
 function readJson(p, fallback) {
   try {
-    return JSON.parse(fs.readFileSync(p, 'utf8'));
+    const raw = fs.readFileSync(p, 'utf8').replace(/^\uFEFF/, '');
+    return JSON.parse(raw);
   } catch {
     return fallback;
   }

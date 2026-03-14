@@ -91,6 +91,21 @@ add_host_entry() {
     fi
 }
 
+strip_utf8_bom() {
+    local file="$1"
+    [ -f "$file" ] || return 0
+
+    python3 - "$file" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+data = path.read_bytes()
+if data.startswith(b'\xef\xbb\xbf'):
+    path.write_bytes(data[3:])
+PY
+}
+
 # 始终预写 GitHub 域名到 /etc/hosts（避免 V2RayN TUN 延迟接管导致 Node.js fetch 失败）
 echo "[start-services] Pre-resolving GitHub domains to /etc/hosts..."
 PREWRITE_DOMAINS="github.com api.github.com raw.githubusercontent.com objects.githubusercontent.com"
@@ -936,6 +951,7 @@ gateway_is_healthy() {
 }
 
 if [ -f "$CONFIG_FILE" ]; then
+    strip_utf8_bom "$CONFIG_FILE"
     raw_cert_mode=$(jq -r '.cert_mode // "letsencrypt"' "$CONFIG_FILE" 2>/dev/null)
     if [ "$raw_cert_mode" = "internal" ]; then
         CERT_MODE="internal"
@@ -975,6 +991,7 @@ done
 
 # --- 3. 启动 Caddy (如果配置了HTTPS) ---
 if [ -f "$CONFIG_FILE" ]; then
+    strip_utf8_bom "$CONFIG_FILE"
     DOMAIN=$(jq -r '.domain // empty' "$CONFIG_FILE" 2>/dev/null)
     AUTH_USER=$(jq -r '.auth_user // empty' "$CONFIG_FILE" 2>/dev/null)
     AUTH_HASH=$(jq -r '.auth_hash // empty' "$CONFIG_FILE" 2>/dev/null)

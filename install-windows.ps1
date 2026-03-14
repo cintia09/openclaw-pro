@@ -161,7 +161,8 @@ function Write-StateVolumeFile {
 
     $tmpFile = Join-Path $env:TEMP ("openclaw-state-" + [guid]::NewGuid().ToString() + ".tmp")
     try {
-        [IO.File]::WriteAllText($tmpFile, $Content, [Text.Encoding]::UTF8)
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [IO.File]::WriteAllText($tmpFile, $Content, $utf8NoBom)
         $rel = $RelativePath.Replace("'", "''")
         $dir = [IO.Path]::GetDirectoryName($RelativePath.Replace('/', '\'))
         if ([string]::IsNullOrWhiteSpace($dir)) { $dir = "." }
