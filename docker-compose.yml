@@ -22,7 +22,7 @@ services:
       - SYS_CHROOT
       - AUDIT_WRITE
     volumes:
-      - ../home-docker:/root
+      - openclaw_state:/root/.openclaw
     environment:
       - TZ=${TZ:-Asia/Shanghai}
       - http_proxy=${http_proxy:-${HTTP_PROXY:-}}
@@ -46,3 +46,6 @@ services:
       - "${PORT_MAPPING:-18789:18789}"
       - "${WEB_PORT_MAPPING:-3000:3000}"
     restart: unless-stopped
+
+volumes:
+  openclaw_state:

@@ -19,17 +19,11 @@ CONTAINER_NAME="openclaw-pro"
 IMAGE_NAME="openclaw-pro"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TMP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)/tmp"
-HOME_BASE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-HOME_DIR="$HOME_BASE_DIR/home-data"
-ROOT_HOME_DIR="$HOME_DIR/root"
+STATE_VOLUME_NAME="${STATE_VOLUME_NAME:-openclaw-pro-state}"
+STATE_MOUNT_POINT="/root/.openclaw"
+CONFIG_FILE="$STATE_MOUNT_POINT/docker-config.json"
+MASTER_KEY_FILE="$STATE_MOUNT_POINT/.enc_key"
 HOST_USER_NAME="${SUDO_USER:-${USER:-}}"
-if [ -z "$HOST_USER_NAME" ] || [ "$HOST_USER_NAME" = "root" ]; then
-    USER_HOME_DIR=""
-else
-    USER_HOME_DIR="$HOME_DIR/$HOST_USER_NAME"
-fi
-CONFIG_FILE="$ROOT_HOME_DIR/.openclaw/docker-config.json"
-MASTER_KEY_FILE="$ROOT_HOME_DIR/.openclaw/.enc_key"
 
 # ---- 工具函数 ----
 info()    { echo -e "${BLUE}[INFO]${NC} $*"; }
@@ -50,9 +44,6 @@ build_proxy_args() {
 
 build_user_mount_args() {
     USER_MOUNT_ARGS=()
-    if [ -n "$USER_HOME_DIR" ] && [ -n "$HOST_USER_NAME" ]; then
-        USER_MOUNT_ARGS+=( -v "$USER_HOME_DIR:/home/$HOST_USER_NAME" )
-    fi
 }
 
 build_host_user_env_args() {
@@ -66,6 +57,80 @@ build_host_user_env_args() {
     HOST_USER_ENV_ARGS+=( -e "HOST_USER=$HOST_USER_NAME" )
     HOST_USER_ENV_ARGS+=( -e "HOST_UID=$uid" )
     HOST_USER_ENV_ARGS+=( -e "HOST_GID=$gid" )
+}
+
+ensure_state_volume() {
+    docker volume inspect "$STATE_VOLUME_NAME" >/dev/null 2>&1 || docker volume create "$STATE_VOLUME_NAME" >/dev/null
+}
+
+run_state_helper() {
+    local script="$1"
+    ensure_state_volume
+    if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
+        error "镜像 '$IMAGE_NAME' 不存在，无法访问状态卷"
+        return 1
+    fi
+
+    docker run --rm \
+        -v "$STATE_VOLUME_NAME:$STATE_MOUNT_POINT" \
+        --entrypoint bash \
+        "$IMAGE_NAME" \
+        -lc "mkdir -p '$STATE_MOUNT_POINT' && $script"
+}
+
+read_state_file() {
+    local relpath="$1"
+    run_state_helper "test -f '$STATE_MOUNT_POINT/$relpath' && cat '$STATE_MOUNT_POINT/$relpath' || true"
+}
+
+write_state_file() {
+    local relpath="$1"
+    local mode="${2:-600}"
+    local dirpart tmpfile
+    dirpart="$(dirname "$relpath")"
+    tmpfile="$(mktemp)"
+    cat > "$tmpfile"
+
+    ensure_state_volume
+    if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
+        rm -f "$tmpfile"
+        error "镜像 '$IMAGE_NAME' 不存在，无法写入状态卷"
+        return 1
+    fi
+
+    docker run --rm \
+        -v "$STATE_VOLUME_NAME:$STATE_MOUNT_POINT" \
+        -v "$tmpfile:/tmp/openclaw-state-input:ro" \
+        --entrypoint bash \
+        "$IMAGE_NAME" \
+        -lc "mkdir -p '$STATE_MOUNT_POINT/$dirpart' && cat /tmp/openclaw-state-input > '$STATE_MOUNT_POINT/$relpath' && chmod $mode '$STATE_MOUNT_POINT/$relpath'"
+    local rc=$?
+    rm -f "$tmpfile"
+    return $rc
+}
+
+update_state_config_with_jq() {
+    local tmp_in tmp_out
+    tmp_in="$(mktemp)"
+    tmp_out="$(mktemp)"
+
+    read_state_file "docker-config.json" > "$tmp_in"
+    if [ ! -s "$tmp_in" ]; then
+        rm -f "$tmp_in" "$tmp_out"
+        error "状态卷中未找到 docker-config.json"
+        return 1
+    fi
+
+    if ! jq "$@" "$tmp_in" > "$tmp_out"; then
+        rm -f "$tmp_in" "$tmp_out"
+        error "更新 docker-config.json 失败"
+        return 1
+    fi
+
+    write_state_file "docker-config.json" 600 < "$tmp_out"
+    local rc=$?
+    rm -f "$tmp_in" "$tmp_out"
+    return $rc
 }
 
 # 容器启动后修复：检查并补装缺失依赖、修复 sshd 配置
@@ -262,17 +327,13 @@ build_download_urls() {
 
 # 读取本地镜像版本标记
 get_local_image_tag() {
-    local tag_file="$ROOT_HOME_DIR/.openclaw/image-release-tag.txt"
-    if [ -f "$tag_file" ]; then
-        cat "$tag_file" 2>/dev/null
-    fi
+    read_state_file "image-release-tag.txt"
 }
 
 # 保存镜像版本标记
 save_image_tag() {
     local tag="$1"
-    mkdir -p "$ROOT_HOME_DIR/.openclaw"
-    echo "$tag" > "$ROOT_HOME_DIR/.openclaw/image-release-tag.txt"
+    printf '%s\n' "$tag" | write_state_file "image-release-tag.txt" 600
 }
 
 # 获取镜像（优先下载预构建，回退到本地构建）
@@ -585,7 +646,7 @@ _load_and_tag_image() {
         local img_id
         img_id=$(docker image inspect "$IMAGE_NAME" --format '{{.Id}}' 2>/dev/null || true)
         if [ -n "$img_id" ]; then
-            echo "$img_id" > "$ROOT_HOME_DIR/.openclaw/image-digest.txt" 2>/dev/null || true
+            printf '%s\n' "$img_id" | write_state_file "image-digest.txt" 600 >/dev/null 2>&1 || true
         fi
 
         success "镜像导入完成 (GitHub Release)"
@@ -599,33 +660,21 @@ _load_and_tag_image() {
 
 # 确保加密主密钥存在（用于加密保存 API Key）
 ensure_encryption_key() {
-    if [ ! -f "$MASTER_KEY_FILE" ]; then
+    local existing_key
+    existing_key="$(read_state_file ".enc_key" | head -1 | tr -d '\r')"
+    if [ -z "$existing_key" ]; then
         info "生成随机加密主密钥..."
-        # 生成 32 字符的随机强密钥
-        LC_ALL=C tr -dc 'A-Za-z0-9!#%^&*+=' </dev/urandom | head -c 32 > "$MASTER_KEY_FILE"
-        chmod 400 "$MASTER_KEY_FILE"
+        LC_ALL=C tr -dc 'A-Za-z0-9!#%^&*+=' </dev/urandom | head -c 32 | write_state_file ".enc_key" 400
         success "加密主密钥已生成并设置 400 权限: $MASTER_KEY_FILE"
+        return 0
     fi
-    # 再次确保权限正确
-    if [ "$(stat -c %a "$MASTER_KEY_FILE" 2>/dev/null || stat -f %Lp "$MASTER_KEY_FILE" 2>/dev/null)" != "400" ]; then
-        chmod 400 "$MASTER_KEY_FILE"
-    fi
+
+    run_state_helper "test -f '$MASTER_KEY_FILE' && chmod 400 '$MASTER_KEY_FILE' || true" >/dev/null
 }
 
 # 确保home目录存在
 ensure_home() {
-    if [ ! -d "$HOME_DIR" ]; then
-        mkdir -p "$HOME_DIR"
-        chmod 700 "$HOME_DIR"
-        info "创建 home-data 目录: $HOME_DIR"
-    fi
-    mkdir -p "$ROOT_HOME_DIR/.openclaw"
-    chmod 700 "$ROOT_HOME_DIR" 2>/dev/null || true
-    if [ -n "$USER_HOME_DIR" ]; then
-        mkdir -p "$USER_HOME_DIR"
-        chmod 700 "$USER_HOME_DIR" 2>/dev/null || true
-    fi
-    ensure_encryption_key
+    ensure_state_volume
 }
 
 # ---- 端口工具 ----
@@ -765,10 +814,7 @@ show_install_summary() {
     echo -e "${GREEN}║${NC}    时区: ${YELLOW}${tz}${NC}                                          ${GREEN}║${NC}"
     echo -e "${GREEN}║${NC}                                                                  ${GREEN}║${NC}"
     echo -e "${GREEN}║${NC}  ${BOLD}数据目录：${NC}                                                    ${GREEN}║${NC}"
-    echo -e "${GREEN}║${NC}    📂 挂载: ${CYAN}${ROOT_HOME_DIR}${NC} → 容器 /root"
-    if [ -n "$USER_HOME_DIR" ]; then
-        echo -e "${GREEN}║${NC}    📂 挂载: ${CYAN}${USER_HOME_DIR}${NC} → 容器 /home/${HOST_USER_NAME}"
-    fi
+    echo -e "${GREEN}║${NC}    📦 Volume: ${CYAN}${STATE_VOLUME_NAME}${NC} → 容器 /root/.openclaw"
     echo -e "${GREEN}║${NC}                                                                  ${GREEN}║${NC}"
     echo -e "${GREEN}║${NC}  ${BOLD}💡 提示：${NC}                                                      ${GREEN}║${NC}"
     echo -e "${GREEN}║${NC}    访问 Web 管理面板可修改所有配置（端口/AI Key/平台等）   ${GREEN}║${NC}"
@@ -941,24 +987,6 @@ first_time_setup() {
         PORT_ARGS="-p ${HTTPS_PORT}:443 -p ${GW_TLS_PORT}:18790 -p 127.0.0.1:${GW_PORT}:18789 -p 127.0.0.1:${WEB_PORT}:3000 -p ${SSH_PORT}:22"
     fi
 
-    # 保存配置
-    mkdir -p "$ROOT_HOME_DIR/.openclaw"
-    cat > "$CONFIG_FILE" << EOF
-{
-    "port": $GW_PORT,
-    "gateway_tls_port": ${GW_TLS_PORT:-18790},
-    "web_port": $WEB_PORT,
-    "ssh_port": $SSH_PORT,
-    "http_port": $HTTP_PORT,
-    "https_port": $HTTPS_PORT,
-    "domain": "${DOMAIN}",
-    "cert_mode": "${CERT_MODE}",
-    "timezone": "${TZ_VAL}",
-    "created": "$(date -Iseconds)"
-}
-EOF
-    chmod 600 "$CONFIG_FILE"
-
     # 安全加固（用户确认后开启）
     echo ""
     echo -e "${BOLD}━━━ 宿主机安全加固 ━━━${NC}"
@@ -1049,6 +1077,24 @@ F2B
 
     # 获取镜像（配置完成后再下载，与 Windows 安装器流程对齐）
     ensure_image
+    ensure_state_volume
+    ensure_encryption_key
+
+    # 保存配置到状态卷
+    cat << EOF | write_state_file "docker-config.json" 600
+{
+    "port": $GW_PORT,
+    "gateway_tls_port": ${GW_TLS_PORT:-18790},
+    "web_port": $WEB_PORT,
+    "ssh_port": $SSH_PORT,
+    "http_port": $HTTP_PORT,
+    "https_port": $HTTPS_PORT,
+    "domain": "${DOMAIN}",
+    "cert_mode": "${CERT_MODE}",
+    "timezone": "${TZ_VAL}",
+    "created": "$(date -Iseconds)"
+}
+EOF
 
     # 清除旧 SSH host key（容器重建后 key 会变）
     ssh-keygen -R "[localhost]:${SSH_PORT}" 2>/dev/null || true
@@ -1073,8 +1119,7 @@ F2B
         --cap-add FOWNER \
         --cap-add SYS_CHROOT \
         --cap-add AUDIT_WRITE \
-        -v "$ROOT_HOME_DIR:/root" \
-        ${USER_MOUNT_ARGS[@]} \
+        -v "$STATE_VOLUME_NAME:$STATE_MOUNT_POINT" \
         $PORT_ARGS \
         -e "TZ=$TZ_VAL" \
         -e "CERT_MODE=$CERT_MODE" \
@@ -1256,7 +1301,7 @@ cmd_config() {
                 elif [ "$NEW_PORT" -lt 1 ] || [ "$NEW_PORT" -gt 65535 ]; then
                     error "端口范围: 1-65535"
                 else
-                    jq ".port = $NEW_PORT" "$CONFIG_FILE" > /tmp/cfg.tmp && mv /tmp/cfg.tmp "$CONFIG_FILE"
+                    update_state_config_with_jq ".port = $NEW_PORT"
                     warn "端口已更新，需要重建容器: $0 rebuild"
                 fi
             fi
@@ -1273,24 +1318,24 @@ cmd_config() {
                 if ! echo "$local_ip" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}$'; then
                     local_ip="127.0.0.1"
                 fi
-                jq --arg d "$local_ip" '.domain = $d | .cert_mode = "internal"' "$CONFIG_FILE" > /tmp/cfg.tmp && mv /tmp/cfg.tmp "$CONFIG_FILE"
+                update_state_config_with_jq --arg d "$local_ip" '.domain = $d | .cert_mode = "internal"'
                 warn "未输入域名，已切换为 IP 自签名 HTTPS: ${local_ip}；需要重建容器: $0 rebuild"
             elif ! echo "$NEW_DOMAIN" | grep -qE '^[a-zA-Z0-9]([a-zA-Z0-9.\-]*[a-zA-Z0-9])?$'; then
                 error "域名格式无效"
             else
                 if echo "$NEW_DOMAIN" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}$'; then
-                    jq --arg d "$NEW_DOMAIN" '.domain = $d | .cert_mode = "internal"' "$CONFIG_FILE" > /tmp/cfg.tmp && mv /tmp/cfg.tmp "$CONFIG_FILE"
+                    update_state_config_with_jq --arg d "$NEW_DOMAIN" '.domain = $d | .cert_mode = "internal"'
                     warn "已更新为 IP 自签名 HTTPS: ${NEW_DOMAIN}；需要重建容器: $0 rebuild"
                 else
-                    jq --arg d "$NEW_DOMAIN" '.domain = $d | .cert_mode = "letsencrypt"' "$CONFIG_FILE" > /tmp/cfg.tmp && mv /tmp/cfg.tmp "$CONFIG_FILE"
+                    update_state_config_with_jq --arg d "$NEW_DOMAIN" '.domain = $d | .cert_mode = "letsencrypt"'
                     warn "已更新为域名 HTTPS（Let's Encrypt）: ${NEW_DOMAIN}；需要重建容器: $0 rebuild"
                 fi
             fi
             ;;
         4)
-            read -p "时区 [当前: $(jq -r '.timezone' "$CONFIG_FILE" 2>/dev/null)]: " NEW_TZ
+            read -p "时区 [当前: $(read_state_file "docker-config.json" | jq -r '.timezone' 2>/dev/null)]: " NEW_TZ
             if [ -n "$NEW_TZ" ]; then
-                jq --arg tz "$NEW_TZ" '.timezone = $tz' "$CONFIG_FILE" > /tmp/cfg.tmp && mv /tmp/cfg.tmp "$CONFIG_FILE"
+                update_state_config_with_jq --arg tz "$NEW_TZ" '.timezone = $tz'
                 warn "时区已更新，需要重建容器: $0 rebuild"
             fi
             ;;
@@ -1338,8 +1383,8 @@ cmd_clean() {
     echo -e "  ${RED}将删除以下内容：${NC}"
     echo -e "    • 容器: ${CYAN}${CONTAINER_NAME}${NC}"
     echo -e "    • 镜像: ${CYAN}${IMAGE_NAME}${NC}"
+    echo -e "    • 状态卷: ${CYAN}${STATE_VOLUME_NAME}${NC}"
     echo -e "    • 配置: ${CYAN}${CONFIG_FILE}${NC}"
-    echo -e "    • 版本标记: ${CYAN}${ROOT_HOME_DIR}/.openclaw/${NC}"
     echo -e "  ${YELLOW}⚠ 此操作不可逆！${NC}"
     echo ""
     local confirm=""
@@ -1348,8 +1393,7 @@ cmd_clean() {
         docker stop "$CONTAINER_NAME" 2>/dev/null || true
         docker rm "$CONTAINER_NAME" 2>/dev/null || true
         docker rmi "$IMAGE_NAME" 2>/dev/null || true
-        rm -f "$CONFIG_FILE" 2>/dev/null || true
-        rm -rf "$ROOT_HOME_DIR/.openclaw" 2>/dev/null || true
+        docker volume rm "$STATE_VOLUME_NAME" 2>/dev/null || true
         success "已完全清理"
         echo -e "  重新安装: ${CYAN}$0 run${NC}"
     else
@@ -1387,7 +1431,7 @@ cmd_sshkey() {
     success "SSH 公钥已注入容器"
 
     local ssh_port_val
-    ssh_port_val=$(jq -r '.ssh_port // 2222' "$CONFIG_FILE" 2>/dev/null || echo 2222)
+    ssh_port_val=$(read_state_file "docker-config.json" | jq -r '.ssh_port // 2222' 2>/dev/null || echo 2222)
     echo -e "  现在可以连接: ${CYAN}ssh root@localhost -p ${ssh_port_val}${NC}"
 }
 
@@ -1612,8 +1656,8 @@ _do_full_update() {
     if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
         config_json=$(docker exec "$CONTAINER_NAME" cat /root/.openclaw/docker-config.json 2>/dev/null || true)
     fi
-    if [ -z "$config_json" ] && [ -f "$CONFIG_FILE" ]; then
-        config_json=$(cat "$CONFIG_FILE" 2>/dev/null || true)
+    if [ -z "$config_json" ]; then
+        config_json=$(read_state_file "docker-config.json" 2>/dev/null || true)
     fi
     if [ -z "$config_json" ]; then
         error "无法读取容器配置，请使用 $0 rebuild + $0 run"
@@ -1697,8 +1741,7 @@ _do_full_update() {
         --cap-add FOWNER \
         --cap-add SYS_CHROOT \
         --cap-add AUDIT_WRITE \
-        -v "$ROOT_HOME_DIR:/root" \
-        ${USER_MOUNT_ARGS[@]} \
+        -v "$STATE_VOLUME_NAME:$STATE_MOUNT_POINT" \
         $PORT_ARGS \
         -e "TZ=$tz" \
         -e "CERT_MODE=$cert_mode" \

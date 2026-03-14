@@ -4332,6 +4332,44 @@ app.post('/api/node/unpair', (req, res) => {
 // --- Gateway WebSocket 查询节点在线状态 ---
 // 优先以真实 device identity 的 control-ui 身份连接并调用 node.list
 // 失败时降级为 cli 身份连接，通过 presence 快照检测节点在线
+function normalizeNodePresenceKey(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function reconcileGatewayNodeListWithPresence(nodes, presenceNodes) {
+  if (!Array.isArray(nodes)) return Array.isArray(presenceNodes) ? presenceNodes : nodes;
+  if (!Array.isArray(presenceNodes)) return nodes;
+  if (presenceNodes.length === 0) return [];
+
+  const presenceByName = new Map();
+  for (const presenceNode of presenceNodes) {
+    const key = normalizeNodePresenceKey(presenceNode?.displayName);
+    if (key) presenceByName.set(key, presenceNode);
+  }
+
+  const merged = [];
+  const seenPresenceKeys = new Set();
+  for (const node of nodes) {
+    const key = normalizeNodePresenceKey(node?.displayName);
+    const presenceNode = key ? presenceByName.get(key) : null;
+    if (!presenceNode) continue;
+    seenPresenceKeys.add(key);
+    merged.push({
+      ...node,
+      _presenceConfirmed: true,
+      _fromPresence: Boolean(node?._fromPresence) || Boolean(presenceNode?._fromPresence)
+    });
+  }
+
+  for (const presenceNode of presenceNodes) {
+    const key = normalizeNodePresenceKey(presenceNode?.displayName);
+    if (!key || seenPresenceKeys.has(key)) continue;
+    merged.push(presenceNode);
+  }
+
+  return merged;
+}
+
 function queryGatewayNodeList(timeoutMs = 5000) {
   return new Promise((resolve) => {
     const WsClient = require('ws');
@@ -4393,10 +4431,13 @@ function queryGatewayNodeList(timeoutMs = 5000) {
         // 3) node.list 响应
         if (msg.id === listId) {
           if (msg.ok) {
-            clearTimeout(timer);
             const nodes = Array.isArray(msg.payload?.nodes) ? msg.payload.nodes : null;
-            finish(nodes);
+            usedFallback = true;
             try { ws.close(); } catch {}
+            queryGatewayNodeListFallback(gatewayPort, token, timeoutMs - 1000).then((presenceNodes) => {
+              clearTimeout(timer);
+              finish(reconcileGatewayNodeListWithPresence(nodes, presenceNodes));
+            });
           } else {
             logNodeProbeDebug('[node] node.list failed:', msg.error?.code || 'unknown', '→ cli fallback');
             usedFallback = true;
