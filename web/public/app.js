@@ -3318,6 +3318,11 @@ async function loadDeviceManagement() {
   }
 }
 
+function friendlyPlatform(p) {
+  const m = { darwin: 'macOS', win32: 'Windows', linux: 'Linux' };
+  return m[(p || '').toLowerCase()] || p || '';
+}
+
 function renderConnectedNodes(r) {
   const listEl = $('connected-nodes-list');
   if (!listEl) return;
@@ -3335,18 +3340,19 @@ function renderConnectedNodes(r) {
     '<th style="text-align:left;padding:6px 8px">状态</th>' +
     '<th style="text-align:left;padding:6px 8px">名称</th>' +
     '<th style="text-align:left;padding:6px 8px">平台</th>' +
-    '<th style="text-align:left;padding:6px 8px">IP</th>' +
+    '<th style="text-align:left;padding:6px 8px">连接时间</th>' +
     '</tr>' +
     nodes.map(n => {
       const statusDot = n.connected
         ? '<span style="color:#3fb950" title="在线">●</span>'
         : '<span style="color:#f85149" title="离线">●</span>';
       const statusText = n.connected ? '在线' : '离线';
+      const connTime = n.connectedAtMs ? new Date(n.connectedAtMs).toLocaleString() : '-';
       return '<tr style="border-bottom:1px solid #21262d">' +
         `<td style="padding:6px 8px">${statusDot} <span class="muted small">${statusText}</span></td>` +
         `<td style="padding:6px 8px;font-weight:600">${esc(n.displayName || '')}</td>` +
-        `<td style="padding:6px 8px"><span class="muted small">${esc(n.platform || '')}</span></td>` +
-        `<td style="padding:6px 8px"><code style="font-size:12px">${esc(n.remoteIp || '-')}</code></td>` +
+        `<td style="padding:6px 8px"><span class="muted small">${esc(friendlyPlatform(n.platform))}</span></td>` +
+        `<td style="padding:6px 8px"><span class="muted small">${connTime}</span></td>` +
         '</tr>';
     }).join('') +
     '</table>';
@@ -3368,7 +3374,7 @@ function renderPairingList(r) {
     const age = Math.round((Date.now() - (p.ts || 0)) / 1000);
     const ageStr = age < 60 ? age + '秒前' : Math.round(age / 60) + '分钟前';
     const name = esc(p.displayName || p.clientId || '未知设备');
-    const plat = esc(p.platform || '');
+    const plat = esc(friendlyPlatform(p.platform));
     const mode = esc(p.clientMode || 'operator');
     const role = esc(p.role || 'operator');
     return '<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:#1a1a2e;border-radius:6px;margin-bottom:4px">'
@@ -3399,7 +3405,7 @@ function renderPairedList(r) {
   }
   listEl.innerHTML = paired.map((d) => {
     const name = esc(d.displayName || d.clientId || '未知');
-    const plat = esc(d.platform || '');
+    const plat = esc(friendlyPlatform(d.platform));
     const mode = esc(d.clientMode || 'operator');
     const roles = (d.roles || [d.role || 'operator']).map(esc).join(', ');
     const time = d.approvedAtMs ? new Date(d.approvedAtMs).toLocaleString() : '—';

@@ -2956,6 +2956,7 @@ app.use('/gateway-proxy', (req, res) => {
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
+
 app.use('/api', requireAuthApi);
 
 app.get('/api/terminal/ws-token', (req, res) => {
@@ -4030,135 +4031,157 @@ app.post('/api/node/unpair', (req, res) => {
   }
 });
 
+// --- Gateway WebSocket 查询节点在线状态 ---
+// 优先以 control-ui 身份连接并调用 node.list（需 dangerouslyDisableDeviceAuth=true）
+// 失败时降级为 cli 身份连接，通过 presence 快照检测节点在线
+function queryGatewayNodeList(timeoutMs = 5000) {
+  return new Promise((resolve) => {
+    const WsClient = require('ws');
+    const cfg = readDockerConfig();
+    const gatewayPort = Number(cfg.port || 18789) || 18789;
+    const token = getGatewayAuthToken();
+    let settled = false;
+    const finish = (val) => { if (!settled) { settled = true; resolve(val); } };
+
+    let ws;
+    try {
+      ws = new WsClient(`ws://127.0.0.1:${gatewayPort}`, {
+        headers: { Origin: 'http://127.0.0.1' }
+      });
+    } catch { finish(null); return; }
+
+    const timer = setTimeout(() => { finish(null); try { ws.close(); } catch {} }, timeoutMs);
+    ws.on('close', () => { clearTimeout(timer); finish(null); });
+    ws.on('error', () => { clearTimeout(timer); finish(null); try { ws.close(); } catch {} });
+
+    let connectId, listId, usedFallback = false;
+    ws.on('message', (data) => {
+      try {
+        const msg = JSON.parse(String(data));
+        // 1) connect.challenge → 尝试 control-ui 连接
+        if (msg.event === 'connect.challenge') {
+          connectId = crypto.randomUUID();
+          ws.send(JSON.stringify({
+            type: 'req', id: connectId, method: 'connect',
+            params: {
+              minProtocol: 3, maxProtocol: 3,
+              client: { id: 'openclaw-control-ui', version: '2026.3.12', platform: 'linux', mode: 'webchat' },
+              caps: [], role: 'operator',
+              scopes: ['operator.admin', 'operator.read', 'operator.approvals', 'operator.pairing'],
+              auth: { token: token || undefined }
+            }
+          }));
+          return;
+        }
+        // 2) connect 响应
+        if (msg.id === connectId) {
+          if (msg.ok) {
+            // control-ui 连接成功 → 调用 node.list
+            listId = crypto.randomUUID();
+            ws.send(JSON.stringify({ type: 'req', id: listId, method: 'node.list', params: {} }));
+          } else {
+            // control-ui 被拒绝（如 device identity required）→ 降级为 cli 连接
+            try { ws.close(); } catch {}
+            queryGatewayNodeListFallback(gatewayPort, token, timeoutMs - 1000).then(v => { clearTimeout(timer); finish(v); });
+          }
+          return;
+        }
+        // 3) node.list 响应
+        if (msg.id === listId) {
+          clearTimeout(timer);
+          const nodes = msg.ok && Array.isArray(msg.payload?.nodes) ? msg.payload.nodes : null;
+          finish(nodes);
+          try { ws.close(); } catch {}
+        }
+      } catch {}
+    });
+  });
+}
+
+// 降级方案：cli 身份连接，从 presence 快照推断节点在线（无需 scopes）
+function queryGatewayNodeListFallback(gatewayPort, token, timeoutMs) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (val) => { if (!settled) { settled = true; resolve(val); } };
+    const timer = setTimeout(() => { finish(null); try { ws.close(); } catch {} }, Math.max(timeoutMs, 2000));
+
+    let ws;
+    try {
+      ws = new WebSocket(`ws://127.0.0.1:${gatewayPort}`);
+    } catch { clearTimeout(timer); finish(null); return; }
+
+    ws.onclose = () => { clearTimeout(timer); finish(null); };
+    ws.onerror = () => { clearTimeout(timer); finish(null); try { ws.close(); } catch {} };
+
+    let connectId;
+    ws.onmessage = (evt) => {
+      try {
+        const msg = JSON.parse(String(evt.data));
+        if (msg.event === 'connect.challenge') {
+          connectId = crypto.randomUUID();
+          ws.send(JSON.stringify({
+            type: 'req', id: connectId, method: 'connect',
+            params: {
+              minProtocol: 3, maxProtocol: 3,
+              client: { id: 'cli', version: '1.0', platform: 'linux', mode: 'backend' },
+              caps: [], role: 'operator', scopes: [],
+              auth: { token: token || undefined }
+            }
+          }));
+          return;
+        }
+        if (msg.id === connectId) {
+          clearTimeout(timer);
+          if (!msg.ok) { finish(null); try { ws.close(); } catch {} return; }
+          // 从 presence 快照中提取 mode=node, reason=connect 条目
+          const presence = msg.payload?.snapshot?.presence || [];
+          const nodePresence = presence.filter(p => p.mode === 'node' && p.reason === 'connect');
+          // 转换为 node.list 兼容格式（presence 中只有 host/mode/platform，无 nodeId）
+          const nodes = nodePresence.map(p => ({
+            displayName: p.host || '',
+            platform: p.platform || 'unknown',
+            connected: true,
+            _fromPresence: true
+          }));
+          finish(nodes.length > 0 ? nodes : []);
+          try { ws.close(); } catch {}
+        }
+      } catch {}
+    };
+  });
+}
+
 // GET /api/node/connected — 获取当前已连接的远端设备列表
 app.get('/api/node/connected', async (req, res) => {
   try {
     const paired = readJson(DEVICE_PAIRING_PAIRED_PATH, {});
     const nodeEntries = Object.values(paired).filter(e => e.clientMode === 'node');
 
-    // --- 方法: 解析 Gateway 的人类可读日志 + JSON 结构化日志 ---
-    // Gateway 没有 REST API (仅 /health)，CLI 挂起，WS 需要复杂握手协议。
-    // 因此解析日志来判断节点在线状态：
-    //   人类可读日志: [ws] <type> connected/disconnected conn=UUID remote=IP ...
-    //   JSON 结构化日志: {"1":{"mode":"node","handshake":"failed",...},"2":"closed before connect conn=..."}
-    //   连接失败标记: [ws] closed before connect conn=UUID ... reason=connect failed
+    // 通过 Gateway WS 查询节点在线状态
+    const gwNodes = await queryGatewayNodeList(4000);
 
-    // connId -> { remoteIp, clientId, connectedAt, displayName }
-    const connectedNodes = new Map();
-    // deviceId -> { remoteIp, connectedAt, forwardedFor } (从 JSON 日志解析)
-    const nodeLastSeen = new Map();
-
-    // 1) 解析人类可读日志
-    try {
-      const logText = String(runCommandText(
-        `tail -500 ${GATEWAY_RUNTIME_LOG_FILE} 2>/dev/null || true`, 2000) || '');
-      for (const line of logText.split('\n')) {
-        // 匹配: [ws] <任意非webchat类型> connected conn=UUID remote=IP ...
-        // 格式: [ws] node-host connected conn=UUID remote=IP client=node-host node ...
-        // 或:   [ws] node connected conn=UUID remote=IP ...
-        const connMatch = line.match(/\[ws\]\s+(\S+)\s+connected\s+conn=(\S+)\s+remote=(\S+)/);
-        if (connMatch) {
-          const clientType = connMatch[1];
-          if (clientType === 'webchat') continue; // 忽略 webchat 连接
-          const connId = connMatch[2];
-          const remoteIp = connMatch[3] || '';
-          const fwdMatch = line.match(/fwd=([^:\s]+)/);
-          connectedNodes.set(connId, {
-            remoteIp: remoteIp.replace(/^::ffff:/, ''),
-            forwardedFor: fwdMatch?.[1]?.replace(/^::ffff:/, '') || '',
-            clientId: clientType,
-            connectedAt: line.slice(0, 30)
-          });
-          continue;
-        }
-        // 匹配断开: [ws] <type> disconnected ... conn=UUID
-        const disconnMatch = line.match(/\[ws\]\s+\S+\s+disconnected\s+.*?conn=(\S+)/);
-        if (disconnMatch) {
-          connectedNodes.delete(disconnMatch[1]);
-          continue;
-        }
-        // 匹配连接失败: [ws] closed before connect conn=UUID
-        const closedMatch = line.match(/\[ws\]\s+closed before connect\s+conn=(\S+)/);
-        if (closedMatch) {
-          connectedNodes.delete(closedMatch[1]);
-        }
+    // 建立 nodeId → gateway node 映射（node.list 格式）
+    // 以及 displayName → gateway node 映射（presence 降级格式）
+    const gwNodeMapById = new Map();
+    const gwNodeMapByName = new Map();
+    if (gwNodes) {
+      for (const n of gwNodes) {
+        if (n.nodeId) gwNodeMapById.set(n.nodeId, n);
+        if (n.displayName) gwNodeMapByName.set(n.displayName, n);
       }
-    } catch { /* log parsing failed */ }
+    }
 
-    // 2) 解析 JSON 结构化日志获取节点连接详情（IP、名称等）
-    //    JSON 日志路径: /tmp/openclaw/openclaw-YYYY-MM-DD.log
-    try {
-      const today = new Date().toISOString().slice(0, 10);
-      const jsonLogFile = `/tmp/openclaw/openclaw-${today}.log`;
-      const jsonLogText = String(runCommandText(
-        `tail -200 ${jsonLogFile} 2>/dev/null || true`, 2000) || '');
-      for (const line of jsonLogText.split('\n')) {
-        if (!line.includes('"mode":"node"')) continue;
-        try {
-          const entry = JSON.parse(line);
-          const detail = entry['1'];
-          if (!detail || typeof detail !== 'object') continue;
-          if (detail.mode !== 'node') continue;
-          const displayName = detail.clientDisplayName || '';
-          const fwd = (detail.forwardedFor || '').replace(/:\d+$/, '').replace(/^::ffff:/, '') || '';
-          const host = detail.host || '';
-          const cause = detail.cause || '';
-          const ts = entry.time || entry._meta?.date || '';
-          // 找到对应的 paired entry
-          for (const pe of nodeEntries) {
-            if (displayName && pe.displayName === displayName) {
-              const prev = nodeLastSeen.get(pe.deviceId);
-              const prevTs = prev?.ts || '';
-              if (!prevTs || ts > prevTs) {
-                nodeLastSeen.set(pe.deviceId, {
-                  remoteIp: fwd || host || '',
-                  ts,
-                  connected: cause !== 'unauthorized' && cause !== 'invalid-handshake',
-                  cause,
-                });
-              }
-            }
-          }
-        } catch { /* single line parse failed */ }
-      }
-    } catch { /* JSON log parsing failed */ }
-
-    // 3) 构建结果: 仅依赖日志解析，不使用 lastUsedAtMs（不可靠，webchat 发 node.invoke 也会更新它）
     const nodes = nodeEntries.map(entry => {
-      let isConnected = false;
-      let ip = entry.remoteIp || '';
-
-      // 从人类可读日志匹配
-      for (const n of connectedNodes.values()) {
-        // 按 clientId 或 IP 匹配
-        const nodeIp = n.forwardedFor || n.remoteIp || '';
-        if (ip && nodeIp && nodeIp === ip) { isConnected = true; if (!ip && nodeIp) ip = nodeIp; break; }
-        if (!ip && nodeIp) ip = nodeIp;
-      }
-
-      // 从 JSON 日志补充信息
-      const jsonInfo = nodeLastSeen.get(entry.deviceId);
-      if (jsonInfo) {
-        if (!ip && jsonInfo.remoteIp) ip = jsonInfo.remoteIp;
-        // JSON 日志显示最近一次连接是成功的且在人类日志中没有找到断开记录
-        if (!isConnected && jsonInfo.connected) {
-          // 检查时间戳是否在最近 2 分钟内（JSON 日志条目）
-          const entryTime = jsonInfo.ts ? new Date(jsonInfo.ts).getTime() : 0;
-          if (entryTime && (Date.now() - entryTime) < 120000) {
-            isConnected = true;
-          }
-        }
-      }
-
-      // 清理 IP: 过滤掉 Docker 内部地址（172.17.0.1 等无意义的地址）
-      if (ip === '172.17.0.1' || ip === '127.0.0.1' || ip === '::1') ip = '';
-
+      // 优先按 nodeId 匹配（node.list 格式），其次按 displayName 匹配（presence 降级）
+      const gwNode = gwNodeMapById.get(entry.deviceId) ||
+                     gwNodeMapByName.get(entry.displayName) ||
+                     gwNodeMapByName.get(entry.clientId);
       return {
         deviceId: entry.deviceId,
-        displayName: entry.displayName || entry.clientId || entry.deviceId?.slice(0, 12),
-        platform: entry.platform || 'unknown',
-        connected: isConnected,
-        remoteIp: ip,
+        displayName: gwNode?.displayName || entry.displayName || entry.clientId || entry.deviceId?.slice(0, 12),
+        platform: gwNode?.platform || entry.platform || 'unknown',
+        connected: gwNode?.connected === true,
+        connectedAtMs: gwNode?.connectedAtMs || 0,
         approvedAtMs: entry.approvedAtMs || 0,
       };
     });
@@ -7493,6 +7516,160 @@ app.get('/api/openclaw/config/repair/:taskId', (req, res) => {
     delta = chunks.slice(since).join('');
   }
   res.json({ ...task, delta });
+});
+
+// --- Migration Export (full data for container migration) ---
+app.get('/api/openclaw/migration/export', async (req, res) => {
+  try {
+    const OPENCLAW_BASE = path.dirname(CONFIG_PATH);
+    // All files needed for full container migration
+    const FILE_MAP = {
+      'openclaw.json': CONFIG_PATH,
+      'openclaw.json.bak': `${CONFIG_PATH}.bak`,
+      '.enc_key': path.join(OPENCLAW_BASE, '.enc_key'),
+      'docker-config.json': path.join(OPENCLAW_BASE, 'docker-config.json'),
+      'identity/device.json': path.join(OPENCLAW_BASE, 'identity/device.json'),
+      'identity/device-auth.json': path.join(OPENCLAW_BASE, 'identity/device-auth.json'),
+      'devices/paired.json': path.join(OPENCLAW_BASE, 'devices/paired.json'),
+      'cron/jobs.json': path.join(OPENCLAW_BASE, 'cron/jobs.json'),
+      'exec-approvals.json': path.join(OPENCLAW_BASE, 'exec-approvals.json'),
+      'agents/main/agent/auth-profiles.json': path.join(OPENCLAW_BASE, 'agents/main/agent/auth-profiles.json'),
+      'agents/main/agent/models.json': path.join(OPENCLAW_BASE, 'agents/main/agent/models.json'),
+    };
+    const tmpDir = `/tmp/openclaw-migration-${Date.now()}`;
+    fs.mkdirSync(tmpDir, { recursive: true });
+    let fileCount = 0;
+    const included = [];
+    for (const [name, src] of Object.entries(FILE_MAP)) {
+      if (fs.existsSync(src)) {
+        const dest = path.join(tmpDir, name);
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.copyFileSync(src, dest);
+        fileCount++;
+        included.push(name);
+      }
+    }
+    // Also copy config-backups if they exist
+    const backupDir = path.join(OPENCLAW_BASE, 'config-backups');
+    if (fs.existsSync(backupDir)) {
+      const { execSync } = require('child_process');
+      const destBackup = path.join(tmpDir, 'config-backups');
+      fs.mkdirSync(destBackup, { recursive: true });
+      execSync(`cp -r ${JSON.stringify(backupDir)}/. ${JSON.stringify(destBackup)}/`, { stdio: 'pipe', timeout: 15000 });
+      included.push('config-backups/');
+    }
+    if (fileCount === 0) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      return res.status(404).json({ error: '没有可导出的数据文件' });
+    }
+    fs.writeFileSync(path.join(tmpDir, '_migration-meta.json'), JSON.stringify({
+      exportTime: new Date().toISOString(),
+      files: included,
+      version: 'openclaw-migration-v1',
+      sourceImage: (() => { try { return fs.readFileSync(path.join(OPENCLAW_BASE, 'image-release-tag.txt'), 'utf8').trim(); } catch { return 'unknown'; } })()
+    }, null, 2));
+    const tgzPath = `${tmpDir}.tar.gz`;
+    const { exec } = require('child_process');
+    await new Promise((resolve, reject) => {
+      exec(`tar -czf ${JSON.stringify(tgzPath)} -C ${JSON.stringify(tmpDir)} .`, { timeout: 30000 }, (err) => err ? reject(err) : resolve());
+    });
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    const stat = fs.statSync(tgzPath);
+    const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+    res.setHeader('Content-Type', 'application/gzip');
+    res.setHeader('Content-Length', stat.size);
+    res.setHeader('Content-Disposition', `attachment; filename="openclaw-migration-${ts}.tar.gz"`);
+    const stream = fs.createReadStream(tgzPath);
+    stream.pipe(res);
+    res.on('close', () => { try { fs.unlinkSync(tgzPath); } catch {} });
+  } catch (e) {
+    console.error(`[migration-export] 导出失败: ${e?.message}`);
+    if (!res.headersSent) res.status(500).json({ error: e?.message || '迁移导出失败' });
+  }
+});
+
+// --- Migration Import (restore full data from migration archive) ---
+app.post('/api/openclaw/migration/import', (req, res) => {
+  try {
+    const contentType = req.headers['content-type'] || '';
+    if (!contentType.includes('application/gzip') && !contentType.includes('application/octet-stream') && !contentType.includes('application/x-gzip') && !contentType.includes('application/x-tar')) {
+      return res.status(400).json({ error: '请上传 .tar.gz 迁移包' });
+    }
+    const chunks = [];
+    req.on('data', chunk => chunks.push(chunk));
+    req.on('end', () => {
+      try {
+        const buf = Buffer.concat(chunks);
+        if (buf.length < 20) return res.status(400).json({ error: '文件太小，无效的压缩包' });
+        if (buf.length > 50 * 1024 * 1024) return res.status(400).json({ error: '文件太大（最大 50MB）' });
+        const tmpTgz = `/tmp/openclaw-migration-import-${Date.now()}.tar.gz`;
+        const tmpDir = `/tmp/openclaw-migration-import-${Date.now()}`;
+        fs.writeFileSync(tmpTgz, buf);
+        fs.mkdirSync(tmpDir, { recursive: true });
+        const { execSync } = require('child_process');
+        execSync(`tar -xzf ${JSON.stringify(tmpTgz)} -C ${JSON.stringify(tmpDir)}`, { stdio: 'pipe', timeout: 30000 });
+        fs.unlinkSync(tmpTgz);
+        // Verify it's a migration archive
+        const metaPath = path.join(tmpDir, '_migration-meta.json');
+        if (!fs.existsSync(metaPath)) {
+          fs.rmSync(tmpDir, { recursive: true, force: true });
+          return res.status(400).json({ error: '无效的迁移包（缺少 _migration-meta.json）' });
+        }
+        const OPENCLAW_BASE = path.dirname(CONFIG_PATH);
+        // Backup current state before overwrite
+        const backupTs = Date.now();
+        const preImportBackup = `/tmp/openclaw-pre-migration-backup-${backupTs}`;
+        try {
+          execSync(`cp -r ${JSON.stringify(OPENCLAW_BASE)} ${JSON.stringify(preImportBackup)}`, { stdio: 'pipe', timeout: 15000 });
+        } catch {}
+        // Restore all files from archive
+        const restoredFiles = [];
+        const RESTORE_MAP = {
+          'openclaw.json': CONFIG_PATH,
+          'openclaw.json.bak': `${CONFIG_PATH}.bak`,
+          '.enc_key': path.join(OPENCLAW_BASE, '.enc_key'),
+          'docker-config.json': path.join(OPENCLAW_BASE, 'docker-config.json'),
+          'identity/device.json': path.join(OPENCLAW_BASE, 'identity/device.json'),
+          'identity/device-auth.json': path.join(OPENCLAW_BASE, 'identity/device-auth.json'),
+          'devices/paired.json': path.join(OPENCLAW_BASE, 'devices/paired.json'),
+          'cron/jobs.json': path.join(OPENCLAW_BASE, 'cron/jobs.json'),
+          'exec-approvals.json': path.join(OPENCLAW_BASE, 'exec-approvals.json'),
+          'agents/main/agent/auth-profiles.json': path.join(OPENCLAW_BASE, 'agents/main/agent/auth-profiles.json'),
+          'agents/main/agent/models.json': path.join(OPENCLAW_BASE, 'agents/main/agent/models.json'),
+        };
+        for (const [name, target] of Object.entries(RESTORE_MAP)) {
+          const srcFile = path.join(tmpDir, name);
+          if (!fs.existsSync(srcFile)) continue;
+          fs.mkdirSync(path.dirname(target), { recursive: true });
+          fs.copyFileSync(srcFile, target);
+          // Restore original permissions for sensitive files
+          if (name === '.enc_key' || name.startsWith('identity/') || name.startsWith('devices/')) {
+            try { fs.chmodSync(target, 0o600); } catch {}
+          }
+          restoredFiles.push(name);
+        }
+        // Restore config-backups if present
+        const srcBackups = path.join(tmpDir, 'config-backups');
+        if (fs.existsSync(srcBackups)) {
+          const destBackups = path.join(OPENCLAW_BASE, 'config-backups');
+          fs.mkdirSync(destBackups, { recursive: true });
+          try {
+            execSync(`cp -r ${JSON.stringify(srcBackups)}/. ${JSON.stringify(destBackups)}/`, { stdio: 'pipe', timeout: 15000 });
+            restoredFiles.push('config-backups/');
+          } catch {}
+        }
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+        console.log(`[migration-import] 迁移导入完成: ${restoredFiles.join(', ')}, 预备份: ${preImportBackup}`);
+        res.json({ success: true, restoredFiles, preImportBackup, needRestart: true });
+      } catch (e) {
+        console.error(`[migration-import] 导入失败: ${e?.message}`);
+        res.status(500).json({ error: e?.message || '迁移导入失败' });
+      }
+    });
+  } catch (e) {
+    console.error(`[migration-import] 导入失败: ${e?.message}`);
+    res.status(500).json({ error: e?.message || '迁移导入失败' });
+  }
 });
 
 // --- Config Export (download as .tar.gz) ---
