@@ -40,6 +40,7 @@ const LOG_VIEW_REPAIR_BLOCK_CAP = 800;
 const LOG_VIEW_GATEWAY_BLOCK_CAP = 1200;
 const LOG_VIEW_PANEL_BLOCK_CAP = 800;
 const WS_LOG_BOOTSTRAP_LINES = 400;
+const RATE_LIMITED_LOG_STATE = new Map();
 
 function getLogTimezoneOffsetMinutes(value = Date.now()) {
   const date = value instanceof Date ? value : new Date(value);
@@ -140,22 +141,8 @@ console.warn = wrapConsole('warn');
 console.error = wrapConsole('error');
 console.debug = wrapConsole('debug');
 
-// ── 关键修复：让 Node.js 的 fetch() 使用 dns.lookup（读 /etc/hosts），
-//    而非 dns.resolve（只走 DNS 服务器，无法读 /etc/hosts）──
-// Node.js 22 内置 fetch 基于 undici，但 undici 模块不直接暴露给 require。
-// 解决方案：设置 dns.setDefaultResultOrder('verbatim') 并 patch dns 模块
-// 让 Node.js 的默认 DNS 解析优先使用系统 resolver（读 /etc/hosts）
 dns.setDefaultResultOrder('verbatim');
 
-// 对于 Node.js >= 20，可以通过设置环境变量来让 fetch 走 lookup
-// 实际生效方式：我们用 http.Agent/https.Agent 的 lookup 来覆盖，
-// 但 fetch 不支持这些 agent。所以改为：在 DoH 阶段直接写 /etc/hosts，
-// 并通过子进程调用 curl 来发起外部请求作为 fetch 的降级方案。
-
-/**
- * 当 Node.js fetch() 因 DNS 无法解析而失败时，
- * 降级使用子进程 curl（curl 读 /etc/hosts）
- */
 async function fetchWithFallback(url, options = {}) {
   try {
     const controller = new AbortController();
@@ -164,7 +151,6 @@ async function fetchWithFallback(url, options = {}) {
     clearTimeout(timeout);
     return resp;
   } catch (fetchErr) {
-    // fetch failed (likely DNS), fallback to curl
     const curlArgs = ['-sf', '--connect-timeout', '5', '--max-time', '10', '-L'];
     if (options.headers) {
       for (const [k, v] of Object.entries(options.headers)) {
@@ -180,7 +166,6 @@ async function fetchWithFallback(url, options = {}) {
     return new Promise((resolve, reject) => {
       exec(`curl ${curlArgs.map(a => `'${a}'`).join(' ')}`, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
         if (err) return reject(new Error(`curl fallback failed: ${stderr || err.message}`));
-        // Wrap curl output to look like a fetch Response
         resolve({
           ok: true,
           status: 200,
@@ -191,10 +176,9 @@ async function fetchWithFallback(url, options = {}) {
     });
   }
 }
+
 console.log('[DNS] fetchWithFallback configured (curl fallback for DNS issues)');
 
-// ── DNS-over-HTTPS 回退：当容器 DNS 不可用时（如 V2RayN TUN 模式），
-//    通过 Cloudflare DoH 解析域名并注入 /etc/hosts ──
 const DOH_CACHE = new Map();
 
 async function dohResolve(hostname) {
@@ -209,7 +193,6 @@ async function dohResolve(hostname) {
     const aRecord = (data.Answer || []).find(a => a.type === 1);
     if (aRecord && aRecord.data) {
       DOH_CACHE.set(hostname, aRecord.data);
-      // Also add to /etc/hosts for other processes (curl, etc.)
       try {
         const hosts = fs.readFileSync('/etc/hosts', 'utf8');
         if (!hosts.includes(hostname)) {
@@ -223,7 +206,6 @@ async function dohResolve(hostname) {
   return null;
 }
 
-// Test DNS on startup; if broken, pre-resolve GitHub domains via DoH
 (async () => {
   try {
     await dns.promises.resolve4('github.com');
@@ -236,7 +218,6 @@ async function dohResolve(hostname) {
 
 let WebSocketServer = null;
 try {
-  // eslint-disable-next-line global-require
   WebSocketServer = require('ws').WebSocketServer;
 } catch {
   WebSocketServer = null;
@@ -292,9 +273,6 @@ function consumeTerminalWsToken(token) {
   return item.expireAt > Date.now();
 }
 
-// ------------------------
-// Security headers
-// ------------------------
 app.disable('x-powered-by');
 app.use((req, res, next) => {
   res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
@@ -333,6 +311,7 @@ const DEVICE_AUTH_STORE_PATH = '/root/.openclaw/identity/device-auth.json';
 const NODE_STATUS_CACHE_PATH = '/root/.openclaw/node-status-cache.json';
 const NODE_STATUS_POLL_INTERVAL_MS = 5000;
 const NODE_STATUS_MAX_STALE_MS = 4500;
+const NODE_STATUS_GATEWAY_RECONNECT_GRACE_MS = 30000;
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 
 app.use(express.json({ limit: '20mb' }));
@@ -348,6 +327,7 @@ app.use((err, req, res, next) => {
 // ============================================================
 // Helpers: JSON read/write
 // ============================================================
+
 function readJson(p, fallback) {
   try {
     return JSON.parse(fs.readFileSync(p, 'utf8'));
@@ -1848,6 +1828,18 @@ function getGatewayRuntimePid() {
 
 function isGatewayRuntimeProcessRunning() {
   return !!getGatewayRuntimePid();
+}
+
+async function getGatewayRuntimeProcessInfo() {
+  const pid = Number.parseInt(String(getGatewayRuntimePid() || '').trim(), 10) || 0;
+  if (pid <= 0) {
+    return { pid: 0, uptimeSec: 0, startedAtMs: 0 };
+  }
+
+  const uptimeText = await runCommandTextAsync(`ps -o etimes= -p ${pid} 2>/dev/null || true`, 1200);
+  const uptimeSec = Number.parseInt(String(uptimeText || '').trim(), 10) || 0;
+  const startedAtMs = uptimeSec > 0 ? Math.max(0, Date.now() - (uptimeSec * 1000)) : 0;
+  return { pid, uptimeSec, startedAtMs };
 }
 
 function extractJsonObject(text) {
@@ -3598,20 +3590,19 @@ app.get('/api/status', async (req, res) => {
   status.openclawVersion = String(ocSnapshot?.version || '').trim();
 
   const gatewayLogTail = readGatewayLogTail(220);
+  const gatewayRuntimeInfoPromise = getGatewayRuntimeProcessInfo();
   // Run shell checks in parallel (async) to avoid blocking the event loop
-  const [gatewayHealthCodeText, gatewayRuntimePid, portListening, caddyRunning, watchdogRunning] = await Promise.all([
+  const [gatewayHealthCodeText, gatewayRuntimeInfo, portListening, caddyRunning, watchdogRunning] = await Promise.all([
     runCommandTextAsync(LOCAL_GATEWAY_HEALTH_CHECK_CMD, 3000),
-    Promise.resolve(getGatewayRuntimePid()),
+    gatewayRuntimeInfoPromise,
     runCommandOkAsync('ss -ltn 2>/dev/null | grep -q "[:.]18789[[:space:]]" || netstat -ltn 2>/dev/null | grep -q "[:.]18789[[:space:]]"', 1200),
     runCommandOkAsync('pgrep -f caddy >/dev/null 2>&1 || ss -ltn 2>/dev/null | grep -q ":443 " || netstat -ltn 2>/dev/null | grep -q ":443 "', 1200),
     runCommandOkAsync('pgrep -f "[o]penclaw-gateway-watchdog.sh" >/dev/null 2>&1', 1200),
   ]);
   const gatewayHealthCode = Number.parseInt(String(gatewayHealthCodeText || '').trim(), 10) || 0;
-  const gatewayPidSafe = Number.parseInt(String(gatewayRuntimePid || '').trim(), 10) || 0;
+  const gatewayPidSafe = Number(gatewayRuntimeInfo?.pid || 0);
   const gatewayProcessRunning = isGatewayRuntimeProcessRunning() || portListening;
-  const gatewayProcessUptimeSec = gatewayPidSafe > 0
-    ? Number.parseInt(String(await runCommandTextAsync(`ps -o etimes= -p ${gatewayPidSafe} 2>/dev/null || true`, 1200) || '').trim(), 10) || 0
-    : 0;
+  const gatewayProcessUptimeSec = Number(gatewayRuntimeInfo?.uptimeSec || 0);
   const gatewayPairingRequired = !isGatewayDeviceAuthDisabled()
     && detectGatewayPairingRequiredRecent(gatewayLogTail, 900);
   const opState = getOpenClawOperationState();
@@ -4041,6 +4032,37 @@ function logNodeProbeDebug(...args) {
   }
 }
 
+function logRateLimited(key, intervalMs, ...args) {
+  const now = Date.now();
+  const interval = Math.max(1000, Number(intervalMs) || 1000);
+  const state = RATE_LIMITED_LOG_STATE.get(key);
+  if (state && (now - state.lastAt) < interval) {
+    state.skipped += 1;
+    return;
+  }
+  const skipped = state?.skipped || 0;
+  RATE_LIMITED_LOG_STATE.set(key, { lastAt: now, skipped: 0 });
+  if (skipped > 0) {
+    baseConsole.log(...args, `(suppressed ${skipped} repeats in ${Math.round(interval / 1000)}s)`);
+    return;
+  }
+  baseConsole.log(...args);
+}
+
+function logNodeGatewaySocketIssue(prefix, errorLike, gatewayPort) {
+  const message = String(errorLike?.message || errorLike || '').trim();
+  const port = Number(gatewayPort || 18789) || 18789;
+  if (message && /ECONNREFUSED/i.test(message) && message.includes(`127.0.0.1:${port}`)) {
+    logRateLimited(`node-gateway-refused-${port}-${prefix}`, 60000, `${prefix} ${message}`);
+    return;
+  }
+  if (message) {
+    baseConsole.log(prefix, message);
+    return;
+  }
+  baseConsole.log(prefix, errorLike);
+}
+
 function createGatewayControlUiClient(timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
     const WsClient = require('ws');
@@ -4069,6 +4091,7 @@ function createGatewayControlUiClient(timeoutMs = 5000) {
         headers: { Origin: 'http://127.0.0.1' }
       });
     } catch (e) {
+      logNodeGatewaySocketIssue('[node] control-ui WS connect failed:', e, gatewayPort);
       finishReject(e);
       return;
     }
@@ -4077,6 +4100,7 @@ function createGatewayControlUiClient(timeoutMs = 5000) {
       if (!settled) finishReject(new Error('gateway control-ui socket closed before ready'));
     });
     ws.on('error', (e) => {
+      logNodeGatewaySocketIssue('[node] control-ui WS error:', e, gatewayPort);
       if (!settled) finishReject(e);
     });
     ws.on('message', (data) => {
@@ -4322,12 +4346,12 @@ function queryGatewayNodeList(timeoutMs = 5000) {
       ws = new WsClient(`ws://127.0.0.1:${gatewayPort}`, {
         headers: { Origin: 'http://127.0.0.1' }
       });
-    } catch (e) { console.log('[node] WS connect failed:', e.message); finish(null); return; }
+    } catch (e) { logNodeGatewaySocketIssue('[node] WS connect failed:', e, gatewayPort); finish(null); return; }
 
     const timer = setTimeout(() => { console.log('[node] queryGatewayNodeList timeout'); finish(null); try { ws.close(); } catch {} }, timeoutMs);
     let usedFallback = false;
     ws.on('close', () => { if (!usedFallback) { clearTimeout(timer); finish(null); } });
-    ws.on('error', (e) => { console.log('[node] WS error:', e.message); if (!usedFallback) { clearTimeout(timer); finish(null); } try { ws.close(); } catch {} });
+    ws.on('error', (e) => { logNodeGatewaySocketIssue('[node] WS error:', e, gatewayPort); if (!usedFallback) { clearTimeout(timer); finish(null); } try { ws.close(); } catch {} });
 
     let connectId, listId;
     ws.on('message', (data) => {
@@ -4445,8 +4469,32 @@ function normalizeNodeStatusSnapshot(raw) {
   return {
     checkedAt: Number(snapshot.checkedAt || 0),
     lastSuccessAt: Number(snapshot.lastSuccessAt || 0),
+    gatewayPid: Number(snapshot.gatewayPid || 0),
+    gatewayStartedAtMs: Number(snapshot.gatewayStartedAtMs || 0),
     nodes,
   };
+}
+
+function shouldAcceptGatewayNodeConnection(gwNode, gatewayInfo, previousGatewayPid, now) {
+  if (!gwNode || gwNode.connected !== true) return false;
+
+  const gatewayStartedAtMs = Number(gatewayInfo?.startedAtMs || 0);
+  const gatewayPid = Number(gatewayInfo?.pid || 0);
+  const priorGatewayPid = Number(previousGatewayPid || 0);
+  const connectedAtMs = Number(gwNode?.connectedAtMs || 0);
+  const freshCutoffMs = gatewayStartedAtMs > 0 ? Math.max(0, gatewayStartedAtMs - 2000) : 0;
+  const gatewayPidChanged = gatewayPid > 0 && priorGatewayPid > 0 && gatewayPid !== priorGatewayPid;
+  const gatewayRecentlyRestarted = gatewayStartedAtMs > 0 && (now - gatewayStartedAtMs) < NODE_STATUS_GATEWAY_RECONNECT_GRACE_MS;
+
+  if (connectedAtMs > 0 && freshCutoffMs > 0) {
+    return connectedAtMs >= freshCutoffMs;
+  }
+
+  if (gatewayPidChanged || gatewayRecentlyRestarted) {
+    return false;
+  }
+
+  return true;
 }
 
 let nodeStatusSnapshot = normalizeNodeStatusSnapshot(readJson(NODE_STATUS_CACHE_PATH, {}));
@@ -4467,6 +4515,8 @@ async function refreshNodeStatusSnapshot() {
     try {
       const paired = readJson(DEVICE_PAIRING_PAIRED_PATH, {});
       const nodeEntries = Object.values(paired).filter(e => e.clientMode === 'node');
+      const opState = getOpenClawOperationState();
+      const gatewayInfo = await getGatewayRuntimeProcessInfo();
       const gwNodes = await queryGatewayNodeList(4000);
       const gwNodeMapById = new Map();
       const gwNodeMapByName = new Map();
@@ -4483,8 +4533,10 @@ async function refreshNodeStatusSnapshot() {
         const gwNode = gwNodeMapById.get(entry.deviceId) ||
                        gwNodeMapByName.get(entry.displayName) ||
                        gwNodeMapByName.get(entry.clientId);
-        const connected = gwNode?.connected === true;
         const connectedSource = gwNode?._fromPresence ? 'presence' : (gwNode ? 'node.list' : 'none');
+        const connected = opState?.type === 'restarting_gateway'
+          ? false
+          : shouldAcceptGatewayNodeConnection(gwNode, gatewayInfo, nodeStatusSnapshot.gatewayPid, now);
         const connectedAtMs = connected
           ? (gwNode?.connectedAtMs || (prev.connected ? Number(prev.connectedAtMs || 0) : now) || now)
           : Number(prev.connectedAtMs || 0);
@@ -4518,6 +4570,8 @@ async function refreshNodeStatusSnapshot() {
       nodeStatusSnapshot = {
         checkedAt: now,
         lastSuccessAt: now,
+        gatewayPid: Number(gatewayInfo.pid || 0),
+        gatewayStartedAtMs: Number(gatewayInfo.startedAtMs || 0),
         nodes: nextNodes,
       };
       saveNodeStatusSnapshot();
@@ -8695,6 +8749,9 @@ app.get('/api/openclaw/gateway/logs', (req, res) => {
 // ============================================================
 function sanitizeLogLine(line) {
   if (typeof line !== 'string') return null;
+  if (/\[node\]\s+(?:control-ui\s+)?WS (?:connect failed|error):\s+connect ECONNREFUSED 127\.0\.0\.1:\d+/i.test(line)) {
+    return null;
+  }
   if (/\[ws\]\s+closed before connect\b/i.test(line) && /(origin=https?:\/\/(?:127\.0\.0\.1|localhost)\b|host=(?:127\.0\.0\.1|localhost):\d+\b)/i.test(line)) {
     return null;
   }
