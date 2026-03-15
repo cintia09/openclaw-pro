@@ -4438,7 +4438,7 @@ function queryGatewayNodeList(timeoutMs = 5000) {
           const nonce = typeof msg.payload?.nonce === 'string' ? msg.payload.nonce.trim() : '';
           const connectParams = buildControlUiConnectParams(nonce);
           if (!connectParams) {
-            console.log('[node] control-ui identity unavailable → cli fallback');
+            logRateLimited('node-control-ui-identity-unavailable-fallback', 300000, '[node] control-ui identity unavailable → cli fallback');
             usedFallback = true;
             try { ws.close(); } catch {}
             queryGatewayNodeListFallback(gatewayPort, token, timeoutMs - 1000).then(v => { clearTimeout(timer); finish(v); });
@@ -8830,7 +8830,7 @@ function sanitizeLogLine(line) {
   if (/\[ws\]\s+closed before connect\b/i.test(line) && /(origin=https?:\/\/(?:127\.0\.0\.1|localhost)\b|host=(?:127\.0\.0\.1|localhost):\d+\b)/i.test(line)) {
     return null;
   }
-  if (/\[node\]\s+(?:control-ui rejected:|node\.list failed:|cli fallback presence:|cli fallback connect failed:|refresh snapshot:|control-ui connect ok, calling node\.list)/i.test(line)) {
+  if (/\[node\]\s+(?:control-ui identity unavailable → cli fallback|control-ui rejected:|node\.list failed:|cli fallback presence:|cli fallback connect failed:|refresh snapshot:|control-ui connect ok, calling node\.list)/i.test(line)) {
     return null;
   }
   if (/\[ws\]\s+⇄\s+res\s+✗\s+node\.invoke\b.*invalid node\.invoke params: must have required property 'idempotencyKey'/i.test(line)) {

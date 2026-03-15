@@ -30,6 +30,7 @@ CONFIG_FILE_LEGACY_ROOT="$LEGACY_ROOT_HOME_DIR/.openclaw/docker-config.json"
 CONFIG_FILE_LEGACY="$LEGACY_HOME_DIR/.openclaw/docker-config.json"
 LOG_FILE="$BASE_DIR/install.log"
 ROOT_PASSWORD_FILE="$BASE_DIR/root-initial-password.txt"
+DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"
 
 PROXY_PREFIXES=(
   "https://ghfast.top/"
@@ -44,9 +45,19 @@ has_tty(){ [ -r "$TTY_IN" ] && [ -w "$TTY_IN" ]; }
 
 if [ -t 1 ]; then
   NC='\033[0m'
+  DIM='\033[2m'
+  CYAN='\033[1;36m'
+  GREEN='\033[1;32m'
+  YELLOW='\033[1;33m'
+  RED='\033[1;31m'
   WHITE='\033[1;37m'
 else
   NC=''
+  DIM=''
+  CYAN=''
+  GREEN=''
+  YELLOW=''
+  RED=''
   WHITE=''
 fi
 
@@ -78,6 +89,7 @@ run_state_helper(){
   docker image inspect "$IMAGE_NAME" >/dev/null 2>&1 || return 1
 
   docker run --rm \
+    --platform "$DOCKER_PLATFORM" \
     -v "$STATE_VOLUME_NAME:$STATE_MOUNT_POINT" \
     --entrypoint bash \
     "$IMAGE_NAME" \
@@ -104,6 +116,7 @@ write_state_file(){
   fi
 
   docker run --rm \
+    --platform "$DOCKER_PLATFORM" \
     -v "$STATE_VOLUME_NAME:$STATE_MOUNT_POINT" \
     -v "$tmpfile:/tmp/openclaw-state-input:ro" \
     --entrypoint bash \
@@ -202,13 +215,28 @@ log(){
   local level="$1"; shift
   local msg="$*"
   local ts
+  local prefix="[$level]"
   ts="$(date '+%Y-%m-%d %H:%M:%S')"
-  echo "[$level] $msg"
+  if [ -t 1 ]; then
+    case "$level" in
+      INFO) prefix="${CYAN}[INFO]${NC}" ;;
+      WARN) prefix="${YELLOW}[WARN]${NC}" ;;
+      OK) prefix="${GREEN}[OK]${NC}" ;;
+      ERROR) prefix="${RED}[ERROR]${NC}" ;;
+    esac
+  fi
+  printf '%b %s\n' "$prefix" "$msg"
   echo "[$ts] [$level] $msg" >> "$LOG_FILE" 2>/dev/null || true
 }
 info(){ log INFO "$*"; }
 warn(){ log WARN "$*"; }
 success(){ log OK "$*"; }
+
+print_summary_line(){
+  local label="$1"
+  local value="$2"
+  printf '  %b%-10s%b %b%s%b\n' "$DIM" "$label" "$NC" "$WHITE" "$value" "$NC"
+}
 
 prompt(){
   local text="$1"
@@ -1382,7 +1410,7 @@ reset_persistent_state(){
 
   warn "普通权限删除旧版 home-data 失败，尝试通过 Docker 提权清理..."
   if docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
-    if docker run --rm -v "$BASE_DIR:/work" --entrypoint sh "$IMAGE_NAME" -lc 'rm -rf /work/home-data /work/system-data /work/user-*' >/dev/null 2>&1; then
+    if docker run --rm --platform "$DOCKER_PLATFORM" -v "$BASE_DIR:/work" --entrypoint sh "$IMAGE_NAME" -lc 'rm -rf /work/home-data /work/system-data /work/user-*' >/dev/null 2>&1; then
       return 0
     fi
   fi
@@ -1606,6 +1634,7 @@ create_and_start(){
 
   info "创建容器..."
   docker create --name "$CONTAINER_NAME" \
+    --platform "$DOCKER_PLATFORM" \
     --hostname openclaw \
     --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID \
     --cap-add NET_BIND_SERVICE --cap-add KILL --cap-add DAC_OVERRIDE \
@@ -1709,51 +1738,41 @@ create_and_start(){
 
   success "容器已部署并启动"
   local url_suffix=""
+  local main_url=""
+  local ssh_target=""
+  local ssh_user_display=""
   [ "$HTTPS_PORT" != "443" ] && url_suffix=":${HTTPS_PORT}"
-  info "访问：主站 https://${DOMAIN}${url_suffix}"
-  info "本地安装目录：$BASE_DIR"
-  if [ "$BASE_DIR" = "$HOME/$DEFAULT_BASE_DIR_NAME" ]; then
-    info "提示：安装目录位于用户主目录隐藏文件夹，可通过 'cd $HOME/$DEFAULT_BASE_DIR_NAME' 查看"
-  fi
-
-  # 显示 SSH 登录信息
-  echo ""
-  info "SSH 登录配置:"
-  if [ "$ssh_hardened" = "true" ]; then
-    info "  - 密码登录：已禁用（仅密钥登录）"
-  else
-    warn "  - 密码登录：状态未知（请手动检查）"
-  fi
+  main_url="https://${DOMAIN}${url_suffix}"
   if [ "$ssh_login_user" = "root" ]; then
-    if [ -n "$host_user" ] && [ "$host_user" != "root" ] && [ "$user_ready" = "true" ]; then
-      warn "  - 登录用户: root（普通用户未启用为当前 SSH 登录用户，请检查公钥与 SSH 配置）"
-    else
-      warn "  - 登录用户: root（普通用户未就绪或创建失败）"
-    fi
-    info "  - 登录命令: ssh root@<host> -p ${SSH_PORT}"
-    warn "  - 建议: 修复后重新运行安装脚本恢复普通用户登录"
+    ssh_user_display="root"
   elif [ -n "$host_user" ] && [ "$host_user" != "root" ]; then
-    info "  - 登录用户: $host_user"
-    info "  - 登录命令: ssh ${host_user}@<host> -p ${SSH_PORT}"
-    info "  - 容器内提权: 登录后执行 sudo -i"
+    ssh_user_display="$host_user"
   else
-    warn "  - 当前为 root 用户运行，未创建普通用户"
-    info "  - 如需普通用户登录，请以非 root 用户重新运行安装脚本"
+    ssh_user_display="root"
   fi
+  ssh_target="ssh ${ssh_user_display}@<host> -p ${SSH_PORT}"
 
-  info "  - 状态卷: ${STATE_VOLUME_NAME} -> ${STATE_MOUNT_POINT}"
+  echo ""
+  printf '%b安装完成%b\n' "$GREEN" "$NC"
+  print_summary_line "主站" "$main_url"
+  print_summary_line "容器" "docker exec -it ${CONTAINER_NAME} bash"
+  print_summary_line "SSH" "$ssh_target"
+  print_summary_line "目录" "$BASE_DIR"
+  print_summary_line "日志" "$LOG_FILE"
+  if [ -n "$host_user" ] && [ "$host_user" != "root" ] && [ "$ssh_user_display" = "$host_user" ]; then
+    print_summary_line "提权" "ssh 登录后执行 sudo -i"
+  fi
 
   if [ "$key_injected" = "true" ]; then
-    success "  - SSH 公钥: 已自动注入"
+    success "SSH 公钥已自动注入，密码登录已禁用"
   else
-    warn "  - SSH 公钥: 未自动注入，请手动执行以下命令配置授权密钥："
+    warn "SSH 公钥未自动注入，请手动执行以下命令："
     local current_user="${ssh_login_user:-root}"
     echo -e "    ${WHITE}cat ~/.ssh/id_rsa.pub | ssh -p ${SSH_PORT} ${current_user}@<host> \"mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys\"${NC}"
   fi
-  info "  - GitHub 访问: 不会复制宿主机私钥到容器"
-  info "  - 容器内拉取代码: 请单独配置 SSH key，或使用 HTTPS + PAT"
-
-  info "日志文件：$LOG_FILE"
+  if [ "$ssh_hardened" != "true" ]; then
+    warn "SSH 密码认证状态未确认，请手动检查容器内 sshd 配置"
+  fi
 }
 
 # ─── main ─────────────────────────────────────────────────────

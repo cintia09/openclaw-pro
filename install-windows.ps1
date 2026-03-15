@@ -35,6 +35,7 @@ $DEFAULT_HTTP_PORT  = "80"
 $DEFAULT_DEPLOY_DIR_NAME = ".openclaw-pro"
 $LEGACY_DEPLOY_DIR_NAME = "openclaw-pro"
 $WSL_TARGET_DIR  = "/root/$DEFAULT_DEPLOY_DIR_NAME"
+$DOCKER_PLATFORM = "linux/amd64"
 $GITHUB_REPO     = "cintia09/openclaw-pro"
 $IMAGE_NAME      = "openclaw-pro"
 $script:imageEdition = "lite"  # 发布仅保留 lite
@@ -210,6 +211,7 @@ function Write-StateVolumeFile {
         if ([string]::IsNullOrWhiteSpace($dir)) { $dir = "." }
         $dir = $dir.Replace('\\', '/').Replace("'", "''")
         & docker run --rm `
+            --platform $DOCKER_PLATFORM `
             -v "${VolumeName}:/root/.openclaw" `
             -v "${tmpFile}:/tmp/openclaw-state-input:ro" `
             --entrypoint bash `
@@ -234,6 +236,7 @@ function Read-StateVolumeText {
     try {
         $rel = $RelativePath.Replace("'", "''")
         $output = & docker run --rm `
+            --platform $DOCKER_PLATFORM `
             -v "${VolumeName}:/root/.openclaw" `
             --entrypoint bash `
             $ImageName `
@@ -246,6 +249,11 @@ function Read-StateVolumeText {
 function Write-Suggestion {
     param([string]$Text)
     Write-Host "  💡 $Text" -ForegroundColor Cyan
+}
+
+function Write-SummaryLine {
+    param([string]$Label, [string]$Value)
+    Write-Host ("  {0,-10} {1}" -f $Label, $Value) -ForegroundColor White
 }
 
 function New-StrongPassword {
@@ -2097,102 +2105,38 @@ function Show-Completion {
     if ($DeployLaunched) {
         Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray
         Write-Host ""
-        if ($HomeBaseDir) {
-            Write-Host "  📁 本地安装目录: $HomeBaseDir" -ForegroundColor White
-            if ((Split-Path $HomeBaseDir -Leaf) -eq $DEFAULT_DEPLOY_DIR_NAME) {
-                Write-Host "     提示：该目录位于用户主目录隐藏文件夹，可在资源管理器地址栏直接输入该路径访问。" -ForegroundColor DarkGray
-            }
-            Write-Host "  🐧 WSL 部署目录: $WSL_TARGET_DIR" -ForegroundColor DarkGray
-            Write-Host ""
-        }
-
-        # Windows 防火墙提醒（仅实际对外暴露的端口）
-        $portList = @()
-        # HTTPS 模式: Gateway/Web 绑定 127.0.0.1，只需开放 HTTP/HTTPS
-        if ($CertMode -eq "letsencrypt") {
-            if ($HttpPort -and $HttpPort -gt 0) { $portList += $HttpPort }
-        }
-        if ($HttpsPort -and $HttpsPort -gt 0) { $portList += $HttpsPort }
-        if ($script:actualGatewayTlsPort -and $script:actualGatewayTlsPort -gt 0) { $portList += $script:actualGatewayTlsPort }
-        if ($SshPort -and $SshPort -gt 0) { $portList += $SshPort }
-        if ($portList.Count -gt 0 -and $AutoOpenFirewall) {
-            $ports = ($portList | Sort-Object -Unique) -join ','
-            Write-Host "  防火墙端口已自动开放 (${ports})，如需重新设置:" -ForegroundColor Yellow
-            Write-Host "     netsh advfirewall firewall add rule name=`"OpenClaw`" dir=in action=allow protocol=tcp localport=${ports}" -ForegroundColor White
-        } else {
-            $ports = ($portList | Sort-Object -Unique) -join ','
-            Write-Host "  已跳过自动开放防火墙端口" -ForegroundColor Yellow
-            Write-Host "     本机访问（同一台机器）通常不需要额外放行" -ForegroundColor DarkGray
-            if ($ports) {
-                Write-Host "     如需其他设备访问，请手动开放端口：${ports}" -ForegroundColor DarkGray
-                Write-Host "     netsh advfirewall firewall add rule name=`"OpenClaw-Manual`" dir=in action=allow protocol=tcp localport=${ports}" -ForegroundColor White
-            }
-        }
-
-        if ($Domain -and $CertMode -eq "internal") {
-            Write-Host ""
-            Write-Host "  🔒 关于 HTTPS 证书提示:" -ForegroundColor White
-            Write-Host "     首次打开页面时，浏览器会显示「不安全」或「证书错误」—— 这是正常的。" -ForegroundColor DarkGray
-            Write-Host "     因为证书是本机自动生成的，不是公网机构签发的。" -ForegroundColor DarkGray
-            Write-Host "     点击「高级」→「继续前往」即可正常使用，不影响数据安全。" -ForegroundColor DarkGray
-            Write-Host ""
-            Write-Host "     如果想永久消除提示，可在管理员 PowerShell 中执行：" -ForegroundColor DarkGray
-            Write-Host "     docker cp openclaw-pro:/data/caddy/pki/authorities/local/root.crt `$env:TEMP\openclaw-caddy-root.crt; certutil -addstore -f Root `$env:TEMP\openclaw-caddy-root.crt" -ForegroundColor White
-            Write-Host "     局域网内其他电脑也导入这个 root.crt 文件后，同样不会再提示。" -ForegroundColor DarkGray
-        }
-        Write-Host ""
-
-        Write-Host "  📝 管理命令：" -ForegroundColor White
         $showContainerName = if ($script:deployedContainerName) { $script:deployedContainerName } else { "openclaw-pro" }
-        Write-Host "     docker ps                      # 查看容器状态" -ForegroundColor Gray
-        Write-Host "     docker logs $showContainerName       # 查看日志" -ForegroundColor Gray
-        Write-Host "     docker stop $showContainerName       # 停止服务" -ForegroundColor Gray
-        Write-Host "     docker start $showContainerName      # 启动服务" -ForegroundColor Gray
         $showExecUser = if ($script:hostUserForSSH -and $script:hostUserForSSH -ne "root") { $script:hostUserForSSH } else { "" }
-        if ($showExecUser) {
-            Write-Host "     docker exec -it -u $showExecUser $showContainerName bash  # 以普通用户进入容器终端" -ForegroundColor Gray
-        } else {
-            Write-Host "     docker exec -it $showContainerName bash  # 进入容器终端" -ForegroundColor Gray
-        }
-        Write-Host ""
-        Write-Host "  🔐 SSH 登录信息：" -ForegroundColor White
-        if ($script:sshServiceReady) {
-            Write-Host "     SSH 服务: 已启动" -ForegroundColor Green
-        } else {
-            Write-Host "     SSH 服务: 启动状态未知，请执行 docker logs openclaw-pro 排查" -ForegroundColor Yellow
-        }
-        Write-Host "     密码登录: 已禁用（仅密钥登录）" -ForegroundColor Green
-
-        # 显示普通用户登录信息
         $sshUser = if ($script:hostUserForSSH) { $script:hostUserForSSH } else { $env:USERNAME }
+        $execCmd = if ($showExecUser) { "docker exec -it -u $showExecUser $showContainerName bash" } else { "docker exec -it $showContainerName bash" }
+        $httpsDomain = if ($Domain) { $Domain } else { "localhost" }
+        $httpsUrl = if ($HttpsPort -eq 443) { "https://${httpsDomain}" } else { "https://${httpsDomain}:${HttpsPort}" }
+        $sshCmd = if ($sshUser -and $sshUser -ne "administrator") { "ssh ${sshUser}@<host> -p ${SshPort}" } else { "ssh root@<host> -p ${SshPort}" }
+
+        Write-Host "  安装摘要" -ForegroundColor White
+        Write-SummaryLine "主站" $httpsUrl
+        Write-SummaryLine "容器" $execCmd
+        Write-SummaryLine "SSH" $sshCmd
+        if ($HomeBaseDir) { Write-SummaryLine "目录" $HomeBaseDir }
+        Write-SummaryLine "日志" $LOG_FILE
+        Write-SummaryLine "WSL" $WSL_TARGET_DIR
         if ($sshUser -and $sshUser -ne "root" -and $sshUser -ne "administrator") {
-            Write-Host "     登录用户: $sshUser" -ForegroundColor Green
-            Write-Host "     登录命令: ssh ${sshUser}@<host> -p ${SshPort}" -ForegroundColor Cyan
-            Write-Host "     容器内提权: 登录后执行 sudo -i" -ForegroundColor DarkGray
+            Write-SummaryLine "提权" "ssh 登录后执行 sudo -i"
             if ($script:sshRootFallback) {
-                Write-Host "     ⚠️  公钥已暂存到 root，容器健康检查会每 10s 自动同步到 $sshUser" -ForegroundColor Yellow
-                Write-Host "        若无法立即登录，请等待 30-60 秒后重试" -ForegroundColor DarkGray
+                Write-Warn "公钥已暂存到 root，容器健康检查会自动同步到 $sshUser；若无法立即登录，请稍后再试"
             }
-        } else {
-            Write-Host "     登录用户: root" -ForegroundColor Yellow
-            Write-Host "     登录命令: ssh root@<host> -p ${SshPort}" -ForegroundColor Cyan
-            Write-Host "     建议: 修复后重新运行安装脚本恢复普通用户登录" -ForegroundColor DarkGray
         }
 
         if ($script:sshInjectedKeyPath) {
-            Write-Host "     公钥注入: 已自动注入 $script:sshInjectedKeyPath" -ForegroundColor Green
+            Write-OK "SSH 公钥已自动注入: $script:sshInjectedKeyPath"
         } else {
-            Write-Host "     公钥注入: 未自动注入，请手动执行以下命令配置授权密钥：" -ForegroundColor Yellow
+            Write-Warn "SSH 公钥未自动注入，请手动执行以下命令："
             $currentSshUser = if ($script:hostUserForSSH) { $script:hostUserForSSH } else { "root" }
             Write-Host "     cat ~/.ssh/id_rsa.pub | ssh -p ${SshPort} ${currentSshUser}@<host> `"mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys`"" -ForegroundColor White
         }
-        Write-Host "     GitHub 访问: 不会复制宿主机私钥到容器" -ForegroundColor DarkGray
-        Write-Host "     容器内拉取代码: 请单独配置 SSH key，或使用 HTTPS + PAT" -ForegroundColor DarkGray
-        Write-Host ""
-        Write-Host "  🔄 升级到新版本：" -ForegroundColor White
-        Write-Host "     重新运行安装命令即可，脚本会自动检测版本差异：" -ForegroundColor DarkGray
+        Write-Host "" 
+        Write-Host "  升级命令" -ForegroundColor White
         Write-Host "     irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1 | iex" -ForegroundColor Cyan
-        Write-Host "     状态卷与配置不受影响，升级后原有数据保留。" -ForegroundColor DarkGray
     } else {
         Write-Host ""
         Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray
@@ -4198,6 +4142,7 @@ function Main {
             # Build docker run arguments
             $runArgs = @(
                 "run", "-d",
+                "--platform", $DOCKER_PLATFORM,
                 "--name", $containerName,
                 "--hostname", "openclaw",
                 "--dns", "8.8.8.8",
