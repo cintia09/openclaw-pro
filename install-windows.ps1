@@ -25,7 +25,7 @@ param(
 )
 
 # --- Constants ----------------------------------------------------------------
-$SCRIPT_VERSION  = "1.0.8"
+$SCRIPT_VERSION  = "1.0.9"
 $TASK_NAME       = "OpenClawSetup"
 $UBUNTU_DISTRO   = "Ubuntu-24.04"
 $OPENCLAW_PORT   = "18789"
@@ -382,7 +382,7 @@ function Start-AnimatedProgress {
     # Get job result
     $result = Receive-Job -Job $job
     $jobState = $job.State
-    Remove-Job -Job $job -Force
+    Remove-Job -Job $job -ErrorAction SilentlyContinue
 
     # Clear spinner line
     Write-Host "`r$(' ' * 70)`r" -NoNewline
@@ -408,13 +408,13 @@ function Invoke-JobWithTimeout {
         $job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $ArgumentList
         if (-not (Wait-Job -Job $job -Timeout $TimeoutSec)) {
             Write-Log "$TimeoutLabel timed out after ${TimeoutSec}s" "WARN"
-            Stop-Job -Job $job -Force -ErrorAction SilentlyContinue | Out-Null
-            Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+            Stop-Job -Job $job -ErrorAction SilentlyContinue | Out-Null
+            Remove-Job -Job $job -ErrorAction SilentlyContinue
             return $DefaultResult
         }
 
         $result = Receive-Job -Job $job -ErrorAction SilentlyContinue
-        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+        Remove-Job -Job $job -ErrorAction SilentlyContinue
 
         if ($result -is [System.Array] -and $result.Count -eq 1) {
             return $result[0]
@@ -423,8 +423,8 @@ function Invoke-JobWithTimeout {
         return $result
     } catch {
         if ($job) {
-            Stop-Job -Job $job -Force -ErrorAction SilentlyContinue | Out-Null
-            Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+            Stop-Job -Job $job -ErrorAction SilentlyContinue | Out-Null
+            Remove-Job -Job $job -ErrorAction SilentlyContinue
         }
         Write-Log "$TimeoutLabel failed: $_" "WARN"
         return $DefaultResult
