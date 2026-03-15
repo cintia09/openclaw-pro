@@ -313,13 +313,16 @@ function Write-ProgressBar {
     param(
         [int]$Percent,
         [string]$Label = "",
-        [int]$Width = 30
+        [int]$Width = 30,
+        [string]$Suffix = ""
     )
     $filled = [math]::Floor($Width * $Percent / 100)
     $empty  = $Width - $filled
     $bar    = ("#" * $filled) + ("-" * $empty)
-    $line   = "  $Label [$bar] ${Percent}%"
-    Write-Host "`r$line" -NoNewline -ForegroundColor Cyan
+    $suffixText = if ($Suffix) { " $Suffix" } else { "" }
+    $line   = "  $Label [$bar] ${Percent}%$suffixText"
+    $padWidth = [math]::Max(100, $line.Length + 4)
+    Write-Host "`r$($line.PadRight($padWidth))" -NoNewline -ForegroundColor Cyan
 }
 
 function Start-AnimatedProgress {
@@ -618,20 +621,13 @@ function Install-Wsl2 {
 
     $steps = @("启用 WSL 功能", "下载 $UBUNTU_DISTRO 镜像", "安装并配置")
     Show-StepProgress -Steps $steps -CurrentStep 0
+    Write-Host ""
 
     try {
-        # Clear step display area
-        # Move cursor up to overwrite the step list during progress
-        $lineCount = $steps.Count
-        for ($i = 0; $i -lt $lineCount; $i++) {
-            Write-Host "`e[1A`e[2K" -NoNewline
-        }
-
         # Show animated spinner during wsl --install
         $distro = $UBUNTU_DISTRO
-        $spinner = @("|","/","-","\","|","/","-","\","|","/")
-        $idx = 0
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $lastRenderMs = -1000
 
         # Start wsl install as a background process
         $pinfo = New-Object System.Diagnostics.ProcessStartInfo
@@ -646,7 +642,6 @@ function Install-Wsl2 {
 
         while (-not $proc.HasExited) {
             $elapsed = $sw.Elapsed.ToString("mm\:ss")
-            $frame = $spinner[$idx % $spinner.Count]
 
             # Estimate phase based on elapsed time
             if ($sw.Elapsed.TotalSeconds -lt 10) {
@@ -660,10 +655,11 @@ function Install-Wsl2 {
                 $pct = [math]::Min(95, 80 + [int](($sw.Elapsed.TotalSeconds - 120) * 0.1))
             }
 
-            Write-Host "`r  $frame $phase ($elapsed) " -NoNewline -ForegroundColor Yellow
-            Write-ProgressBar -Percent $pct -Label "" -Width 20
-            Start-Sleep -Milliseconds 150
-            $idx++
+            if (($sw.ElapsedMilliseconds - $lastRenderMs) -ge 500) {
+                Write-ProgressBar -Percent $pct -Label $phase -Width 20 -Suffix "($elapsed)"
+                $lastRenderMs = $sw.ElapsedMilliseconds
+            }
+            Start-Sleep -Milliseconds 120
         }
 
         $output = $proc.StandardOutput.ReadToEnd()
@@ -674,8 +670,8 @@ function Install-Wsl2 {
         $sw.Stop()
         $elapsed = $sw.Elapsed.ToString("mm\:ss")
 
-        # Clear spinner line
-        Write-Host "`r$(' ' * 80)`r" -NoNewline
+        # Clear status line
+        Write-Host "`r$(' ' * 120)`r" -NoNewline
 
         $combinedOutput = "$output $errOutput"
         Write-Log "wsl --install output: $combinedOutput"
