@@ -25,7 +25,7 @@ param(
 )
 
 # --- Constants ----------------------------------------------------------------
-$SCRIPT_VERSION  = "1.0.13"
+$SCRIPT_VERSION  = "1.0.14"
 $TASK_NAME       = "OpenClawSetup"
 $UBUNTU_DISTRO   = "Ubuntu-24.04"
 $OPENCLAW_PORT   = "18789"
@@ -1405,19 +1405,30 @@ echo "DOCKER_INSTALL_COMPLETE"
 }
 
 # --- Phase 4: Deploy OpenClaw -------------------------------------------------
+
+# Check if the given directory actually contains the deploy package
+function Test-DeploySource {
+    param([string]$Dir)
+    if (-not $Dir) { return $false }
+    return (Test-Path (Join-Path $Dir "Dockerfile.lite")) -or (Test-Path (Join-Path $Dir "start-services.sh"))
+}
+
 function Copy-DeployPackageToWsl {
     param([string]$DistroName)
+
+    # If SCRIPT_DIR doesn't contain deploy files (e.g. launched via iex from $HOME),
+    # download directly inside WSL instead of copying the entire user home directory.
+    if (-not (Test-DeploySource $SCRIPT_DIR)) {
+        Write-Info "当前目录不包含部署文件，将直接在 WSL 中下载..."
+        return Install-DeployPackageInWsl -DistroName $DistroName
+    }
 
     $sourceDir = $SCRIPT_DIR
     Write-Info "部署包目录: $sourceDir"
 
     # Use the \\wsl$ UNC path to copy files into WSL filesystem
-    # This is much more reliable than wsl cp commands
-
-    # Get WSL distro filesystem root
     $wslRoot = "\\wsl$\$DistroName"
 
-    # Wait for WSL filesystem to be accessible
     $maxWait = 30
     $waited = 0
     while (-not (Test-Path $wslRoot) -and $waited -lt $maxWait) {
@@ -1427,22 +1438,18 @@ function Copy-DeployPackageToWsl {
     }
 
     if (-not (Test-Path $wslRoot)) {
-        # Alternative: use wsl to create dir and copy via stdin
         Write-Warn "无法通过 UNC 路径访问 WSL，尝试备用方法..."
         return Copy-DeployPackageToWslAlt -DistroName $DistroName
     }
 
-    # Target directory in WSL
     $targetWslPath = "$wslRoot\$($WSL_TARGET_DIR.TrimStart('/').Replace('/', '\'))"
     Write-Info "目标路径: ${WSL_TARGET_DIR}/"
 
     try {
-        # Create target directory
         if (-not (Test-Path $targetWslPath)) {
             New-Item -ItemType Directory -Path $targetWslPath -Force | Out-Null
         }
 
-        # Copy all files from the docker deploy package directory
         $fileCount = (Get-ChildItem -Path $sourceDir -Recurse -File).Count
         Write-Info "正在复制 $fileCount 个文件..."
         Copy-Item -Path "$sourceDir\*" -Destination $targetWslPath -Recurse -Force -ErrorAction Stop
@@ -1459,22 +1466,21 @@ function Copy-DeployPackageToWsl {
 function Copy-DeployPackageToWslAlt {
     param([string]$DistroName)
 
+    # If source is not the deploy package, fall through to WSL download
+    if (-not (Test-DeploySource $SCRIPT_DIR)) {
+        return Install-DeployPackageInWsl -DistroName $DistroName
+    }
+
     Write-Info "使用备用方法：通过 tar 传输文件..."
     $sourceDir = $SCRIPT_DIR
 
-    # Create a tar archive of the deploy package
-    $tarFile = Join-Path $env:TEMP "openclaw-deploy.tar"
-
     try {
-        # Use PowerShell Compress-Archive isn't great for tar, use wsl tar instead
-        # First, convert the Windows source path to WSL path
         $driveLetter = $sourceDir.Substring(0, 1).ToLower()
         $rest = $sourceDir.Substring(2) -replace "\\", "/"
         $wslSourcePath = "/mnt/$driveLetter$rest"
 
         Write-Info "WSL源路径: $wslSourcePath"
 
-        # Create target dir and copy using WSL's cp
         & wsl -d $DistroName --exec bash -c "mkdir -p '$WSL_TARGET_DIR' && cp -r '$wslSourcePath/.' '$WSL_TARGET_DIR/'"
         $exitCode = $LASTEXITCODE
 
@@ -1487,6 +1493,173 @@ function Copy-DeployPackageToWslAlt {
         }
     } catch {
         Write-Err "备用文件复制异常: $_"
+        return $false
+    }
+}
+
+# Download or update deploy package directly inside WSL
+function Install-DeployPackageInWsl {
+    param(
+        [string]$DistroName,
+        [switch]$Update
+    )
+
+    if ($Update) {
+        Write-Info "在 WSL 中更新部署包..."
+    } else {
+        Write-Info "在 WSL 中下载部署包..."
+    }
+
+    $cloneScript = @"
+#!/bin/bash
+set -e
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
+export http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= all_proxy= ALL_PROXY=
+
+TARGET="$WSL_TARGET_DIR"
+REPO="https://github.com/$GITHUB_REPO.git"
+
+mkdir -p "`$TARGET"
+
+# If .git exists, try git fetch + checkout
+if [ -d "`$TARGET/.git" ] && command -v git &>/dev/null; then
+    echo "UPDATE_START"
+    cd "`$TARGET"
+    git fetch --tags --depth 1 origin 2>&1 || true
+    LATEST_TAG=`$(git tag --sort=-v:refname 2>/dev/null | head -1)
+    if [ -n "`$LATEST_TAG" ]; then
+        git checkout "`$LATEST_TAG" 2>/dev/null || true
+        echo "`$LATEST_TAG" > .release-version
+        echo "UPDATE_OK"
+        exit 0
+    else
+        git pull --ff-only 2>&1 || true
+        echo "UPDATE_OK"
+        exit 0
+    fi
+fi
+
+# Try git clone first
+if command -v git &>/dev/null; then
+    echo "CLONE_START"
+    rm -rf "`$TARGET.tmp"
+    if git clone --depth 1 "`$REPO" "`$TARGET.tmp" 2>&1; then
+        cd "`$TARGET.tmp"
+        git fetch --tags --depth 1 2>/dev/null || true
+        LATEST_TAG=`$(git tag --sort=-v:refname 2>/dev/null | head -1)
+        if [ -n "`$LATEST_TAG" ]; then
+            git checkout "`$LATEST_TAG" 2>/dev/null || true
+            echo "`$LATEST_TAG" > .release-version
+        fi
+        COMMIT_HASH=`$(git rev-parse HEAD 2>/dev/null || true)
+        if [ -n "`$COMMIT_HASH" ]; then
+            echo "`$COMMIT_HASH" > .release-commit
+        fi
+        cd /
+        cp -a "`$TARGET.tmp/." "`$TARGET/"
+        rm -rf "`$TARGET.tmp"
+        echo "CLONE_OK"
+        exit 0
+    fi
+    rm -rf "`$TARGET.tmp"
+    echo "CLONE_FAILED"
+fi
+
+# Fallback: download ZIP
+echo "ZIP_START"
+apt-get install -y -qq unzip curl 2>/dev/null || true
+
+RELEASE_URL=""
+RELEASE_TAG=""
+API_JSON=`$(curl --noproxy '*' -fsSL --connect-timeout 10 "https://api.github.com/repos/$GITHUB_REPO/releases/latest" 2>/dev/null) || true
+if [ -n "`$API_JSON" ]; then
+    RELEASE_URL=`$(echo "`$API_JSON" | grep -o '"zipball_url"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"zipball_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+    RELEASE_TAG=`$(echo "`$API_JSON" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+fi
+if [ -z "`$RELEASE_URL" ]; then
+    RELEASE_URL="https://github.com/$GITHUB_REPO/archive/refs/heads/main.zip"
+fi
+
+TMPZIP="/tmp/openclaw-deploy.zip"
+curl --noproxy '*' -fsSL --connect-timeout 15 --retry 3 -o "`$TMPZIP" "`$RELEASE_URL"
+TMPDIR_EXTRACT="/tmp/openclaw-deploy-extract"
+rm -rf "`$TMPDIR_EXTRACT"
+unzip -qo "`$TMPZIP" -d "`$TMPDIR_EXTRACT"
+INNER=`$(ls "`$TMPDIR_EXTRACT" | head -1)
+cp -a "`$TMPDIR_EXTRACT/`$INNER/." "`$TARGET/"
+rm -rf "`$TMPDIR_EXTRACT" "`$TMPZIP"
+if [ -n "`$RELEASE_TAG" ]; then
+    echo "`$RELEASE_TAG" > "`$TARGET/.release-version"
+fi
+echo "ZIP_OK"
+"@
+
+    $tmpScript = Join-Path $env:TEMP "openclaw-wsl-deploy.sh"
+    $cloneScript | Set-Content $tmpScript -Encoding UTF8 -Force
+    $wslTmpPath = "/tmp/openclaw-wsl-deploy.sh"
+
+    try {
+        Get-Content $tmpScript -Raw | & wsl -d $DistroName --exec bash -c "cat > $wslTmpPath && chmod +x $wslTmpPath"
+
+        $pinfo = New-Object System.Diagnostics.ProcessStartInfo
+        $pinfo.FileName = "wsl.exe"
+        $pinfo.Arguments = "-d $DistroName --exec bash $wslTmpPath"
+        $pinfo.RedirectStandardOutput = $true
+        $pinfo.RedirectStandardError  = $true
+        $pinfo.UseShellExecute = $false
+        $pinfo.CreateNoWindow = $true
+
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $proc = [System.Diagnostics.Process]::Start($pinfo)
+
+        $spinner = @("|","/","-","\")
+        $sidx = 0
+        $method = "下载中"
+
+        while (-not $proc.HasExited) {
+            if (-not $proc.StandardOutput.EndOfStream) {
+                $line = $proc.StandardOutput.ReadLine()
+                Write-Log "WSL deploy: $line"
+                if ($line -match "UPDATE_START") { $method = "git 更新" }
+                elseif ($line -match "CLONE_START") { $method = "git clone" }
+                elseif ($line -match "ZIP_START") { $method = "ZIP 下载" }
+            }
+            $elapsed = $sw.Elapsed.ToString("mm\:ss")
+            $frame = $spinner[$sidx % $spinner.Count]
+            Write-Host "`r  $frame 正在 $method 部署包... ($elapsed)" -NoNewline -ForegroundColor Yellow
+            Start-Sleep -Milliseconds 200
+            $sidx++
+        }
+
+        $remaining = $proc.StandardOutput.ReadToEnd()
+        $errOutput = $proc.StandardError.ReadToEnd()
+        $allOutput = $remaining + $errOutput
+        $exitCode = $proc.ExitCode
+        $proc.Dispose()
+        $sw.Stop()
+
+        Write-Host "`r$(' ' * 80)`r" -NoNewline
+        Write-Log "WSL deploy output: $allOutput"
+
+        Remove-Item $tmpScript -Force -ErrorAction SilentlyContinue
+
+        if ($exitCode -eq 0 -and ($allOutput -match "CLONE_OK" -or $allOutput -match "ZIP_OK" -or $allOutput -match "UPDATE_OK")) {
+            $totalTime = $sw.Elapsed.ToString("mm\:ss")
+            if ($Update) {
+                Write-OK "部署包更新完成 ($totalTime)"
+            } else {
+                Write-OK "部署包下载完成 ($totalTime)"
+            }
+            return $true
+        } else {
+            Write-Err "部署包下载失败"
+            if ($allOutput) {
+                $allOutput -split "`n" | Select-Object -Last 5 | ForEach-Object { Write-Info "  $_" }
+            }
+            return $false
+        }
+    } catch {
+        Write-Err "部署包下载异常: $_"
         return $false
     }
 }
@@ -5619,30 +5792,136 @@ function Main {
         }
         }  # end if (-not $launched)
     } else {
-        # WSL mode: copy files to WSL and run there
-        # Check if already deployed
+        # WSL mode: deploy package lives inside WSL at $WSL_TARGET_DIR
+        # Version checking + download/update flow (consistent with Docker Desktop mode)
+
         $alreadyDeployed = $false
+        $wslDeployVersion = ""
+        $wslDeployCommitHash = ""
+
         try {
-            $checkDeploy = & wsl -d $distroName --exec bash -c "test -f '$WSL_TARGET_DIR/openclaw-docker.sh' && echo FOUND" 2>&1
-            if ($checkDeploy -match "FOUND") {
+            $versionCheck = & wsl -d $distroName --exec bash -c "
+                if [ -f '$WSL_TARGET_DIR/openclaw-docker.sh' ]; then
+                    echo 'DEPLOYED=YES'
+                    echo 'VER='`$(cat '$WSL_TARGET_DIR/.release-version' 2>/dev/null)`
+                    echo 'COMMIT='`$(cat '$WSL_TARGET_DIR/.release-commit' 2>/dev/null)`
+                    if [ -d '$WSL_TARGET_DIR/.git' ]; then
+                        echo 'GITTAG='`$(git -C '$WSL_TARGET_DIR' describe --tags --abbrev=0 2>/dev/null)`
+                        echo 'GITHASH='`$(git -C '$WSL_TARGET_DIR' rev-parse HEAD 2>/dev/null)`
+                    fi
+                else
+                    echo 'DEPLOYED=NO'
+                fi
+            " 2>&1
+
+            $versionOutput = ($versionCheck | Out-String)
+            if ($versionOutput -match "DEPLOYED=YES") {
                 $alreadyDeployed = $true
             }
-        } catch { }
+            if ($versionOutput -match "VER=(\S+)") { $wslDeployVersion = $Matches[1] }
+            if ($versionOutput -match "COMMIT=(\S+)") { $wslDeployCommitHash = $Matches[1] }
+            if (-not $wslDeployVersion -and $versionOutput -match "GITTAG=(\S+)") { $wslDeployVersion = $Matches[1] }
+            if (-not $wslDeployCommitHash -and $versionOutput -match "GITHASH=(\S+)") { $wslDeployCommitHash = $Matches[1] }
+        } catch {
+            Write-Log "WSL version check failed: $_"
+        }
 
-        if (-not $alreadyDeployed) {
-            Write-Info "正在将部署包复制到 WSL..."
-            $copyOK = Copy-DeployPackageToWsl -DistroName $distroName
+        $needDeployPackageDownload = -not $alreadyDeployed
+
+        if ($alreadyDeployed) {
+            Write-OK "检测到 WSL 中已有部署包"
+            if ($wslDeployVersion) {
+                Write-Info "部署包版本: $wslDeployVersion"
+            }
+            if ($wslDeployCommitHash) {
+                Write-Info "commit: $($wslDeployCommitHash.Substring(0, [Math]::Min(12, $wslDeployCommitHash.Length)))"
+            }
+
+            # Query latest release from GitHub
+            $latestReleaseTag = ""
+            $latestReleaseCommit = ""
+            try {
+                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                $releaseApi = "https://api.github.com/repos/$GITHUB_REPO/releases/latest"
+                $latestReleaseInfo = Invoke-RestMethod -Uri $releaseApi -TimeoutSec 10 -ErrorAction Stop
+                $latestReleaseTag = ($latestReleaseInfo.tag_name | ForEach-Object { "$_" }).Trim()
+                if ($latestReleaseInfo.target_commitish) {
+                    $latestReleaseCommit = $latestReleaseInfo.target_commitish
+                }
+            } catch {
+                Write-Log "Fetch latest release failed: $_"
+            }
+
+            # Compare versions (same logic as Docker Desktop mode)
+            $deployTagMatch = ($latestReleaseTag -and $wslDeployVersion -and $wslDeployVersion -eq $latestReleaseTag)
+            $deployCommitMatch = $true
+            if ($latestReleaseCommit -and $wslDeployCommitHash) {
+                $deployCommitMatch = ($wslDeployCommitHash.StartsWith($latestReleaseCommit) -or $latestReleaseCommit.StartsWith($wslDeployCommitHash))
+                if (-not $deployCommitMatch) {
+                    Write-Warn "commit hash 不一致 (本地: $($wslDeployCommitHash.Substring(0,7)) vs 远端: $($latestReleaseCommit.Substring(0,7)))"
+                }
+            }
+
+            if ($deployTagMatch -and $deployCommitMatch) {
+                Write-Host ""
+                Write-Host "  本地部署包与远端版本一致 ($latestReleaseTag)" -ForegroundColor Green
+                Write-Host "  请选择部署包策略:" -ForegroundColor Cyan
+                Write-Host "     [1] 使用当前部署包（默认）" -ForegroundColor White
+                Write-Host "     [2] 重新更新部署包" -ForegroundColor White
+                Write-Host ""
+                Write-Host "  输入选择 [1/2，默认1]: " -NoNewline -ForegroundColor White
+                $deployChoice = (Read-Host).Trim()
+                if ($deployChoice -eq '2') {
+                    $needDeployPackageDownload = $true
+                    Write-Info "已选择更新部署包"
+                }
+            } else {
+                Write-Host ""
+                Write-Host "  发现部署包版本可能落后" -ForegroundColor Yellow
+                if ($latestReleaseTag) {
+                    Write-Host "     远端最新: $latestReleaseTag" -ForegroundColor DarkGray
+                }
+                if ($wslDeployVersion) {
+                    Write-Host "     本地版本: $wslDeployVersion" -ForegroundColor DarkGray
+                }
+                Write-Host "  请选择部署包策略:" -ForegroundColor Cyan
+                Write-Host "     [1] 使用当前部署包" -ForegroundColor White
+                Write-Host "     [2] 更新到最新部署包（默认）" -ForegroundColor White
+                Write-Host ""
+                Write-Host "  输入选择 [1/2，默认2]: " -NoNewline -ForegroundColor White
+                $deployChoice = (Read-Host).Trim()
+                if ($deployChoice -ne '1') {
+                    $needDeployPackageDownload = $true
+                    Write-Info "已选择更新部署包"
+                }
+            }
+        }
+
+        if ($needDeployPackageDownload) {
+            $isUpdate = $alreadyDeployed
+            $copyOK = $false
+
+            # If SCRIPT_DIR contains deploy files, copy from local
+            if (Test-DeploySource $SCRIPT_DIR) {
+                Write-Info "正在将部署包复制到 WSL..."
+                $copyOK = Copy-DeployPackageToWsl -DistroName $distroName
+            }
+
+            # Otherwise (or if copy failed), download inside WSL
+            if (-not $copyOK) {
+                $copyOK = Install-DeployPackageInWsl -DistroName $distroName -Update:$isUpdate
+            }
 
             if (-not $copyOK) {
                 Show-Error `
-                    "文件复制" `
-                    "无法将部署包复制到 WSL" `
-                    "请手动复制 docker 目录到 WSL 后运行: cd $WSL_TARGET_DIR && ./openclaw-docker.sh run"
+                    "部署包获取" `
+                    "无法获取部署包到 WSL" `
+                    "请手动在 WSL 中执行: cd /root && git clone https://github.com/$GITHUB_REPO.git $WSL_TARGET_DIR"
                 Read-Host "按回车退出"
                 return
             }
         } else {
-            Write-OK "部署包已存在，跳过复制"
+            Write-OK "使用现有部署包"
         }
 
         # -- Phase 5: Cleanup + Launch ------------------------------------------
