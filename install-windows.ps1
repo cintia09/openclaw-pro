@@ -624,10 +624,12 @@ function Install-Wsl2 {
     Write-Host ""
 
     try {
-        # Show animated spinner during wsl --install
+        # Avoid inline redraw here because Windows terminals may interleave other
+        # console output and cause visible flicker or broken lines.
         $distro = $UBUNTU_DISTRO
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        $lastRenderMs = -1000
+        $lastPhase = ""
+        $lastHeartbeatSecond = -15
 
         # Start wsl install as a background process
         $pinfo = New-Object System.Diagnostics.ProcessStartInfo
@@ -639,27 +641,31 @@ function Install-Wsl2 {
         $pinfo.CreateNoWindow = $true
 
         $proc = [System.Diagnostics.Process]::Start($pinfo)
+        Write-Info "正在后台执行 wsl --install，请稍候..."
 
         while (-not $proc.HasExited) {
             $elapsed = $sw.Elapsed.ToString("mm\:ss")
+            $elapsedSeconds = [int][math]::Floor($sw.Elapsed.TotalSeconds)
 
             # Estimate phase based on elapsed time
             if ($sw.Elapsed.TotalSeconds -lt 10) {
                 $phase = "启用 WSL 功能"
-                $pct = [math]::Min(30, [int]($sw.Elapsed.TotalSeconds * 3))
             } elseif ($sw.Elapsed.TotalSeconds -lt 120) {
                 $phase = "下载 $distro 镜像"
-                $pct = [math]::Min(80, 30 + [int](($sw.Elapsed.TotalSeconds - 10) * 0.45))
             } else {
                 $phase = "安装并配置"
-                $pct = [math]::Min(95, 80 + [int](($sw.Elapsed.TotalSeconds - 120) * 0.1))
             }
 
-            if (($sw.ElapsedMilliseconds - $lastRenderMs) -ge 500) {
-                Write-ProgressBar -Percent $pct -Label $phase -Width 20 -Suffix "($elapsed)"
-                $lastRenderMs = $sw.ElapsedMilliseconds
+            if ($phase -ne $lastPhase) {
+                Write-Info "当前阶段: $phase"
+                $lastPhase = $phase
             }
-            Start-Sleep -Milliseconds 120
+
+            if (($elapsedSeconds - $lastHeartbeatSecond) -ge 15) {
+                Write-Info "WSL 安装进行中，已耗时 $elapsed"
+                $lastHeartbeatSecond = $elapsedSeconds
+            }
+            Start-Sleep -Seconds 1
         }
 
         $output = $proc.StandardOutput.ReadToEnd()
@@ -669,9 +675,6 @@ function Install-Wsl2 {
 
         $sw.Stop()
         $elapsed = $sw.Elapsed.ToString("mm\:ss")
-
-        # Clear status line
-        Write-Host "`r$(' ' * 120)`r" -NoNewline
 
         $combinedOutput = "$output $errOutput"
         Write-Log "wsl --install output: $combinedOutput"
