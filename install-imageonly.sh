@@ -869,7 +869,7 @@ check_local_tarball(){
     local meta_sig=""
     meta_sig="$(awk -F= '/^sig=/{print substr($0,5); exit}' "$target_meta" 2>/dev/null || true)"
     if [ -n "$meta_sig" ] && [ "$meta_sig" != "$expected_sig" ]; then
-      warn "检测到旧版本本地镜像（$meta_sig），当前需要 ${TAG}，已清理"
+      warn "检测到旧版本本地镜像（${meta_sig}），当前需要 ${TAG}，已清理"
       rm -f "$target" "$target_meta" || true
       return 1
     fi
@@ -1134,7 +1134,7 @@ ensure_container_host_user(){
     return 1
   fi
 
-  info "容器内未检测到用户 $host_user，执行兼容创建"
+  info "容器内未检测到用户 ${host_user}，执行兼容创建"
   docker exec "$CONTAINER_NAME" bash -c "
 set -e
 if [ -n '$host_gid' ] && [[ '$host_gid' =~ ^[0-9]+$ ]] && ! getent group '$host_gid' >/dev/null 2>&1; then
