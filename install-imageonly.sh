@@ -419,8 +419,9 @@ ensure_latest_tag(){
 
 build_download_urls(){
   local primary="$1"
-  local out=("$primary")
+  local out=()
   for p in "${PROXY_PREFIXES[@]}"; do out+=("${p}${primary}"); done
+  out+=("$primary")
   printf '%s\n' "${out[@]}"
 }
 
@@ -428,10 +429,212 @@ curl_supports_retry_all_errors(){
   curl --help all 2>/dev/null | grep -q -- '--retry-all-errors'
 }
 
+probe_range_capable_source(){
+  local url header_file status_line
+  header_file="${TMP_DIR}/.download-probe.$$"
+
+  for url in "$@"; do
+    rm -f "$header_file" 2>/dev/null || true
+    if curl -r 0-0 -fsSL --connect-timeout 8 --max-time 20 -D "$header_file" -o /dev/null "$url"; then
+      status_line="$(awk 'toupper($0) ~ /^HTTP\// { line=$0 } END { print line }' "$header_file" 2>/dev/null || true)"
+      if printf '%s\n' "$status_line" | grep -Eq ' 206 '; then
+        printf '%s\n' "$url"
+        continue
+      fi
+      if grep -Eiq '^content-range:[[:space:]]*bytes[[:space:]]+0-0/[0-9]+' "$header_file"; then
+        printf '%s\n' "$url"
+      fi
+    fi
+  done
+
+  rm -f "$header_file" 2>/dev/null || true
+}
+
+clear_chunk_cache(){
+  local output="$1"
+  rm -rf "${output}.chunks" "${output}.chunks.meta" 2>/dev/null || true
+}
+
+download_chunk_with_retry(){
+  local url="$1"
+  local chunk_file="$2"
+  local start_byte="$3"
+  local end_byte="$4"
+  local expected_len="$5"
+  local chunk_index="$6"
+  local total_chunks="$7"
+  local max_retry="${8:-20}"
+  local attempt rc actual_size tmp_file short_url
+  local -a curl_args
+
+  curl_args=(
+    -fsSL
+    --connect-timeout 15
+    --max-time 900
+    -r "${start_byte}-${end_byte}"
+  )
+
+  short_url="$url"
+  if [ "${#short_url}" -gt 88 ]; then
+    short_url="${short_url:0:85}..."
+  fi
+
+  for attempt in $(seq 1 "$max_retry"); do
+    tmp_file="${chunk_file}.tmp"
+    rm -f "$tmp_file" 2>/dev/null || true
+
+    if curl "${curl_args[@]}" -o "$tmp_file" "$url"; then
+      actual_size="$(wc -c < "$tmp_file" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+      if [ "$actual_size" -eq "$expected_len" ] 2>/dev/null; then
+        mv -f "$tmp_file" "$chunk_file"
+        return 0
+      fi
+      warn "分块 $((chunk_index + 1))/${total_chunks} 大小异常：期望 ${expected_len} 字节，实际 ${actual_size} 字节"
+    else
+      rc=$?
+      if [ "$attempt" -eq 1 ] || [ $(( attempt % 5 )) -eq 0 ] || [ "$attempt" -eq "$max_retry" ]; then
+        warn "分块 $((chunk_index + 1))/${total_chunks} 下载失败（第 ${attempt}/${max_retry} 次，curl exit ${rc}）：${short_url}"
+      fi
+    fi
+
+    rm -f "$tmp_file" 2>/dev/null || true
+    sleep $(( attempt < 8 ? attempt : 8 ))
+  done
+
+  return 1
+}
+
+download_tarball_chunked(){
+  local url="$1"
+  local output="$2"
+  local total_bytes="$3"
+  local expected_sig="$4"
+  local chunk_size="$((2 * 1024 * 1024))"
+  local chunk_dir="${output}.chunks"
+  local chunk_meta="${output}.chunks.meta"
+  local total_chunks completed_chunks idx start_byte end_byte expected_len actual_size
+  local chunk_file assembled_file completed_mib total_mib
+
+  if [ ! "$total_bytes" -gt 0 ] 2>/dev/null; then
+    return 1
+  fi
+
+  if [ -f "$chunk_meta" ]; then
+    local meta_sig meta_size
+    meta_sig="$(awk -F= '/^sig=/{print substr($0,5); exit}' "$chunk_meta" 2>/dev/null || true)"
+    meta_size="$(awk -F= '/^size=/{print $2; exit}' "$chunk_meta" 2>/dev/null || true)"
+    if [ "$meta_sig" != "$expected_sig" ] || [ "$meta_size" != "$total_bytes" ]; then
+      warn "检测到旧分块缓存与当前版本不一致，已清理后重新下载"
+      clear_chunk_cache "$output"
+    fi
+  fi
+
+  mkdir -p "$chunk_dir"
+  printf 'sig=%s\nsize=%s\n' "$expected_sig" "$total_bytes" > "$chunk_meta"
+
+  total_chunks=$(( (total_bytes + chunk_size - 1) / chunk_size ))
+  completed_chunks=0
+  for idx in $(seq 0 $((total_chunks - 1))); do
+    start_byte=$(( idx * chunk_size ))
+    end_byte=$(( start_byte + chunk_size - 1 ))
+    if [ "$end_byte" -ge "$total_bytes" ]; then
+      end_byte=$(( total_bytes - 1 ))
+    fi
+    expected_len=$(( end_byte - start_byte + 1 ))
+    chunk_file="$(printf '%s/chunk.%06d.part' "$chunk_dir" "$idx")"
+
+    if [ -f "$chunk_file" ]; then
+      actual_size="$(wc -c < "$chunk_file" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+      if [ "$actual_size" -eq "$expected_len" ] 2>/dev/null; then
+        completed_chunks=$(( completed_chunks + 1 ))
+      else
+        rm -f "$chunk_file" 2>/dev/null || true
+      fi
+    fi
+  done
+
+  total_mib="$(awk -v n="$total_bytes" 'BEGIN{printf "%.2f", n/1024/1024}')"
+  if [ "$completed_chunks" -gt 0 ]; then
+    completed_mib="$(awk -v n="$completed_chunks" -v s="$chunk_size" -v t="$total_bytes" 'BEGIN{v=n*s; if (v>t) v=t; printf "%.2f", v/1024/1024}')"
+    info "续传分块下载：已完成 ${completed_chunks}/${total_chunks} 块（${completed_mib} MiB / ${total_mib} MiB）"
+  else
+    info "启动分块下载：${total_chunks} 块，约 ${total_mib} MiB"
+  fi
+
+  for idx in $(seq 0 $((total_chunks - 1))); do
+    start_byte=$(( idx * chunk_size ))
+    end_byte=$(( start_byte + chunk_size - 1 ))
+    if [ "$end_byte" -ge "$total_bytes" ]; then
+      end_byte=$(( total_bytes - 1 ))
+    fi
+    expected_len=$(( end_byte - start_byte + 1 ))
+    chunk_file="$(printf '%s/chunk.%06d.part' "$chunk_dir" "$idx")"
+
+    if [ -f "$chunk_file" ]; then
+      actual_size="$(wc -c < "$chunk_file" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+      if [ "$actual_size" -eq "$expected_len" ] 2>/dev/null; then
+        continue
+      fi
+      rm -f "$chunk_file" 2>/dev/null || true
+    fi
+
+    if ! download_chunk_with_retry "$url" "$chunk_file" "$start_byte" "$end_byte" "$expected_len" "$idx" "$total_chunks" 20; then
+      return 1
+    fi
+
+    completed_chunks=$(( completed_chunks + 1 ))
+    if [ $(( completed_chunks % 8 )) -eq 0 ] || [ "$completed_chunks" -eq "$total_chunks" ]; then
+      completed_mib="$(awk -v n="$completed_chunks" -v s="$chunk_size" -v t="$total_bytes" 'BEGIN{v=n*s; if (v>t) v=t; printf "%.2f", v/1024/1024}')"
+      info "分块下载进度：${completed_chunks}/${total_chunks} 块（${completed_mib} MiB / ${total_mib} MiB）"
+    fi
+  done
+
+  assembled_file="${output}.assembling"
+  rm -f "$assembled_file" 2>/dev/null || true
+  for idx in $(seq 0 $((total_chunks - 1))); do
+    chunk_file="$(printf '%s/chunk.%06d.part' "$chunk_dir" "$idx")"
+    [ -f "$chunk_file" ] || return 1
+    cat "$chunk_file" >> "$assembled_file"
+  done
+
+  actual_size="$(wc -c < "$assembled_file" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+  if [ "$actual_size" -ne "$total_bytes" ] 2>/dev/null; then
+    warn "分块合并后的文件大小异常：期望 ${total_bytes}，实际 ${actual_size}"
+    rm -f "$assembled_file" 2>/dev/null || true
+    return 1
+  fi
+
+  mv -f "$assembled_file" "$output"
+  return 0
+}
+
+log_resume_state(){
+  local output="$1"
+  local total_bytes="${2:-}"
+  local cached_bytes="0"
+  local cached_mib="0"
+  local total_mib="0"
+  local total_pct="0"
+
+  [ -f "$output" ] || return 0
+
+  cached_bytes="$(wc -c < "$output" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+  cached_mib="$(awk -v n="$cached_bytes" 'BEGIN{printf "%.2f", n/1024/1024}')"
+  if [[ "$total_bytes" =~ ^[0-9]+$ ]] && [ "$total_bytes" -gt 0 ]; then
+    total_mib="$(awk -v n="$total_bytes" 'BEGIN{printf "%.2f", n/1024/1024}')"
+    total_pct=$(( cached_bytes * 100 / total_bytes ))
+    info "检测到断点缓存：已缓存 ${cached_mib} MiB / 估算总大小 ${total_mib} MiB（总体约 ${total_pct}%）"
+  else
+    info "检测到断点缓存：已缓存 ${cached_mib} MiB（总大小暂不可得）"
+  fi
+  info "说明：下面 curl 百分比显示的是本次新增下载进度，不是总体百分比。"
+}
+
 download_with_resume(){
   local url="$1"
   local output="$2"
-  local attempt rc=0
+  local total_bytes="${3:-}"
+  local attempt rc=0 before_bytes after_bytes grown_bytes grown_mib
   local -a curl_args
 
   curl_args=(
@@ -440,24 +643,37 @@ download_with_resume(){
     -fL
     --connect-timeout 15
     --max-time 1800
-    --retry 3
-    --retry-delay 3
   )
 
-  if curl_supports_retry_all_errors; then
-    curl_args+=(--retry-all-errors)
-  fi
-
   for attempt in 1 2 3; do
-    if curl "${curl_args[@]}" -o "$output" "$url"; then
-      return 0
+    before_bytes="$(wc -c < "$output" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+    if [ "$before_bytes" -gt 0 ] 2>/dev/null; then
+      info "继续断点续传：第 ${attempt}/3 次尝试"
+      log_resume_state "$output" "$total_bytes"
+    elif [ "$attempt" -gt 1 ]; then
+      info "重新发起下载：第 ${attempt}/3 次尝试"
     fi
 
-    rc=$?
+    if curl "${curl_args[@]}" -o "$output" "$url"; then
+      return 0
+    else
+      rc=$?
+    fi
+
+    after_bytes="$(wc -c < "$output" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+    grown_bytes=$(( after_bytes - before_bytes ))
     echo ""
     warn "下载中断：${url}（第 ${attempt}/3 次，curl exit ${rc}）"
+    if [ "$after_bytes" -gt 0 ] 2>/dev/null; then
+      if [ "$grown_bytes" -gt 0 ] 2>/dev/null; then
+        grown_mib="$(awk -v n="$grown_bytes" 'BEGIN{printf "%.2f", n/1024/1024}')"
+        info "本次已额外写入 ${grown_mib} MiB，分片会保留用于下一次继续下载"
+      else
+        info "当前分片未增长，但会保留继续尝试"
+      fi
+    fi
     if [ "$attempt" -lt 3 ]; then
-      info "保留已下载分片，${attempt} 次失败后继续断点续传"
+      info "保留已下载分片，稍后继续断点续传"
       sleep $(( attempt * 2 ))
     fi
   done
@@ -505,13 +721,11 @@ download_tarball(){
   local part_meta="$part.meta"
   local primary_http_code=""
   local total_bytes=""
-  local cached_bytes="0"
-  local cached_mib="0"
-  local total_mib="0"
-  local total_pct="0"
   local expected_sig=""
   local meta_sig=""
   local meta_size=""
+  local selected_url=""
+  local -a download_urls
   if [ -z "$TAG" ]; then
     warn "缺少有效 release tag，跳过 release 资产下载"
     return 1
@@ -566,21 +780,45 @@ download_tarball(){
 
   while IFS= read -r u; do
     [ -z "$u" ] && continue
+    download_urls+=("$u")
+  done < <(build_download_urls "$primary_url")
+
+  while IFS= read -r u; do
+    [ -z "$u" ] && continue
+    if [ -z "$selected_url" ]; then
+      selected_url="$u"
+    fi
+  done < <(probe_range_capable_source "${download_urls[@]}")
+
+  if [ -n "$selected_url" ] && [[ "$total_bytes" =~ ^[0-9]+$ ]] && [ "$total_bytes" -gt 0 ]; then
+    info "已锁定支持 Range 的下载源进行分块下载：$selected_url"
+    if download_tarball_chunked "$selected_url" "$part" "$total_bytes" "$expected_sig"; then
+      if gzip -t "$part" >/dev/null 2>&1; then
+        mv -f "$part" "$target"
+        printf 'sig=%s\nsize=%s\n' "$expected_sig" "${total_bytes:-0}" > "$target_meta" 2>/dev/null || true
+        rm -f "$part_meta" || true
+        clear_chunk_cache "$part"
+        success "镜像下载并校验成功"
+        return 0
+      fi
+      warn "分块下载完成但 gzip 校验失败，清理当前分块缓存并回退其他下载方式"
+      rm -f "$part" "$part_meta" || true
+      clear_chunk_cache "$part"
+    else
+      warn "分块下载未完成，将回退到线性续传下载"
+    fi
+  else
+    warn "未探测到稳定的 Range 下载源，将回退到线性续传下载"
+  fi
+
+  for u in "${download_urls[@]}"; do
+    [ -z "$u" ] && continue
     info "尝试下载：$u"
     if [ -f "$part" ]; then
-      cached_bytes="$(wc -c < "$part" 2>/dev/null | tr -d '[:space:]' || echo 0)"
-      cached_mib="$(awk -v n="$cached_bytes" 'BEGIN{printf "%.2f", n/1024/1024}')"
-      if [[ "$total_bytes" =~ ^[0-9]+$ ]] && [ "$total_bytes" -gt 0 ]; then
-        total_mib="$(awk -v n="$total_bytes" 'BEGIN{printf "%.2f", n/1024/1024}')"
-        total_pct=$(( cached_bytes * 100 / total_bytes ))
-        info "检测到断点缓存：已缓存 ${cached_mib} MiB / 估算总大小 ${total_mib} MiB（总体约 ${total_pct}%）"
-      else
-        info "检测到断点缓存：已缓存 ${cached_mib} MiB（总大小暂不可得）"
-      fi
-      info "说明：下面 curl 百分比显示的是本次新增下载进度，不是总体百分比。"
+      log_resume_state "$part" "$total_bytes"
     fi
     printf 'sig=%s\nsize=%s\n' "$expected_sig" "${total_bytes:-0}" > "$part_meta" 2>/dev/null || true
-    if download_with_resume "$u" "$part"; then
+    if download_with_resume "$u" "$part" "$total_bytes"; then
       echo ""
       if gzip -t "$part" >/dev/null 2>&1; then
         mv -f "$part" "$target"
@@ -595,7 +833,7 @@ download_tarball(){
       echo ""
       warn "该下载源失败：${u}（保留当前分片供下次继续）"
     fi
-  done < <(build_download_urls "$primary_url")
+  done
 
   if command -v aria2c >/dev/null 2>&1; then
     info "curl 源均失败，尝试 aria2c 多线程下载"
