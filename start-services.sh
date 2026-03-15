@@ -655,6 +655,42 @@ ensure_openclaw_source_from_global_package() {
     fi
 }
 
+ensure_openclaw_cli_wrapper() {
+    local wrapper_path="/usr/local/bin/openclaw"
+    local runtime_js=""
+
+    if command -v openclaw >/dev/null 2>&1 && [ "$(command -v openclaw)" != "$wrapper_path" ]; then
+        return 0
+    fi
+
+    if [ -f "$OPENCLAW_RUNTIME_JS" ]; then
+        runtime_js="$OPENCLAW_RUNTIME_JS"
+    elif [ -f "$OPENCLAW_PERSIST_SOURCE_DIR/openclaw.mjs" ]; then
+        runtime_js="$OPENCLAW_PERSIST_SOURCE_DIR/openclaw.mjs"
+    else
+        return 0
+    fi
+
+    if ! command -v node >/dev/null 2>&1; then
+        return 0
+    fi
+
+    mkdir -p /usr/local/bin
+    cat > "$wrapper_path" <<EOF
+#!/bin/sh
+set -eu
+if [ -f "$runtime_js" ]; then
+    exec node "$runtime_js" "\$@"
+fi
+if [ -f "$OPENCLAW_PERSIST_SOURCE_DIR/openclaw.mjs" ]; then
+    exec node "$OPENCLAW_PERSIST_SOURCE_DIR/openclaw.mjs" "\$@"
+fi
+echo "openclaw runtime not found" >&2
+exit 127
+EOF
+    chmod +x "$wrapper_path"
+}
+
 has_openclaw_cli() {
     [ -f "$OPENCLAW_PERSIST_SOURCE_DIR/openclaw.mjs" ] || command -v openclaw >/dev/null 2>&1 || [ -x "/root/.npm-global/bin/openclaw" ] || [ -x "/usr/local/bin/openclaw" ]
 }
@@ -753,6 +789,7 @@ refresh_openclaw_availability
 start_gateway() {
     ensure_openclaw_source_from_global_package
     prepare_runtime_source_root
+    ensure_openclaw_cli_wrapper
     refresh_openclaw_availability
     detect_openclaw_runtime_version >/dev/null 2>&1 || true
     if [ "$HAS_OPENCLAW" != "true" ]; then
@@ -772,6 +809,7 @@ start_gateway() {
 start_gateway_watchdog() {
     ensure_openclaw_source_from_global_package
     prepare_runtime_source_root
+    ensure_openclaw_cli_wrapper
     detect_openclaw_runtime_version >/dev/null 2>&1 || true
     if [ ! -x "$GATEWAY_WATCHDOG_SCRIPT" ]; then
         echo "[start-services] watchdog script missing ($GATEWAY_WATCHDOG_SCRIPT), fallback to direct gateway start"
