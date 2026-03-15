@@ -256,6 +256,23 @@ function Write-SummaryLine {
     Write-Host ("  {0,-10} {1}" -f $Label, $Value) -ForegroundColor White
 }
 
+function Write-InstallProgress {
+    param(
+        [string]$Activity,
+        [string]$Status,
+        [int]$Percent,
+        [switch]$Completed
+    )
+
+    if ($Completed) {
+        Write-Progress -Activity $Activity -Completed
+        return
+    }
+
+    $safePercent = [math]::Max(0, [math]::Min(100, $Percent))
+    Write-Progress -Activity $Activity -Status $Status -PercentComplete $safePercent
+}
+
 function New-StrongPassword {
     param([int]$Length = 20)
 
@@ -2373,12 +2390,20 @@ function Main {
     # -- Phase 1: Environment Detection ----------------------------------------
     Write-Step 1 5 "检测环境..."
 
+    $phase1Activity = "OpenClaw 安装 - 环境检测"
+    Write-InstallProgress -Activity $phase1Activity -Status "检查管理员权限" -Percent 5
     Assert-Administrator
 
+    Write-InstallProgress -Activity $phase1Activity -Status "检查 Windows 版本" -Percent 15
     $buildNumber = Test-WindowsVersion
 
+    Write-Info "正在检测 Docker Desktop 和 WSL2，首次检测可能需要几十秒..."
+
     # Detect Docker Desktop and WSL
+    Write-InstallProgress -Activity $phase1Activity -Status "检测 Docker Desktop" -Percent 35
     $hasDockerDesktop = Test-DockerDesktopInstalled
+
+    Write-InstallProgress -Activity $phase1Activity -Status "检测 WSL2" -Percent 60
     $wslInstalled     = Test-Wsl2Installed
     $dockerDesktopMode = $false
     $ubuntuPresent = $false
@@ -2395,11 +2420,16 @@ function Main {
 
     if ($wslInstalled) {
         Write-OK "WSL2 已安装"
+
+        Write-InstallProgress -Activity $phase1Activity -Status "检测 Ubuntu 发行版" -Percent 80
         $ubuntuPresent = Test-UbuntuInstalled
         if ($ubuntuPresent) {
             Write-OK "Ubuntu 发行版已存在"
         }
     }
+
+    Write-InstallProgress -Activity $phase1Activity -Status "环境检测完成" -Percent 100
+    Write-InstallProgress -Activity $phase1Activity -Completed
 
     # -- If neither Docker Desktop nor WSL is available, let user choose --
     if (-not $hasDockerDesktop -and -not $wslInstalled) {
