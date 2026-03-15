@@ -25,7 +25,7 @@ param(
 )
 
 # --- Constants ----------------------------------------------------------------
-$SCRIPT_VERSION  = "1.0.7"
+$SCRIPT_VERSION  = "1.0.8"
 $TASK_NAME       = "OpenClawSetup"
 $UBUNTU_DISTRO   = "Ubuntu-24.04"
 $OPENCLAW_PORT   = "18789"
@@ -639,6 +639,132 @@ function Get-UbuntuDistroName {
     return $UBUNTU_DISTRO
 }
 
+function Test-UbuntuPackageInstalled {
+    $packageNames = @(
+        "CanonicalGroupLimited.Ubuntu24.04LTS",
+        "CanonicalGroupLimited.Ubuntu"
+    )
+
+    foreach ($name in $packageNames) {
+        try {
+            $pkg = Get-AppxPackage -Name $name -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($pkg) {
+                Write-Log "Ubuntu Appx package found: $($pkg.Name) $($pkg.Version)"
+                return $true
+            }
+        } catch { }
+    }
+
+    try {
+        $pkg = Get-AppxPackage -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.PackageFamilyName -like "CanonicalGroupLimited.Ubuntu24.04LTS_*" -or
+                $_.Name -eq "CanonicalGroupLimited.Ubuntu24.04LTS"
+            } |
+            Select-Object -First 1
+        if ($pkg) {
+            Write-Log "Ubuntu Appx package found by family: $($pkg.PackageFamilyName)"
+            return $true
+        }
+    } catch { }
+
+    return $false
+}
+
+function Install-UbuntuOfflinePackage {
+    param([string]$DistroName)
+
+    if ($DistroName -ne "Ubuntu-24.04") {
+        Write-Log "No offline Ubuntu package metadata for distro: $DistroName"
+        return $false
+    }
+
+    $downloadDir = Join-Path $env:TEMP "openclaw-wsl-offline"
+    if (-not (Test-Path $downloadDir)) {
+        New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null
+    }
+
+    $packageFile = Join-Path $downloadDir "Ubuntu2404-240425.AppxBundle"
+    $downloadUrls = @(
+        "https://wslstorestorage.blob.core.windows.net/wslblob/Ubuntu2404-240425.AppxBundle",
+        "https://publicwsldistros.blob.core.windows.net/wsldistrostorage/Ubuntu2404-240425.AppxBundle"
+    )
+
+    Write-Warn "正在切换到离线 Ubuntu 包安装..."
+    Write-Info "将直接下载 Ubuntu 24.04 官方 AppxBundle 包"
+
+    $expectedSize = Get-RemoteFileSize -Urls $downloadUrls
+    $downloadOk = $false
+
+    if ($expectedSize -gt 0) {
+        try {
+            $downloadOk = Download-Robust -Urls $downloadUrls -OutFile $packageFile -ExpectedSize $expectedSize -Threads 4 -ChunkSizeMB 4
+        } catch {
+            Write-Log "Offline Ubuntu package robust download failed: $_" "WARN"
+        }
+    }
+
+    if (-not $downloadOk) {
+        foreach ($url in $downloadUrls) {
+            try {
+                Write-Info "尝试下载离线包镜像..."
+                Invoke-WebRequest -Uri $url -OutFile $packageFile -UseBasicParsing -TimeoutSec 180 -ErrorAction Stop
+                if ((Test-Path $packageFile) -and ((Get-Item $packageFile).Length -gt 100MB)) {
+                    $downloadOk = $true
+                    break
+                }
+            } catch {
+                Write-Log "Offline Ubuntu package fallback download failed: $url ; $_" "WARN"
+            }
+        }
+    }
+
+    if (-not $downloadOk) {
+        Write-Log "Offline Ubuntu package download failed" "WARN"
+        return $false
+    }
+
+    try {
+        Add-AppxPackage -Path $packageFile -ForceApplicationShutdown -ErrorAction Stop
+        Write-Log "Offline Ubuntu Appx package installed: $packageFile"
+    } catch {
+        if (Test-UbuntuPackageInstalled) {
+            Write-Log "Ubuntu Appx package already installed, continuing"
+        } else {
+            Write-Log "Offline Ubuntu Appx install failed: $_" "WARN"
+            return $false
+        }
+    }
+
+    if (Test-UbuntuInstalled) {
+        return $true
+    }
+
+    if (Test-UbuntuPackageInstalled) {
+        Write-Info "离线包已安装，正在再次触发 Ubuntu 注册..."
+        try {
+            $registerOutput = & wsl --install -d $DistroName --no-launch 2>&1 | Out-String
+            Write-Log "Post-Appx wsl registration output: $registerOutput"
+            Write-Log "Post-Appx wsl registration exit code: $LASTEXITCODE"
+        } catch {
+            Write-Log "Post-Appx wsl registration failed: $_" "WARN"
+        }
+
+        for ($attempt = 0; $attempt -lt 6; $attempt++) {
+            if ($attempt -gt 0) {
+                Start-Sleep -Seconds 5
+            }
+
+            if (Test-UbuntuInstalled) {
+                return $true
+            }
+        }
+    }
+
+    Write-Log "Offline Ubuntu package installed but distro registration is still not visible" "WARN"
+    return $false
+}
+
 
 # --- Docker Desktop detection -------------------------------------------------
 function Test-DockerDesktopInstalled {
@@ -743,6 +869,7 @@ function Install-Wsl2 {
         $exitCode = -1
         $elapsed = "00:00"
         $lastAttemptLabel = ""
+        $usedOfflineUbuntuPackage = $false
 
         for ($installAttemptIndex = 0; $installAttemptIndex -lt $installAttempts.Count; $installAttemptIndex++) {
             $attempt = $installAttempts[$installAttemptIndex]
@@ -819,6 +946,16 @@ function Install-Wsl2 {
         $ubuntuPresentAfterInstall = $false
         $rebootPendingAfterInstall = $false
         $knownDistroDownloadFailure = ($installingDistroOnly -and ($combinedOutput -match "0x80072f78|0x80072ee7|0x80072efd|0x80190193|Wsl/InstallDistro"))
+
+        if ($knownDistroDownloadFailure -and $installingDistroOnly -and -not (Test-UbuntuInstalled)) {
+            Write-Log "Known Ubuntu distro download failure detected after $lastAttemptLabel, engaging offline package fallback"
+            $usedOfflineUbuntuPackage = Install-UbuntuOfflinePackage -DistroName $distro
+            if ($usedOfflineUbuntuPackage) {
+                $exitCode = 0
+                $combinedOutput = ($combinedOutput + " [offline-package-success]").Trim()
+                Write-Info "已切换为离线 Ubuntu 包安装并完成"
+            }
+        }
 
         for ($attempt = 0; $attempt -lt 12; $attempt++) {
             if ($attempt -gt 0) {
@@ -2450,6 +2587,8 @@ function Main {
 
     # Show logo
     Show-Logo
+    Write-Host "  脚本版本: v$SCRIPT_VERSION" -ForegroundColor DarkGray
+    Write-Host ""
 
     if ($Resume) {
         Write-Host "  [续] 重启后自动继续安装..." -ForegroundColor Cyan
@@ -2628,7 +2767,7 @@ function Main {
             Show-Error `
                 "Ubuntu 发行版安装" `
                 "下载 Ubuntu 镜像失败" `
-                "请检查网络、代理或 DNS 设置后重试；也可在管理员 PowerShell 手动执行 wsl --install -d $UBUNTU_DISTRO --web-download"
+                "脚本已自动尝试官方离线 Ubuntu 包安装；若仍失败，请检查网络、代理或 DNS 设置后重试，也可在开始菜单打开 Ubuntu 24.04 LTS 完成初始化后再重新执行脚本"
             Read-Host "按回车退出"
             return
         } elseif ($result -eq "pending") {
