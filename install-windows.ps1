@@ -25,7 +25,7 @@ param(
 )
 
 # --- Constants ----------------------------------------------------------------
-$SCRIPT_VERSION  = "1.0.19"
+$SCRIPT_VERSION  = "1.0.20"
 $TASK_NAME       = "OpenClawSetup"
 $UBUNTU_DISTRO   = "Ubuntu-24.04"
 $OPENCLAW_PORT   = "18789"
@@ -1461,15 +1461,24 @@ function Get-PreferredHostIPv4 {
     return $localIp
 }
 
+function Convert-WindowsPathToWslPath {
+    param([string]$WindowsPath)
+
+    if (-not $WindowsPath -or $WindowsPath -notmatch '^[A-Za-z]:\\') {
+        return $null
+    }
+
+    $drive = $WindowsPath.Substring(0, 1).ToLowerInvariant()
+    $rest = $WindowsPath.Substring(2).Replace('\', '/')
+    return "/mnt/$drive$rest"
+}
+
 function Start-WslImageOnlyDeploy {
     param([string]$DistroName)
 
     Write-Info "WSL 环境与 Linux 服务器等价，使用 install-imageonly.sh 部署..."
 
     $hostLanIp = Get-PreferredHostIPv4
-    if ($hostLanIp) {
-        Write-Info "检测到宿主机局域网 IP: $hostLanIp"
-    }
 
     # Download install-imageonly.sh inside WSL, then launch in a new terminal window
     $bootstrapScript = @"
@@ -1516,13 +1525,15 @@ exec bash "`$TMP_SCRIPT"
 
     $tmpDeploy = Join-Path $env:TEMP "openclaw-wsl-imageonly.sh"
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($tmpDeploy, $bootstrapScript, $utf8NoBom)
+    $bootstrapScriptLf = $bootstrapScript -replace "`r`n", "`n"
+    [System.IO.File]::WriteAllText($tmpDeploy, $bootstrapScriptLf, $utf8NoBom)
+    $wslTmpDeploy = Convert-WindowsPathToWslPath -WindowsPath $tmpDeploy
+    if (-not $wslTmpDeploy) {
+        Write-Err "无法转换临时脚本路径到 WSL 路径: $tmpDeploy"
+        return $false
+    }
 
-    # Copy to WSL and normalize CRLF line endings to avoid ^M path issues.
-    Get-Content $tmpDeploy -Raw | & wsl -d $DistroName --exec bash -c "cat > /tmp/openclaw-wsl-imageonly.sh && sed -i 's/\r$//' /tmp/openclaw-wsl-imageonly.sh && chmod +x /tmp/openclaw-wsl-imageonly.sh"
-
-    # Run interactively in the current console to preserve input and avoid mojibake
-    # caused by spawning a separate terminal with inconsistent encoding/locale.
+    # Run interactively in the current console and let install-imageonly.sh own the UX.
     try {
         $originalInputEncoding = [Console]::InputEncoding
         $originalOutputEncoding = [Console]::OutputEncoding
@@ -1530,21 +1541,14 @@ exec bash "`$TMP_SCRIPT"
         [Console]::InputEncoding = $utf8Encoding
         [Console]::OutputEncoding = $utf8Encoding
 
-        Write-Host "" 
-        Write-Host "  ==================================================" -ForegroundColor DarkCyan
-        Write-Host "  下面进入 WSL 交互安装界面" -ForegroundColor Cyan
-        Write-Host "  结束后会自动返回此窗口" -ForegroundColor DarkGray
-        Write-Host "  ==================================================" -ForegroundColor DarkCyan
-        Write-Host ""
-
-        & wsl -d $DistroName --exec env LANG=C.UTF-8 LC_ALL=C.UTF-8 TERM=xterm-256color bash /tmp/openclaw-wsl-imageonly.sh
+        & wsl -d $DistroName --exec env OPENCLAW_HOST_IP=$hostLanIp LANG=C.UTF-8 LC_ALL=C.UTF-8 TERM=xterm-256color bash $wslTmpDeploy
         return ($LASTEXITCODE -eq 0)
     } catch {
         Write-Err "WSL 交互安装失败: $_"
         Write-Suggestion "请手动打开 WSL 终端，执行以下命令完成安装："
         Write-Host ""
         Write-Host "    wsl -d $DistroName" -ForegroundColor White
-        Write-Host "    env LANG=C.UTF-8 LC_ALL=C.UTF-8 bash /tmp/openclaw-wsl-imageonly.sh" -ForegroundColor White
+        Write-Host "    env OPENCLAW_HOST_IP=$hostLanIp LANG=C.UTF-8 LC_ALL=C.UTF-8 bash $wslTmpDeploy" -ForegroundColor White
         Write-Host ""
         return $false
     } finally {
@@ -5642,31 +5646,16 @@ function Main {
         Remove-ResumeTask
         Remove-InstallState
 
-        # Launch install-imageonly.sh in a new terminal (interactive)
+        # Run install-imageonly.sh interactively in current console
         $launched = Start-WslImageOnlyDeploy -DistroName $distroName
 
         Write-Log "Deploy launched: $launched"
 
         if ($launched) {
-            # install-imageonly.sh runs interactively in the new terminal — it handles ports,
-            # domain config, SSH keys, and its own completion summary.  Nothing more to do here.
-            Write-Host ""
-            Write-Host "  ==================================================" -ForegroundColor DarkCyan
-            Write-Host "  ✅ WSL 交互安装已执行完成" -ForegroundColor Green
-            Write-Host "  ==================================================" -ForegroundColor DarkCyan
-            Write-Host ""
-            Write-Host "  安装过程已在当前窗口内完成交互。" -ForegroundColor Cyan
-            Write-Host "  安装完成后可通过以下命令进入容器：" -ForegroundColor Cyan
-            Write-Host "     wsl -d $distroName docker exec -it openclaw-pro bash" -ForegroundColor Yellow
-            Write-Host ""
-            Write-Host "  📄 本窗口日志: $LOG_FILE" -ForegroundColor DarkGray
-            Write-Host ""
-            Read-Host "按回车关闭此窗口"
+            # install-imageonly.sh owns the interaction and completion summary in WSL mode.
             return
         } else {
             # Start-WslImageOnlyDeploy already printed manual instructions
-            Write-Host ""
-            Read-Host "按回车关闭此窗口"
             return
         }
     }
