@@ -671,6 +671,9 @@ function normalizeProviderApiForSync(currentApi, providerName, fallbackApi) {
  * @returns {object|null} 模型能力定义，或 null（未找到时）
  */
 function lookupModelCapabilities(providerName, modelId) {
+  if (!_openclawModelCatalog) {
+    loadOpenClawModelCatalog();
+  }
   if (!_openclawModelCatalog) return { _catalogUnavailable: true };
 
   // 1. 直接查找：先用映射后的 provider 名
@@ -735,27 +738,46 @@ function lookupModelCapabilities(providerName, modelId) {
 function buildModelEntry(providerName, modelId) {
   const catalogEntry = lookupModelCapabilities(providerName, modelId);
 
+  if (catalogEntry?._catalogUnavailable) {
+    console.log(`[catalog] 模型目录不可用，模型 ${providerName}/${modelId} 使用安全默认值`);
+    return {
+      id: modelId,
+      name: modelId,
+      api: 'openai-completions',
+      reasoning: false,
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096
+    };
+  }
+
   if (catalogEntry) {
     const isInferred = catalogEntry._inferred;
     const safeApi = sanitizeApiValue(catalogEntry.api, providerName) || 'openai-completions';
-    if (safeApi !== catalogEntry.api) {
+    const resolvedReasoning = catalogEntry.reasoning ?? false;
+    const resolvedInput = catalogEntry.input || ['text'];
+    const resolvedCost = catalogEntry.cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    const resolvedContextWindow = catalogEntry.contextWindow || 128000;
+    const resolvedMaxTokens = catalogEntry.maxTokens || 4096;
+    if (catalogEntry.api != null && safeApi !== catalogEntry.api) {
       console.log(`[catalog] 模型 ${providerName}/${modelId} api 值 "${catalogEntry.api}" 不被 gateway 支持，映射为 "${safeApi}"`);
     }
     if (isInferred) {
-      console.log(`[catalog] 模型 ${providerName}/${modelId} 家族匹配成功 (${catalogEntry._matchedFamily})，推测使用同家族参数: reasoning=${catalogEntry.reasoning}, api=${safeApi}, ctx=${catalogEntry.contextWindow}`);
+      console.log(`[catalog] 模型 ${providerName}/${modelId} 家族匹配成功 (${catalogEntry._matchedFamily})，推测使用同家族参数: reasoning=${resolvedReasoning}, api=${safeApi}, ctx=${resolvedContextWindow}`);
     } else {
-      console.log(`[catalog] 模型 ${providerName}/${modelId} 命中内置目录: reasoning=${catalogEntry.reasoning}, api=${safeApi}, ctx=${catalogEntry.contextWindow}`);
+      console.log(`[catalog] 模型 ${providerName}/${modelId} 命中内置目录: reasoning=${resolvedReasoning}, api=${safeApi}, ctx=${resolvedContextWindow}`);
     }
     return {
       id: modelId,
       name: isInferred ? modelId : (catalogEntry.name || modelId),
       api: safeApi,
       ...(catalogEntry.headers ? { headers: catalogEntry.headers } : {}),
-      reasoning: catalogEntry.reasoning ?? false,
-      input: catalogEntry.input || ['text'],
-      cost: catalogEntry.cost || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: catalogEntry.contextWindow || 128000,
-      maxTokens: catalogEntry.maxTokens || 4096,
+      reasoning: resolvedReasoning,
+      input: resolvedInput,
+      cost: resolvedCost,
+      contextWindow: resolvedContextWindow,
+      maxTokens: resolvedMaxTokens,
       ...(catalogEntry.compat ? { compat: catalogEntry.compat } : {})
     };
   }
