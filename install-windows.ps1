@@ -32,7 +32,9 @@ $OPENCLAW_PORT   = "18789"
 $WEB_PANEL_PORT  = "3000"
 $DEFAULT_HTTPS_PORT = "443"
 $DEFAULT_HTTP_PORT  = "80"
-$WSL_TARGET_DIR  = "/root/openclaw-pro"
+$DEFAULT_DEPLOY_DIR_NAME = ".openclaw-pro"
+$LEGACY_DEPLOY_DIR_NAME = "openclaw-pro"
+$WSL_TARGET_DIR  = "/root/$DEFAULT_DEPLOY_DIR_NAME"
 $GITHUB_REPO     = "cintia09/openclaw-pro"
 $IMAGE_NAME      = "openclaw-pro"
 $script:imageEdition = "lite"  # 发布仅保留 lite
@@ -43,7 +45,7 @@ $SCRIPT_DIR      = if ($MyInvocation.MyCommand.Path) {
     # bat 远程调用时 $MyInvocation.MyCommand.Path 为空，用当前工作目录
     $PWD.Path
 }
-# 日志与镜像下载目录将在部署阶段统一设置到部署目录 openclaw-pro
+# 日志与镜像下载目录将在部署阶段统一设置到部署目录（默认: 用户主目录隐藏文件夹）
 # 在部署目录确定前先写入系统临时目录，避免在安装目录生成 install-log.txt
 $TMP_DIR         = $env:TEMP
 $LOG_FILE        = Join-Path $env:TEMP "openclaw-install-log.txt"
@@ -56,6 +58,46 @@ $script:sshRootFallback = $false
 $script:hostUserForSSH = ""
 $script:rootPasswordFilePath = ""
 $script:deployedContainerName = ""
+
+function Resolve-LocalDeployDir {
+    param([string]$BasePath)
+
+    if (-not $BasePath) {
+        return (Join-Path $HOME $DEFAULT_DEPLOY_DIR_NAME)
+    }
+
+    $leaf = Split-Path $BasePath -Leaf
+    if ($leaf -eq $DEFAULT_DEPLOY_DIR_NAME -or $leaf -eq $LEGACY_DEPLOY_DIR_NAME) {
+        return $BasePath
+    }
+
+    if ((Test-Path (Join-Path $BasePath "Dockerfile.lite")) -and (Test-Path (Join-Path $BasePath "start-services.sh"))) {
+        return $BasePath
+    }
+
+    return (Join-Path $BasePath $DEFAULT_DEPLOY_DIR_NAME)
+}
+
+function Ensure-LocalDeployDir {
+    param([string]$Path)
+
+    if (-not $Path) { return }
+    if (-not (Test-Path $Path)) {
+        New-Item -ItemType Directory -Path $Path -Force | Out-Null
+    }
+
+    $leaf = Split-Path $Path -Leaf
+    if ($leaf -ne $DEFAULT_DEPLOY_DIR_NAME) { return }
+
+    try {
+        $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+        if (-not ($item.Attributes -band [System.IO.FileAttributes]::Hidden)) {
+            $item.Attributes = $item.Attributes -bor [System.IO.FileAttributes]::Hidden
+        }
+    } catch {
+        Write-Log "无法设置隐藏目录属性: $Path ($_)" "WARN"
+    }
+}
 
 # 如果通过 `irm ... | iex` (远程执行) 运行且用户未显式指定 -ImageOnly，则默认启用 ImageOnly 模式
 # Track whether ImageOnly was explicitly passed vs defaulted by remote exec
@@ -867,8 +909,8 @@ function Copy-DeployPackageToWsl {
     }
 
     # Target directory in WSL
-    $targetWslPath = "$wslRoot\root\openclaw-pro"
-    Write-Info "目标路径: /root/openclaw-pro/"
+    $targetWslPath = "$wslRoot\$($WSL_TARGET_DIR.TrimStart('/').Replace('/', '\'))"
+    Write-Info "目标路径: ${WSL_TARGET_DIR}/"
 
     try {
         # Create target directory
@@ -909,7 +951,7 @@ function Copy-DeployPackageToWslAlt {
         Write-Info "WSL源路径: $wslSourcePath"
 
         # Create target dir and copy using WSL's cp
-        & wsl -d $DistroName --exec bash -c "mkdir -p /root/openclaw-pro && cp -r '$wslSourcePath/.' /root/openclaw-pro/"
+        & wsl -d $DistroName --exec bash -c "mkdir -p '$WSL_TARGET_DIR' && cp -r '$wslSourcePath/.' '$WSL_TARGET_DIR/'"
         $exitCode = $LASTEXITCODE
 
         if ($exitCode -eq 0) {
@@ -935,7 +977,7 @@ function Start-OpenClawDeploy {
     $deployScript = @"
 #!/bin/bash
 set -e
-cd /root/openclaw-pro
+cd $WSL_TARGET_DIR
 
 # Fix line endings (in case Windows copied CRLF)
 if command -v dos2unix &>/dev/null; then
@@ -980,7 +1022,7 @@ echo ""
         Write-Suggestion "请手动打开 WSL 终端，执行以下命令完成部署："
         Write-Host ""
         Write-Host "    wsl -d $DistroName" -ForegroundColor White
-        Write-Host "    cd /root/openclaw-pro" -ForegroundColor White
+        Write-Host "    cd $WSL_TARGET_DIR" -ForegroundColor White
         Write-Host "    chmod +x openclaw-docker.sh && ./openclaw-docker.sh run" -ForegroundColor White
         Write-Host ""
         return $false
@@ -2026,6 +2068,7 @@ function Write-LaunchAccessSummary {
 function Show-Completion {
     param(
         [bool]$DeployLaunched,
+        [string]$HomeBaseDir = "",
         [bool]$IsDockerDesktop = $false,
         [int]$GatewayPort = 18789,
         [int]$PanelPort = 3000,
@@ -2054,6 +2097,14 @@ function Show-Completion {
     if ($DeployLaunched) {
         Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray
         Write-Host ""
+        if ($HomeBaseDir) {
+            Write-Host "  📁 本地安装目录: $HomeBaseDir" -ForegroundColor White
+            if ((Split-Path $HomeBaseDir -Leaf) -eq $DEFAULT_DEPLOY_DIR_NAME) {
+                Write-Host "     提示：该目录位于用户主目录隐藏文件夹，可在资源管理器地址栏直接输入该路径访问。" -ForegroundColor DarkGray
+            }
+            Write-Host "  🐧 WSL 部署目录: $WSL_TARGET_DIR" -ForegroundColor DarkGray
+            Write-Host ""
+        }
 
         # Windows 防火墙提醒（仅实际对外暴露的端口）
         $portList = @()
@@ -2484,18 +2535,18 @@ function Main {
         $ImageOnlyExplicit = $true
         Write-Info "Docker Desktop 模式：仅部署容器（不拉取源码/部署包）..."
 
-        # 检测当前目录是否已是部署目录（避免嵌套创建 openclaw-pro/openclaw-pro）
+        # 检测当前目录是否已是部署目录（避免重复嵌套创建部署目录）
         $currentDir = (Get-Location).Path
         $curLeaf = Split-Path $currentDir -Leaf
-        if ($curLeaf -eq 'openclaw-pro' -or ((Test-Path (Join-Path $currentDir "Dockerfile.lite")) -and
+        $defaultLocalDeployDir = Resolve-LocalDeployDir -BasePath $HOME
+        if ($curLeaf -eq $DEFAULT_DEPLOY_DIR_NAME -or $curLeaf -eq $LEGACY_DEPLOY_DIR_NAME -or ((Test-Path (Join-Path $currentDir "Dockerfile.lite")) -and
             (Test-Path (Join-Path $currentDir "start-services.sh")))) {
-            $parentDir = Split-Path $currentDir -Parent
             Write-Host ""
             Write-Host "  ⚠️  检测到当前目录已是 OpenClaw 部署目录:" -ForegroundColor Yellow
             Write-Host "     $currentDir" -ForegroundColor DarkGray
             Write-Host ""
             Write-Host "     [1] 在当前目录运行（部署目录: $currentDir）" -ForegroundColor White
-            Write-Host "     [2] 切换到上级目录运行（默认，部署目录: $(Join-Path $parentDir 'openclaw-pro')）" -ForegroundColor White
+            Write-Host "     [2] 切换到用户主目录隐藏目录运行（默认，部署目录: $defaultLocalDeployDir）" -ForegroundColor White
             Write-Host ""
             Write-Host "  输入选择 [1/2，默认2]: " -NoNewline -ForegroundColor White
             $dirChoice = (Read-Host).Trim()
@@ -2504,13 +2555,13 @@ function Main {
                 $localDeployDir = $currentDir
                 Write-Info "在当前目录运行: $localDeployDir"
             } else {
-                Set-Location $parentDir
-                $currentDir = $parentDir
-                $localDeployDir = Join-Path $currentDir "openclaw-pro"
-                Write-Info "已切换到上级目录: $currentDir"
+                Set-Location $HOME
+                $currentDir = $HOME
+                $localDeployDir = $defaultLocalDeployDir
+                Write-Info "已切换到默认隐藏目录: $localDeployDir"
             }
         } else {
-            $localDeployDir = Join-Path $currentDir "openclaw-pro"
+            $localDeployDir = $defaultLocalDeployDir
             $homeBaseDir = $localDeployDir
 
             if (-not ($ImageOnly -and $ImageOnlyExplicit)) {
@@ -2518,8 +2569,9 @@ function Main {
                 Write-Host "  安装目录确认:" -ForegroundColor Cyan
                 Write-Host "     工作目录: $localDeployDir" -ForegroundColor White
                 Write-Host "     状态持久化: Docker volume -> /root/.openclaw" -ForegroundColor DarkGray
+                Write-Host "     默认安装到用户主目录隐藏文件夹" -ForegroundColor DarkGray
                 Write-Host ""
-                Write-Host "     按回车确认，或输入新路径: " -NoNewline -ForegroundColor White
+                Write-Host "     按回车确认默认隐藏目录，或输入新路径: " -NoNewline -ForegroundColor White
                 $customBaseDir = (Read-Host).Trim()
                 if ($customBaseDir) {
                     if (-not (Test-Path $customBaseDir)) {
@@ -2527,16 +2579,16 @@ function Main {
                     }
                     Set-Location $customBaseDir
                     $currentDir = $customBaseDir
-                    $localDeployDir = Join-Path $currentDir "openclaw-pro"
-                    Write-Info "已切换安装目录: $currentDir"
+                    $localDeployDir = Resolve-LocalDeployDir -BasePath $currentDir
+                    Write-Info "已切换安装目录: $localDeployDir"
                 }
             } else {
-                if (-not (Test-Path $localDeployDir)) { New-Item -ItemType Directory -Path $localDeployDir -Force | Out-Null }
+                Ensure-LocalDeployDir -Path $localDeployDir
             }
         }
 
-        # 统一目录策略：镜像文件、日志等工作文件都放在部署目录 openclaw-pro 下
-        if (-not (Test-Path $localDeployDir)) { New-Item -ItemType Directory -Path $localDeployDir -Force | Out-Null }
+        # 统一目录策略：镜像文件、日志等工作文件都放在部署目录下（默认隐藏目录）
+        Ensure-LocalDeployDir -Path $localDeployDir
         $homeBaseDir = $localDeployDir
         $TMP_DIR = $localDeployDir
         $newLogFile = Join-Path $localDeployDir "install-log.txt"
@@ -5120,7 +5172,7 @@ function Main {
         # Check if already deployed
         $alreadyDeployed = $false
         try {
-            $checkDeploy = & wsl -d $distroName --exec bash -c "test -f /root/openclaw-pro/openclaw-docker.sh && echo FOUND" 2>&1
+            $checkDeploy = & wsl -d $distroName --exec bash -c "test -f '$WSL_TARGET_DIR/openclaw-docker.sh' && echo FOUND" 2>&1
             if ($checkDeploy -match "FOUND") {
                 $alreadyDeployed = $true
             }
@@ -5134,7 +5186,7 @@ function Main {
                 Show-Error `
                     "文件复制" `
                     "无法将部署包复制到 WSL" `
-                    "请手动复制 docker 目录到 WSL 后运行: cd /root/openclaw-pro && ./openclaw-docker.sh run"
+                    "请手动复制 docker 目录到 WSL 后运行: cd $WSL_TARGET_DIR && ./openclaw-docker.sh run"
                 Read-Host "按回车退出"
                 return
             }
@@ -5165,7 +5217,7 @@ function Main {
     $autoFw = if ($null -ne $script:autoOpenFirewall) { [bool]$script:autoOpenFirewall } else { $true }
     $bbEnabled = if ($null -ne $script:browserBridgeEnabled) { [bool]$script:browserBridgeEnabled } else { $false }
     if ($null -eq $launched) { $launched = $false }
-    Show-Completion -DeployLaunched $launched -IsDockerDesktop $dockerDesktopMode -GatewayPort $gwPort -PanelPort $wpPort -Domain $dom -CertMode $cmode -HttpPort $hPort -HttpsPort $hsPort -SshPort $sPort -AutoOpenFirewall $autoFw -BrowserBridgeEnabled $bbEnabled
+    Show-Completion -DeployLaunched $launched -HomeBaseDir $homeBaseDir -IsDockerDesktop $dockerDesktopMode -GatewayPort $gwPort -PanelPort $wpPort -Domain $dom -CertMode $cmode -HttpPort $hPort -HttpsPort $hsPort -SshPort $sPort -AutoOpenFirewall $autoFw -BrowserBridgeEnabled $bbEnabled
 
     if ($launched) {
         $enterContainerName = if ($script:deployedContainerName) { $script:deployedContainerName } else { "openclaw-pro" }
