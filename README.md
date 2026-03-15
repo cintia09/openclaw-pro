@@ -69,21 +69,20 @@ Windows 侧同样采用：
 - 自动端口冲突处理。
 - SSH 密钥优先，禁用密码登录。
 - 生成并保存 root 初始密码文件（本地可查）。
+- 本地工作目录固定为用户主目录隐藏文件夹 `%USERPROFILE%/.openclaw-pro`，WSL 内部署目录固定为 `/root/.openclaw-pro`。
 
 ---
 
 ## 5. ImageOnly 落盘目录（Linux）
 
-默认情况下，ImageOnly 安装会落在用户主目录隐藏文件夹 `~/.openclaw-pro`。
+ImageOnly 安装固定落在用户主目录隐藏文件夹 `~/.openclaw-pro`。
 
-当显式指定 `TARGET_DIR=X` 执行安装时：
-
-- 工作根目录：`X/.openclaw-pro`
-- 镜像文件：`X/.openclaw-pro/openclaw-pro-image-lite.tar.gz`
-- 安装日志：`X/.openclaw-pro/install.log`
-- root 初始密码文件：`X/.openclaw-pro/root-initial-password.txt`
+- 工作根目录：`~/.openclaw-pro`
+- 镜像文件：`~/.openclaw-pro/openclaw-pro-image-lite.tar.gz`
+- 安装日志：`~/.openclaw-pro/install.log`
+- root 初始密码文件：`~/.openclaw-pro/root-initial-password.txt`
 - 持久化状态卷：`openclaw-pro-state` 挂载到容器 `/root/.openclaw`
-- 旧版 `X/openclaw-pro/home-data` 仅作为历史兼容目录，新安装不再创建或使用
+- 旧版 `~/openclaw-pro/home-data` 仅作为历史兼容目录，新安装不再创建或使用
 
 ---
 

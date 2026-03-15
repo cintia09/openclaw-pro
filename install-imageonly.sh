@@ -17,8 +17,8 @@ IMAGE_NAME="openclaw-pro:latest"
 GITHUB_REPO="cintia09/openclaw-pro"
 IMAGE_TARBALL_LITE="openclaw-pro-image-lite.tar.gz"
 DEFAULT_BASE_DIR_NAME=".openclaw-pro"
+TARGET_DIR="$HOME"
 
-TARGET_DIR="${TARGET_DIR:-$HOME}"
 BASE_DIR="${TARGET_DIR}/${DEFAULT_BASE_DIR_NAME}"
 TMP_DIR="$BASE_DIR"
 STATE_VOLUME_NAME="${STATE_VOLUME_NAME:-openclaw-pro-state}"
@@ -165,19 +165,7 @@ resolve_config_file(){
 # ─── helpers ──────────────────────────────────────────────────
 
 normalize_base_dir(){
-  local target_leaf
-  target_leaf="$(basename "$TARGET_DIR")"
-  if [ "$target_leaf" = "$DEFAULT_BASE_DIR_NAME" ] || [ "$target_leaf" = "openclaw-pro" ]; then
-    BASE_DIR="$TARGET_DIR"
-  elif [ -f "$TARGET_DIR/openclaw-docker.sh" ] && [ -f "$TARGET_DIR/install.sh" ]; then
-    BASE_DIR="$TARGET_DIR"
-  elif [ -f "$TARGET_DIR/$DEFAULT_BASE_DIR_NAME/openclaw-docker.sh" ]; then
-    BASE_DIR="$TARGET_DIR/$DEFAULT_BASE_DIR_NAME"
-  elif [ -f "$TARGET_DIR/openclaw-pro/openclaw-docker.sh" ]; then
-    BASE_DIR="$TARGET_DIR/openclaw-pro"
-  else
-    BASE_DIR="${TARGET_DIR}/$DEFAULT_BASE_DIR_NAME"
-  fi
+  BASE_DIR="${HOME}/$DEFAULT_BASE_DIR_NAME"
 
   TMP_DIR="$BASE_DIR"
   CONFIG_CACHE_FILE="$BASE_DIR/.docker-config.cache.json"

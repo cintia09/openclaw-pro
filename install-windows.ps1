@@ -2535,57 +2535,11 @@ function Main {
         $ImageOnlyExplicit = $true
         Write-Info "Docker Desktop 模式：仅部署容器（不拉取源码/部署包）..."
 
-        # 检测当前目录是否已是部署目录（避免重复嵌套创建部署目录）
-        $currentDir = (Get-Location).Path
-        $curLeaf = Split-Path $currentDir -Leaf
         $defaultLocalDeployDir = Resolve-LocalDeployDir -BasePath $HOME
-        if ($curLeaf -eq $DEFAULT_DEPLOY_DIR_NAME -or $curLeaf -eq $LEGACY_DEPLOY_DIR_NAME -or ((Test-Path (Join-Path $currentDir "Dockerfile.lite")) -and
-            (Test-Path (Join-Path $currentDir "start-services.sh")))) {
-            Write-Host ""
-            Write-Host "  ⚠️  检测到当前目录已是 OpenClaw 部署目录:" -ForegroundColor Yellow
-            Write-Host "     $currentDir" -ForegroundColor DarkGray
-            Write-Host ""
-            Write-Host "     [1] 在当前目录运行（部署目录: $currentDir）" -ForegroundColor White
-            Write-Host "     [2] 切换到用户主目录隐藏目录运行（默认，部署目录: $defaultLocalDeployDir）" -ForegroundColor White
-            Write-Host ""
-            Write-Host "  输入选择 [1/2，默认2]: " -NoNewline -ForegroundColor White
-            $dirChoice = (Read-Host).Trim()
-
-            if ($dirChoice -eq '1') {
-                $localDeployDir = $currentDir
-                Write-Info "在当前目录运行: $localDeployDir"
-            } else {
-                Set-Location $HOME
-                $currentDir = $HOME
-                $localDeployDir = $defaultLocalDeployDir
-                Write-Info "已切换到默认隐藏目录: $localDeployDir"
-            }
-        } else {
-            $localDeployDir = $defaultLocalDeployDir
-            $homeBaseDir = $localDeployDir
-
-            if (-not ($ImageOnly -and $ImageOnlyExplicit)) {
-                Write-Host ""
-                Write-Host "  安装目录确认:" -ForegroundColor Cyan
-                Write-Host "     工作目录: $localDeployDir" -ForegroundColor White
-                Write-Host "     状态持久化: Docker volume -> /root/.openclaw" -ForegroundColor DarkGray
-                Write-Host "     默认安装到用户主目录隐藏文件夹" -ForegroundColor DarkGray
-                Write-Host ""
-                Write-Host "     按回车确认默认隐藏目录，或输入新路径: " -NoNewline -ForegroundColor White
-                $customBaseDir = (Read-Host).Trim()
-                if ($customBaseDir) {
-                    if (-not (Test-Path $customBaseDir)) {
-                        New-Item -ItemType Directory -Path $customBaseDir -Force | Out-Null
-                    }
-                    Set-Location $customBaseDir
-                    $currentDir = $customBaseDir
-                    $localDeployDir = Resolve-LocalDeployDir -BasePath $currentDir
-                    Write-Info "已切换安装目录: $localDeployDir"
-                }
-            } else {
-                Ensure-LocalDeployDir -Path $localDeployDir
-            }
-        }
+        $localDeployDir = $defaultLocalDeployDir
+        $homeBaseDir = $localDeployDir
+        Write-Info "Windows 本地工作目录固定为: $localDeployDir"
+        Ensure-LocalDeployDir -Path $localDeployDir
 
         # 统一目录策略：镜像文件、日志等工作文件都放在部署目录下（默认隐藏目录）
         Ensure-LocalDeployDir -Path $localDeployDir
