@@ -25,7 +25,7 @@ param(
 )
 
 # --- Constants ----------------------------------------------------------------
-$SCRIPT_VERSION  = "1.0.18"
+$SCRIPT_VERSION  = "1.0.19"
 $TASK_NAME       = "OpenClawSetup"
 $UBUNTU_DISTRO   = "Ubuntu-24.04"
 $OPENCLAW_PORT   = "18789"
@@ -1521,23 +1521,35 @@ exec bash "`$TMP_SCRIPT"
     # Copy to WSL and normalize CRLF line endings to avoid ^M path issues.
     Get-Content $tmpDeploy -Raw | & wsl -d $DistroName --exec bash -c "cat > /tmp/openclaw-wsl-imageonly.sh && sed -i 's/\r$//' /tmp/openclaw-wsl-imageonly.sh && chmod +x /tmp/openclaw-wsl-imageonly.sh"
 
-    # Open a new terminal window for interactive install
+    # Run interactively in the current console to preserve input and avoid mojibake
+    # caused by spawning a separate terminal with inconsistent encoding/locale.
     try {
-        $wtPath = Get-Command wt -ErrorAction SilentlyContinue
-        if ($wtPath) {
-            Start-Process wt -ArgumentList "wsl -d $DistroName bash /tmp/openclaw-wsl-imageonly.sh"
-        } else {
-            Start-Process powershell -ArgumentList "-NoExit -Command `"& wsl -d $DistroName bash /tmp/openclaw-wsl-imageonly.sh`""
-        }
-        return $true
+        $originalInputEncoding = [Console]::InputEncoding
+        $originalOutputEncoding = [Console]::OutputEncoding
+        $utf8Encoding = New-Object System.Text.UTF8Encoding($false)
+        [Console]::InputEncoding = $utf8Encoding
+        [Console]::OutputEncoding = $utf8Encoding
+
+        Write-Host "" 
+        Write-Host "  ==================================================" -ForegroundColor DarkCyan
+        Write-Host "  下面进入 WSL 交互安装界面" -ForegroundColor Cyan
+        Write-Host "  结束后会自动返回此窗口" -ForegroundColor DarkGray
+        Write-Host "  ==================================================" -ForegroundColor DarkCyan
+        Write-Host ""
+
+        & wsl -d $DistroName --exec env LANG=C.UTF-8 LC_ALL=C.UTF-8 TERM=xterm-256color bash /tmp/openclaw-wsl-imageonly.sh
+        return ($LASTEXITCODE -eq 0)
     } catch {
-        Write-Err "无法打开终端窗口: $_"
+        Write-Err "WSL 交互安装失败: $_"
         Write-Suggestion "请手动打开 WSL 终端，执行以下命令完成安装："
         Write-Host ""
         Write-Host "    wsl -d $DistroName" -ForegroundColor White
-        Write-Host "    curl -fsSL https://raw.githubusercontent.com/$GITHUB_REPO/main/install.sh | bash" -ForegroundColor White
+        Write-Host "    env LANG=C.UTF-8 LC_ALL=C.UTF-8 bash /tmp/openclaw-wsl-imageonly.sh" -ForegroundColor White
         Write-Host ""
         return $false
+    } finally {
+        if ($null -ne $originalInputEncoding) { [Console]::InputEncoding = $originalInputEncoding }
+        if ($null -ne $originalOutputEncoding) { [Console]::OutputEncoding = $originalOutputEncoding }
     }
 }
 
@@ -5640,10 +5652,10 @@ function Main {
             # domain config, SSH keys, and its own completion summary.  Nothing more to do here.
             Write-Host ""
             Write-Host "  ==================================================" -ForegroundColor DarkCyan
-            Write-Host "  ✅ 安装向导已在新终端窗口启动" -ForegroundColor Green
+            Write-Host "  ✅ WSL 交互安装已执行完成" -ForegroundColor Green
             Write-Host "  ==================================================" -ForegroundColor DarkCyan
             Write-Host ""
-            Write-Host "  请切换到新打开的终端窗口，按照提示完成安装。" -ForegroundColor Cyan
+            Write-Host "  安装过程已在当前窗口内完成交互。" -ForegroundColor Cyan
             Write-Host "  安装完成后可通过以下命令进入容器：" -ForegroundColor Cyan
             Write-Host "     wsl -d $distroName docker exec -it openclaw-pro bash" -ForegroundColor Yellow
             Write-Host ""
