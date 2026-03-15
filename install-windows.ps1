@@ -25,7 +25,7 @@ param(
 )
 
 # --- Constants ----------------------------------------------------------------
-$SCRIPT_VERSION  = "1.0.10"
+$SCRIPT_VERSION  = "1.0.11"
 $TASK_NAME       = "OpenClawSetup"
 $UBUNTU_DISTRO   = "Ubuntu-24.04"
 $OPENCLAW_PORT   = "18789"
@@ -1022,9 +1022,9 @@ function Install-Wsl2 {
             Write-Log "wsl --install exit code: $exitCode"
             Write-Log "Pre-install state: wslInstalled=$hadWslBeforeInstall, ubuntuPresent=$hadUbuntuBeforeInstall, installingDistroOnly=$installingDistroOnly"
 
-            $knownDistroDownloadFailure = ($installingDistroOnly -and ($combinedOutput -match "0x80072f78|0x80072ee7|0x80072efd|0x80190193|Wsl/InstallDistro"))
-            if ($knownDistroDownloadFailure -and $installAttemptIndex -lt ($installAttempts.Count - 1)) {
-                Write-Warn "Ubuntu 下载失败，准备切换下载方式重试"
+            # If exit code is non-zero and Ubuntu still not present, retry next method
+            if ($exitCode -ne 0 -and $installingDistroOnly -and -not (Test-UbuntuInstalled) -and $installAttemptIndex -lt ($installAttempts.Count - 1)) {
+                Write-Warn "Ubuntu 下载失败 (exit=$exitCode)，准备切换下载方式重试"
                 continue
             }
 
@@ -1034,10 +1034,10 @@ function Install-Wsl2 {
         $wslInstalledAfterInstall = $false
         $ubuntuPresentAfterInstall = $false
         $rebootPendingAfterInstall = $false
-        $knownDistroDownloadFailure = ($installingDistroOnly -and ($combinedOutput -match "0x80072f78|0x80072ee7|0x80072efd|0x80190193|Wsl/InstallDistro"))
 
-        if ($knownDistroDownloadFailure -and $installingDistroOnly -and -not (Test-UbuntuInstalled)) {
-            Write-Log "Known Ubuntu distro download failure detected after $lastAttemptLabel, engaging offline package fallback"
+        # If distro-only install failed (any exit code), try offline package fallback
+        if ($installingDistroOnly -and $exitCode -ne 0 -and -not (Test-UbuntuInstalled)) {
+            Write-Log "Distro install failed (exit=$exitCode lastAttempt=$lastAttemptLabel), engaging offline package fallback"
             $usedOfflineUbuntuPackage = Install-UbuntuOfflinePackage -DistroName $distro
             if ($usedOfflineUbuntuPackage) {
                 $exitCode = 0
@@ -1100,8 +1100,8 @@ function Install-Wsl2 {
                 Write-Host ""
                 return "ok"
             }
-            if ($knownDistroDownloadFailure) {
-                Write-Err "Ubuntu 发行版下载失败"
+            if ($installingDistroOnly -and -not $ubuntuPresentAfterInstall) {
+                Write-Err "Ubuntu 发行版安装失败（所有下载方式均未成功）"
                 Write-Info "输出: $combinedOutput"
                 return "distro-download-error"
             }
@@ -1127,8 +1127,8 @@ function Install-Wsl2 {
                 Write-Host ""
                 return "ok"
             }
-            if ($knownDistroDownloadFailure) {
-                Write-Err "Ubuntu 发行版下载失败"
+            if ($installingDistroOnly -and -not $ubuntuPresentAfterInstall) {
+                Write-Err "Ubuntu 发行版安装失败（所有下载方式均未成功）"
                 Write-Info "输出: $combinedOutput"
                 return "distro-download-error"
             }
@@ -1139,9 +1139,9 @@ function Install-Wsl2 {
                 return "reboot"
             }
             if ($installingDistroOnly) {
-                Write-Warn "Ubuntu 发行版安装尚未完成，但当前无需重启"
+                Write-Err "Ubuntu 发行版安装失败（所有下载方式均未成功）"
                 Write-Info "输出: $combinedOutput"
-                return "pending"
+                return "distro-download-error"
             }
             Write-Warn "WSL 安装返回代码 $exitCode，但未检测到待重启状态；请稍后重新运行"
             Write-Host "     ⏳ 安装并配置 — 后台处理中" -ForegroundColor Yellow
