@@ -831,6 +831,19 @@ if ($('btn-hotpatch')) {
 
 let hotpatchRestartPending = false;
 let deviceMgmtPollTimer = null;
+let deviceMgmtInteractionUntil = 0;
+
+function markDeviceManagementInteracting(holdMs = 15000) {
+  deviceMgmtInteractionUntil = Math.max(deviceMgmtInteractionUntil, Date.now() + holdMs);
+}
+
+function isDeviceManagementInteractionActive() {
+  if (Date.now() < deviceMgmtInteractionUntil) return true;
+  const pageEl = $('page-browser');
+  const activeEl = document.activeElement;
+  if (!pageEl || !activeEl || !pageEl.contains(activeEl)) return false;
+  return !!activeEl.closest('input, textarea, select, button');
+}
 
 function setHotpatchButtons(disabled, text) {
   const btns = qa('[id^="btn-hotpatch"]');
@@ -3426,13 +3439,11 @@ async function loadDeviceManagement() {
 }
 
 function startDeviceManagementPolling() {
+  if (deviceMgmtPollTimer) {
+    clearInterval(deviceMgmtPollTimer);
+    deviceMgmtPollTimer = null;
+  }
   loadDeviceManagement();
-  if (deviceMgmtPollTimer) return;
-  deviceMgmtPollTimer = setInterval(() => {
-    if (document.hidden) return;
-    if (getRouteFromHash() !== 'browser') return;
-    loadDeviceManagement();
-  }, 5000);
 }
 
 function friendlyPlatform(p) {
@@ -3587,6 +3598,23 @@ function toggleAutoApproveWarning() {
 }
 
 $('device-auto-approve')?.addEventListener('change', toggleAutoApproveWarning);
+
+const deviceMgmtPageEl = $('page-browser');
+deviceMgmtPageEl?.addEventListener('focusin', (event) => {
+  if (event.target instanceof Element && event.target.closest('input, textarea, select, button')) {
+    markDeviceManagementInteracting();
+  }
+});
+deviceMgmtPageEl?.addEventListener('input', (event) => {
+  if (event.target instanceof Element && event.target.closest('input, textarea, select')) {
+    markDeviceManagementInteracting();
+  }
+});
+deviceMgmtPageEl?.addEventListener('change', (event) => {
+  if (event.target instanceof Element && event.target.closest('input, textarea, select')) {
+    markDeviceManagementInteracting();
+  }
+});
 
 // 复制快速连接命令
 $('btn-copy-setup-cmd')?.addEventListener('click', () => {

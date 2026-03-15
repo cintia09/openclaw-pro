@@ -2043,15 +2043,16 @@ function getLatestPublishedOpenClawVersion() {
 
 async function resolveLatestOpenClawInstallRelease(repo) {
   const safeRepo = parseGitHubRepo(repo) || OPENCLAW_SOURCE_REPO_DEFAULT;
-  const latestRelease = await getLatestOpenClawRelease(safeRepo);
   const publishedVersion = getLatestPublishedOpenClawVersion();
   if (!publishedVersion) {
-    return latestRelease;
+    throw new Error('无法从 npm 获取 OpenClaw 已发布版本');
   }
+  const tag = `v${publishedVersion}`;
   return {
-    ...latestRelease,
-    tag: `v${publishedVersion}`,
-    name: `v${publishedVersion}`,
+    repo: safeRepo,
+    tag,
+    tarballUrl: `https://codeload.github.com/${safeRepo}/tar.gz/refs/tags/${encodeURIComponent(tag)}`,
+    name: tag,
     binaryAsset: null,
     assets: [],
     installVersion: publishedVersion,
@@ -4167,7 +4168,7 @@ async function fetchNodeIpv4Address(nodeId, platform) {
     const binsPayload = await client.request('node.invoke', {
       nodeId,
       command: 'system.which',
-      params: { bins: ['ip', 'ifconfig'] },
+      params: { bins: ['ip', 'ifconfig', 'ipconfig'] },
       timeoutMs: 10000,
       idempotencyKey: crypto.randomUUID()
     }, 12000);
@@ -4175,9 +4176,12 @@ async function fetchNodeIpv4Address(nodeId, platform) {
     const bins = binsResult && typeof binsResult.bins === 'object' ? binsResult.bins : binsResult;
     const ipBin = typeof bins?.ip === 'string' ? bins.ip.trim() : '';
     const ifconfigBin = typeof bins?.ifconfig === 'string' ? bins.ifconfig.trim() : '';
+    const ipconfigBin = typeof bins?.ipconfig === 'string' ? bins.ipconfig.trim() : '';
     let command = null;
     if (ipBin) {
       command = [ipBin, '-4', 'addr', 'show'];
+    } else if (ipconfigBin) {
+      command = [ipconfigBin];
     } else if (ifconfigBin) {
       command = [ifconfigBin];
     } else {
@@ -4213,6 +4217,11 @@ async function fetchNodeIpv4Address(nodeId, platform) {
     if (ipBin) {
       const matches = Array.from(String(output).matchAll(/\binet\s+(\d{1,3}(?:\.\d{1,3}){3})\b/g)).map((m) => m[1]);
       const picked = matches.find((ip) => ip !== '127.0.0.1');
+      return picked || '';
+    }
+    if (ipconfigBin || normalizedPlatform.startsWith('win')) {
+      const matches = Array.from(String(output).matchAll(/IPv4[^:\n]*[:：]\s*(\d{1,3}(?:\.\d{1,3}){3})/gi)).map((m) => m[1]);
+      const picked = matches.find((ip) => ip !== '127.0.0.1' && !ip.startsWith('169.254.'));
       return picked || '';
     }
     if (ifconfigBin && normalizedPlatform.startsWith('darwin')) {

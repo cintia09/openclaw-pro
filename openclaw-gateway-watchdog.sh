@@ -215,6 +215,28 @@ config_hash() {
   sha256sum "$file" 2>/dev/null | awk '{print $1}'
 }
 
+config_backup_hash() {
+  local file="$1"
+  [ -f "$file" ] || return 1
+
+  case "$file" in
+    /root/.openclaw/agents/main/agent/auth-profiles.json)
+      if command -v jq >/dev/null 2>&1; then
+        jq -S -c 'del(.usageStats)' "$file" 2>/dev/null | sha256sum 2>/dev/null | awk '{print $1}'
+        return 0
+      fi
+      ;;
+    /root/.openclaw/cron/jobs.json)
+      if command -v jq >/dev/null 2>&1; then
+        jq -S -c 'if (.jobs | type) == "array" then .jobs |= map(del(.state)) else . end' "$file" 2>/dev/null | sha256sum 2>/dev/null | awk '{print $1}'
+        return 0
+      fi
+      ;;
+  esac
+
+  config_hash "$file"
+}
+
 trim_backups() {
   [ -d "$BACKUP_DIR" ] || return 0
   # 清理 snapshot 目录（新格式）
@@ -253,7 +275,7 @@ backup_config_if_changed() {
   local f
   for f in $BACKUP_CONFIG_FILES; do
     [ -f "$f" ] || continue
-    combined_hash="${combined_hash}$(config_hash "$f" || true)"
+    combined_hash="${combined_hash}$(config_backup_hash "$f" || true)"
   done
   # 对组合 hash 再次 hash 得到单一值
   combined_hash=$(echo -n "$combined_hash" | sha256sum 2>/dev/null | awk '{print $1}')

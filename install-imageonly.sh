@@ -41,6 +41,14 @@ PROXY_PREFIXES=(
 TTY_IN="/dev/tty"
 has_tty(){ [ -r "$TTY_IN" ] && [ -w "$TTY_IN" ]; }
 
+if [ -t 1 ]; then
+  NC='\033[0m'
+  WHITE='\033[1;37m'
+else
+  NC=''
+  WHITE=''
+fi
+
 TAG=""
 IMAGE_TARBALL="$IMAGE_TARBALL_LITE"
 GW_PORT="${GW_PORT:-18789}"
