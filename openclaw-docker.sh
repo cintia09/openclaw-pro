@@ -359,7 +359,7 @@ ensure_image() {
         remote_tag=$(get_latest_release_tag)
 
         if [ -n "$remote_tag" ] && [ -n "$local_tag" ] && [ "$remote_tag" != "$local_tag" ]; then
-            warn "发现新版本镜像: 远端 $remote_tag，本地 $local_tag"
+            warn "发现新版本镜像: 远端 ${remote_tag}，本地 ${local_tag}"
             echo -e "  ${CYAN}[1]${NC} 使用本地镜像（默认）"
             echo -e "  ${CYAN}[2]${NC} 下载最新镜像"
             local img_choice=""
