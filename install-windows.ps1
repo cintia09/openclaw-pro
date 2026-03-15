@@ -25,7 +25,7 @@ param(
 )
 
 # --- Constants ----------------------------------------------------------------
-$SCRIPT_VERSION  = "1.0.12"
+$SCRIPT_VERSION  = "1.0.13"
 $TASK_NAME       = "OpenClawSetup"
 $UBUNTU_DISTRO   = "Ubuntu-24.04"
 $OPENCLAW_PORT   = "18789"
@@ -1273,21 +1273,29 @@ function Install-DockerInWsl {
 #!/bin/bash
 set -e
 
+# Clear proxy env vars — WSL NAT mode cannot reach Windows localhost proxies
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY no_proxy NO_PROXY
+export http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= all_proxy= ALL_PROXY=
+
 echo "STEP:0"
-sudo apt-get update -qq 2>&1
+sudo -E apt-get update -qq 2>&1
 
 echo "STEP:1"
-sudo apt-get install -y -qq ca-certificates curl 2>&1
+sudo -E apt-get install -y -qq ca-certificates curl 2>&1
 
 echo "STEP:2"
 sudo install -m 0755 -d /etc/apt/keyrings
-sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+for i in 1 2 3; do
+  sudo curl --noproxy '*' -fsSL --connect-timeout 15 --retry 2 https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && break
+  echo "GPG download attempt $i failed, retrying..." >&2
+  sleep 3
+done
 sudo chmod a+r /etc/apt/keyrings/docker.asc
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "${VERSION_CODENAME}") stable" |   sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-sudo apt-get update -qq 2>&1
+sudo -E apt-get update -qq 2>&1
 
 echo "STEP:3"
-sudo apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin 2>&1
+sudo -E apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin 2>&1
 
 echo "STEP:4"
 sudo usermod -aG docker $USER 2>/dev/null || true
