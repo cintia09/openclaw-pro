@@ -16,9 +16,10 @@ CONTAINER_NAME="openclaw-pro"
 IMAGE_NAME="openclaw-pro:latest"
 GITHUB_REPO="cintia09/openclaw-pro"
 IMAGE_TARBALL_LITE="openclaw-pro-image-lite.tar.gz"
+DEFAULT_BASE_DIR_NAME=".openclaw-pro"
 
-TARGET_DIR="${TARGET_DIR:-$(pwd)}"
-BASE_DIR="${TARGET_DIR}/openclaw-pro"
+TARGET_DIR="${TARGET_DIR:-$HOME}"
+BASE_DIR="${TARGET_DIR}/${DEFAULT_BASE_DIR_NAME}"
 TMP_DIR="$BASE_DIR"
 STATE_VOLUME_NAME="${STATE_VOLUME_NAME:-openclaw-pro-state}"
 STATE_MOUNT_POINT="/root/.openclaw"
@@ -166,14 +167,16 @@ resolve_config_file(){
 normalize_base_dir(){
   local target_leaf
   target_leaf="$(basename "$TARGET_DIR")"
-  if [ "$target_leaf" = "openclaw-pro" ]; then
+  if [ "$target_leaf" = "$DEFAULT_BASE_DIR_NAME" ] || [ "$target_leaf" = "openclaw-pro" ]; then
     BASE_DIR="$TARGET_DIR"
   elif [ -f "$TARGET_DIR/openclaw-docker.sh" ] && [ -f "$TARGET_DIR/install.sh" ]; then
     BASE_DIR="$TARGET_DIR"
+  elif [ -f "$TARGET_DIR/$DEFAULT_BASE_DIR_NAME/openclaw-docker.sh" ]; then
+    BASE_DIR="$TARGET_DIR/$DEFAULT_BASE_DIR_NAME"
   elif [ -f "$TARGET_DIR/openclaw-pro/openclaw-docker.sh" ]; then
     BASE_DIR="$TARGET_DIR/openclaw-pro"
   else
-    BASE_DIR="${TARGET_DIR}/openclaw-pro"
+    BASE_DIR="${TARGET_DIR}/$DEFAULT_BASE_DIR_NAME"
   fi
 
   TMP_DIR="$BASE_DIR"
@@ -1720,6 +1723,10 @@ create_and_start(){
   local url_suffix=""
   [ "$HTTPS_PORT" != "443" ] && url_suffix=":${HTTPS_PORT}"
   info "访问：主站 https://${DOMAIN}${url_suffix}"
+  info "本地安装目录：$BASE_DIR"
+  if [ "$BASE_DIR" = "$HOME/$DEFAULT_BASE_DIR_NAME" ]; then
+    info "提示：安装目录位于用户主目录隐藏文件夹，可通过 'cd $HOME/$DEFAULT_BASE_DIR_NAME' 查看"
+  fi
 
   # 显示 SSH 登录信息
   echo ""
