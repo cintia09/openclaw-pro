@@ -1490,6 +1490,12 @@ unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
 export http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= all_proxy= ALL_PROXY=
 export OPENCLAW_HOST_IP="$hostLanIp"
 
+# Redirect stdout/stderr to /dev/tty so all output is visible in the console.
+# Without this, wsl --exec pipes stdout through PowerShell which buffers/discards it.
+if [ -w /dev/tty ]; then
+    exec 1>/dev/tty 2>/dev/tty
+fi
+
 SCRIPT_URL="https://raw.githubusercontent.com/$GITHUB_REPO/main/install-imageonly.sh"
 TMP_SCRIPT="/tmp/openclaw-install-imageonly.sh"
 
