@@ -7092,7 +7092,7 @@ function buildOpenClawOperationProgress(state) {
 }
 
 function auditOpenClawImageDependencies() {
-  const requiredCommands = ['bash', 'node', 'npm', 'git', 'curl', 'jq', 'tar', 'gzip', 'unzip', 'python3', 'make', 'g++'];
+  const requiredCommands = ['bash', 'node', 'npm', 'git', 'curl', 'jq', 'tar', 'gzip', 'unzip', 'python3'];
   const commands = requiredCommands.map((name) => ({
     name,
     ok: runCommandOk(`command -v ${name} >/dev/null 2>&1`, 1200),

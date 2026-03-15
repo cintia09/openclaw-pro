@@ -37,12 +37,12 @@
   - 已有手动配置恢复流程（当前为 `prompt` 输入选择）。
   - 已有状态轮询并更新 OpenClaw 卡片状态。
 
-### 2.2 Docker 镜像编译依赖检查结论
+### 2.2 Docker 镜像依赖检查结论
 
-- `Dockerfile` / `Dockerfile.lite` 已内置源码构建关键依赖：`nodejs 22`、`npm`、`git`、`curl`、`tar`、`python3`、`build-essential`。
-- 镜像已预装 `pnpm@10.23.0` 与 `rolldown@1.0.0-rc.6`（降低运行时安装抖动）。
+- `Dockerfile` / `Dockerfile.lite` 保留运行期与源码安装所需依赖：`nodejs 22`、`npm`、`pnpm`、`git`、`curl`、`jq`、`tar`、`gzip`、`unzip`、`python3`。
+- `Dockerfile.lite` 不再内置 `build-essential` 或全局 `rolldown`；OpenClaw 现阶段依赖上游为 `@lydell/node-pty`、`sharp`、`sqlite-vec` 提供的预编译二进制完成安装。
 - `buildOpenClawSourceInstallCommand` 在 node/npm 缺失时仍有兜底安装逻辑（`apt + nodesource`）。
-- 结论：按当前安装链路（`npm install` + `npm run build/compile`）所需依赖已覆盖；当前流程未显式使用 `cmake` 等额外 C/C++ 工具链。
+- 结论：按当前安装链路（`npm install` + `npm run build/compile`）所需运行依赖已覆盖；当前镜像不再假设容器内存在 C/C++ 编译工具链，若未来上游取消预编译二进制，需要重新评估镜像策略。
 
 ### 2.3 主要差距
 
