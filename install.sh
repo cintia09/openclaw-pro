@@ -30,16 +30,6 @@ run_imageonly_installer(){
   local target_dir tmp_root tmp_script
   target_dir="${TARGET_DIR:-$(pwd)}"
 
-  if [ -f "$target_dir/install-imageonly.sh" ]; then
-    chmod +x "$target_dir/install-imageonly.sh" || true
-    exec env TARGET_DIR="$target_dir" bash "$target_dir/install-imageonly.sh"
-  fi
-
-  if [ -f "$target_dir/openclaw-pro/install-imageonly.sh" ]; then
-    chmod +x "$target_dir/openclaw-pro/install-imageonly.sh" || true
-    exec env TARGET_DIR="$target_dir" bash "$target_dir/openclaw-pro/install-imageonly.sh"
-  fi
-
   tmp_root="${TMPDIR:-/tmp}"
   tmp_root="${tmp_root%/}"
   tmp_script="$(mktemp "${tmp_root}/openclaw-imageonly.XXXXXX")"
@@ -50,6 +40,18 @@ run_imageonly_installer(){
       exec env TARGET_DIR="$target_dir" FORCE_TTY_INTERACTIVE=1 bash "$tmp_script"
     fi
     exec env TARGET_DIR="$target_dir" bash "$tmp_script"
+  fi
+
+  if [ -f "$target_dir/install-imageonly.sh" ]; then
+    echo "⚠️ 远端安装脚本下载失败，回退使用当前目录 install-imageonly.sh" >&2
+    chmod +x "$target_dir/install-imageonly.sh" || true
+    exec env TARGET_DIR="$target_dir" bash "$target_dir/install-imageonly.sh"
+  fi
+
+  if [ -f "$target_dir/openclaw-pro/install-imageonly.sh" ]; then
+    echo "⚠️ 远端安装脚本下载失败，回退使用本地仓库 openclaw-pro/install-imageonly.sh" >&2
+    chmod +x "$target_dir/openclaw-pro/install-imageonly.sh" || true
+    exec env TARGET_DIR="$target_dir" bash "$target_dir/openclaw-pro/install-imageonly.sh"
   fi
 
   echo "⚠️ 无法下载 ImageOnly 安装脚本，请稍后重试。" >&2
