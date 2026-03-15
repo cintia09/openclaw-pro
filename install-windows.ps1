@@ -1563,6 +1563,13 @@ exec bash "`$TMP_SCRIPT"
     }
 }
 
+function Remove-LiteLocalImageTag {
+    try { & docker image inspect openclaw-pro:lite 2>$null | Out-Null } catch { }
+    if ($LASTEXITCODE -eq 0) {
+        try { & docker rmi openclaw-pro:lite 2>$null | Out-Null } catch { }
+    }
+}
+
 # --- Port availability check --------------------------------------------------
 function Test-PortAvailable {
     param([int]$Port)
@@ -4298,6 +4305,7 @@ function Main {
                                 $tagChk = & docker image inspect openclaw-pro:latest 2>$null
                                 if ($LASTEXITCODE -eq 0) { break }
                             }
+                            Remove-LiteLocalImageTag
                         }
 
                         # 有些 tar 里只有 ghcr.io/... 或 openclaw-pro:lite；尝试补一个 openclaw-pro:latest
@@ -4315,6 +4323,7 @@ function Main {
                                 $liteCheck = & docker image inspect openclaw-pro:lite 2>$null
                                 if ($LASTEXITCODE -eq 0) {
                                     try { & docker tag "openclaw-pro:lite" "openclaw-pro:latest" 2>$null } catch { }
+                                    Remove-LiteLocalImageTag
                                 }
                             }
 
@@ -5455,6 +5464,7 @@ function Main {
                                 $recoverTagChk = & docker image inspect openclaw-pro:latest 2>$null
                                 if ($LASTEXITCODE -eq 0) { break }
                             }
+                            Remove-LiteLocalImageTag
                         }
 
                         # 若上面没有成功创建 openclaw-pro:latest，继续扫描镜像列表并尝试 tag
@@ -5464,6 +5474,7 @@ function Main {
                                 $liteChk = & docker image inspect openclaw-pro:lite 2>$null
                                 if ($LASTEXITCODE -eq 0) {
                                     try { & docker tag "openclaw-pro:lite" "openclaw-pro:latest" 2>$null } catch { }
+                                    Remove-LiteLocalImageTag
                                 }
                             }
                             $allImages = & docker images --format '{{.Repository}}:{{.Tag}}' 2>$null

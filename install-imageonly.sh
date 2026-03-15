@@ -1098,6 +1098,7 @@ pull_from_ghcr(){
   info "尝试从 GHCR 拉取镜像（自动回退）"
   if [ -n "$TAG" ] && docker pull "ghcr.io/${GITHUB_REPO}:${TAG}-lite"; then
     docker tag "ghcr.io/${GITHUB_REPO}:${TAG}-lite" "$IMAGE_NAME" || true
+    cleanup_local_lite_aliases || true
     success "GHCR 拉取成功"; return 0
   fi
   if docker pull "ghcr.io/${GITHUB_REPO}:lite" 2>/dev/null || docker pull "ghcr.io/${GITHUB_REPO}:latest" 2>/dev/null; then
@@ -1106,6 +1107,7 @@ pull_from_ghcr(){
     else
       docker tag "ghcr.io/${GITHUB_REPO}:latest" "$IMAGE_NAME" || true
     fi
+    cleanup_local_lite_aliases || true
     success "GHCR 拉取成功"; return 0
   fi
   return 1
@@ -1123,6 +1125,26 @@ tag_loaded_image_if_needed(){
 
   if [ -n "$loaded_ref" ] && [ "$loaded_ref" != "$IMAGE_NAME" ]; then
     docker tag "$loaded_ref" "$IMAGE_NAME" >/dev/null 2>&1 || true
+  fi
+
+  cleanup_local_lite_aliases || true
+}
+
+cleanup_local_lite_aliases(){
+  local alias_removed="false"
+
+  if docker image inspect "openclaw-pro:lite" >/dev/null 2>&1; then
+    docker rmi "openclaw-pro:lite" >/dev/null 2>&1 || true
+    alias_removed="true"
+  fi
+
+  if docker image inspect "ghcr.io/${GITHUB_REPO}:lite" >/dev/null 2>&1; then
+    docker rmi "ghcr.io/${GITHUB_REPO}:lite" >/dev/null 2>&1 || true
+    alias_removed="true"
+  fi
+
+  if [ "$alias_removed" = "true" ]; then
+    info "已移除本地 lite 标签，统一使用 ${IMAGE_NAME}"
   fi
 }
 
