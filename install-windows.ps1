@@ -489,60 +489,111 @@ function Test-WindowsVersion {
 }
 
 # --- WSL2 detection -----------------------------------------------------------
-function Test-Wsl2Installed {
-    # Check if wsl.exe exists
-    $wslPath = Get-Command wsl -ErrorAction SilentlyContinue
-    if (-not $wslPath) {
-        return $false
-    }
+function Test-WindowsFeatureEnabled {
+    param([string]$FeatureName)
 
-    # wsl --status exit code is unreliable across Windows versions
-    # Instead, use wsl --list which works more consistently
     try {
-        $output = & wsl --list --verbose 2>&1 | Out-String
-        # If wsl --list produces meaningful output (not just error), WSL is installed
-        if ($output -match "NAME|名称|STATE|状态|Running|Stopped") {
-            return $true
-        }
-        # Fallback: try wsl --status but accept exit codes 0 or 1
-        # (some builds return 1 even when WSL is properly installed)
-        $null = & wsl --status 2>&1
-        if ($LASTEXITCODE -le 1) {
-            # Check if the WSL kernel is present
-            $kernelPath = "$env:SystemRoot\System32\lxss\tools\kernel"
-            if (Test-Path $kernelPath) { return $true }
-            # Also check via wsl.exe existing + Windows feature
-            $wslFeature = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux -ErrorAction SilentlyContinue
-            if ($wslFeature -and $wslFeature.State -eq "Enabled") { return $true }
-        }
-        return $false
+        $feature = Get-WindowsOptionalFeature -Online -FeatureName $FeatureName -ErrorAction SilentlyContinue
+        return ($feature -and $feature.State -eq "Enabled")
     } catch {
         return $false
     }
 }
 
-function Test-UbuntuInstalled {
+function Test-WslRebootPending {
+    $pendingKeys = @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending",
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired"
+    )
+
+    foreach ($key in $pendingKeys) {
+        if (Test-Path $key) {
+            return $true
+        }
+    }
+
     try {
-        $distros = & wsl --list --quiet 2>&1 | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
-        foreach ($d in $distros) {
-            # Normalize: remove null chars that wsl sometimes outputs
-            $clean = $d -replace "`0", ""
-            if ($clean -match "Ubuntu") {
-                Write-Info "已找到 Ubuntu 发行版: $clean"
-                return $true
-            }
+        $sessionManager = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager" -ErrorAction SilentlyContinue
+        if ($sessionManager -and $sessionManager.PendingFileRenameOperations) {
+            return $true
         }
     } catch { }
+
+    return $false
+}
+
+function Test-WslCoreInstalled {
+    $kernelPaths = @(
+        "$env:SystemRoot\System32\lxss\tools\kernel",
+        "$env:ProgramFiles\WSL\wsl.exe"
+    )
+
+    foreach ($path in $kernelPaths) {
+        if (Test-Path $path) {
+            return $true
+        }
+    }
+
+    try {
+        $pkg = Get-AppxPackage -Name "MicrosoftCorporationII.WindowsSubsystemForLinux" -ErrorAction SilentlyContinue
+        if ($pkg) {
+            return $true
+        }
+    } catch { }
+
+    return $false
+}
+
+function Get-RegisteredWslDistros {
+    $lxssRoot = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss"
+    $distros = @()
+
+    if (-not (Test-Path $lxssRoot)) {
+        return @()
+    }
+
+    try {
+        foreach ($key in Get-ChildItem -Path $lxssRoot -ErrorAction SilentlyContinue) {
+            try {
+                $props = Get-ItemProperty -Path $key.PSPath -ErrorAction SilentlyContinue
+                $name = [string]$props.DistributionName
+                if (-not [string]::IsNullOrWhiteSpace($name)) {
+                    $distros += $name.Trim()
+                }
+            } catch { }
+        }
+    } catch { }
+
+    return @($distros | Sort-Object -Unique)
+}
+
+function Test-Wsl2Installed {
+    $wslFeatureEnabled = Test-WindowsFeatureEnabled -FeatureName "Microsoft-Windows-Subsystem-Linux"
+    $vmPlatformEnabled = Test-WindowsFeatureEnabled -FeatureName "VirtualMachinePlatform"
+
+    if (-not $wslFeatureEnabled -or -not $vmPlatformEnabled) {
+        return $false
+    }
+
+    return (Test-WslCoreInstalled)
+}
+
+function Test-UbuntuInstalled {
+    foreach ($d in (Get-RegisteredWslDistros)) {
+        if ($d -match "Ubuntu") {
+            Write-Info "已找到 Ubuntu 发行版: $d"
+            return $true
+        }
+    }
     return $false
 }
 
 function Get-UbuntuDistroName {
-    try {
-        $distros = & wsl --list --quiet 2>&1 | ForEach-Object { ($_ -replace "`0", "").Trim() } | Where-Object { $_ -ne "" }
-        foreach ($d in $distros) {
-            if ($d -match "Ubuntu") { return $d }
+    foreach ($d in (Get-RegisteredWslDistros)) {
+        if ($d -match "Ubuntu") {
+            return $d
         }
-    } catch { }
+    }
     return $UBUNTU_DISTRO
 }
 
@@ -680,23 +731,48 @@ function Install-Wsl2 {
         Write-Log "wsl --install output: $combinedOutput"
         Write-Log "wsl --install exit code: $exitCode"
 
-        Start-Sleep -Seconds 2
-        $wslInstalledAfterInstall = Test-Wsl2Installed
-        $ubuntuPresentAfterInstall = Test-UbuntuInstalled
+        $wslInstalledAfterInstall = $false
+        $ubuntuPresentAfterInstall = $false
+        $rebootPendingAfterInstall = $false
+
+        for ($attempt = 0; $attempt -lt 12; $attempt++) {
+            if ($attempt -gt 0) {
+                Start-Sleep -Seconds 5
+            }
+
+            $wslInstalledAfterInstall = Test-Wsl2Installed
+            $ubuntuPresentAfterInstall = Test-UbuntuInstalled
+            $rebootPendingAfterInstall = Test-WslRebootPending
+
+            if ($wslInstalledAfterInstall -and $ubuntuPresentAfterInstall) {
+                break
+            }
+
+            if ($rebootPendingAfterInstall) {
+                break
+            }
+        }
+
         Write-Log "Post-install state: wslInstalled=$wslInstalledAfterInstall, ubuntuPresent=$ubuntuPresentAfterInstall"
+        Write-Log "Post-install reboot pending: $rebootPendingAfterInstall"
 
         # Show completed steps
         Write-Host "     ✅ 启用 WSL 功能" -ForegroundColor Green
         Write-Host "     ✅ 下载 $UBUNTU_DISTRO 镜像" -ForegroundColor Green
 
         if ($exitCode -eq 0) {
-            Start-Sleep -Seconds 3
-            $testOutput = & wsl --status 2>&1
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host "     ⚠️  安装并配置 — 需要重启" -ForegroundColor Yellow
+            if (-not $wslInstalledAfterInstall -or -not $ubuntuPresentAfterInstall) {
+                if ($rebootPendingAfterInstall) {
+                    Write-Host "     ⚠️  安装并配置 — 需要重启" -ForegroundColor Yellow
+                    Write-Host ""
+                    Write-Info "安装耗时: $elapsed"
+                    return "reboot"
+                }
+                Write-Warn "WSL 安装命令已完成，但系统状态尚未完全就绪，请稍后重新运行"
+                Write-Host "     ⏳ 安装并配置 — 后台处理中" -ForegroundColor Yellow
                 Write-Host ""
                 Write-Info "安装耗时: $elapsed"
-                return "reboot"
+                return "pending"
             }
             Write-Host "     ✅ 安装并配置 ($elapsed)" -ForegroundColor Green
             Write-Host ""
@@ -708,15 +784,21 @@ function Install-Wsl2 {
                 Write-Host ""
                 return "ok"
             }
+            if ($rebootPendingAfterInstall) {
+                Write-Host "     ⚠️  安装并配置 — 需要重启" -ForegroundColor Yellow
+                Write-Host ""
+                Write-Info "安装耗时: $elapsed"
+                return "reboot"
+            }
             if ($combinedOutput -match "restart|reboot|重启|重新启动") {
                 Write-Host "     ⚠️  安装并配置 — 需要重启" -ForegroundColor Yellow
                 Write-Host ""
                 Write-Info "安装耗时: $elapsed"
                 return "reboot"
             }
-            Write-Err "WSL 安装失败 (exit code: $exitCode)"
+            Write-Warn "wsl --install 返回代码 $exitCode，但当前未检测到待重启状态；可能仍在后台完成安装"
             Write-Info "输出: $combinedOutput"
-            return "error"
+            return "pending"
         } else {
             if ($wslInstalledAfterInstall -and $ubuntuPresentAfterInstall) {
                 Write-Warn "wsl --install 返回代码 $exitCode，但检测到 WSL2 和 Ubuntu 已安装，继续后续步骤"
@@ -724,10 +806,16 @@ function Install-Wsl2 {
                 Write-Host ""
                 return "ok"
             }
-            Write-Warn "WSL 安装返回代码 $exitCode，可能需要重启"
-            Write-Host "     ⚠️  安装并配置 — 需要重启" -ForegroundColor Yellow
+            if ($rebootPendingAfterInstall) {
+                Write-Warn "WSL 安装返回代码 $exitCode，系统检测到待重启状态"
+                Write-Host "     ⚠️  安装并配置 — 需要重启" -ForegroundColor Yellow
+                Write-Host ""
+                return "reboot"
+            }
+            Write-Warn "WSL 安装返回代码 $exitCode，但未检测到待重启状态；请稍后重新运行"
+            Write-Host "     ⏳ 安装并配置 — 后台处理中" -ForegroundColor Yellow
             Write-Host ""
-            return "reboot"
+            return "pending"
         }
     } catch {
         Write-Err "WSL 安装异常: $_"
@@ -2412,6 +2500,15 @@ function Main {
             Write-OK "WSL2 安装包已安装，需要重启以完成配置"
             Register-ResumeTask
             Show-RebootMessage
+            return
+        } elseif ($result -eq "pending") {
+            $state = Get-InstallState
+            $state.RebootPending = $false
+            Save-InstallState $state
+            Remove-ResumeTask
+            Write-Warn "WSL 仍在后台完成安装，当前无需再次重启"
+            Write-Suggestion "请等待 1-2 分钟后重新运行此脚本；如果仍失败，再手动执行 wsl --install"
+            Read-Host "按回车退出"
             return
         } elseif ($result -eq "error") {
             Show-Error `
