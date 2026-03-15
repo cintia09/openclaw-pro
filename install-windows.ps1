@@ -677,8 +677,14 @@ function Install-Wsl2 {
         # Clear spinner line
         Write-Host "`r$(' ' * 80)`r" -NoNewline
 
-        Write-Log "wsl --install output: $output $errOutput"
+        $combinedOutput = "$output $errOutput"
+        Write-Log "wsl --install output: $combinedOutput"
         Write-Log "wsl --install exit code: $exitCode"
+
+        Start-Sleep -Seconds 2
+        $wslInstalledAfterInstall = Test-Wsl2Installed
+        $ubuntuPresentAfterInstall = Test-UbuntuInstalled
+        Write-Log "Post-install state: wslInstalled=$wslInstalledAfterInstall, ubuntuPresent=$ubuntuPresentAfterInstall"
 
         # Show completed steps
         Write-Host "     ✅ 启用 WSL 功能" -ForegroundColor Green
@@ -697,16 +703,28 @@ function Install-Wsl2 {
             Write-Host ""
             return "ok"
         } elseif ($exitCode -eq 1) {
-            if ("$output $errOutput" -match "restart|reboot|重启|重新启动") {
+            if ($wslInstalledAfterInstall -and $ubuntuPresentAfterInstall) {
+                Write-Warn "wsl --install 返回代码 1，但检测到 WSL2 和 Ubuntu 已安装，继续后续步骤"
+                Write-Host "     ✅ 安装并配置 ($elapsed)" -ForegroundColor Green
+                Write-Host ""
+                return "ok"
+            }
+            if ($combinedOutput -match "restart|reboot|重启|重新启动") {
                 Write-Host "     ⚠️  安装并配置 — 需要重启" -ForegroundColor Yellow
                 Write-Host ""
                 Write-Info "安装耗时: $elapsed"
                 return "reboot"
             }
             Write-Err "WSL 安装失败 (exit code: $exitCode)"
-            Write-Info "输出: $output $errOutput"
+            Write-Info "输出: $combinedOutput"
             return "error"
         } else {
+            if ($wslInstalledAfterInstall -and $ubuntuPresentAfterInstall) {
+                Write-Warn "wsl --install 返回代码 $exitCode，但检测到 WSL2 和 Ubuntu 已安装，继续后续步骤"
+                Write-Host "     ✅ 安装并配置 ($elapsed)" -ForegroundColor Green
+                Write-Host ""
+                return "ok"
+            }
             Write-Warn "WSL 安装返回代码 $exitCode，可能需要重启"
             Write-Host "     ⚠️  安装并配置 — 需要重启" -ForegroundColor Yellow
             Write-Host ""
