@@ -4647,17 +4647,36 @@ app.post('/api/node/security', (req, res) => {
 });
 
 // POST /api/node/unpair — 取消配对
-app.post('/api/node/unpair', (req, res) => {
+app.post('/api/node/unpair', async (req, res) => {
   try {
     const { deviceId } = req.body || {};
     if (!deviceId || typeof deviceId !== 'string') return res.status(400).json({ success: false, error: '缺少 deviceId' });
     if (!/^[0-9a-fA-F-]{8,64}$/.test(deviceId)) return res.status(400).json({ success: false, error: 'deviceId 格式无效' });
+
     const paired = readJson(DEVICE_PAIRING_PAIRED_PATH, {});
     if (!paired[deviceId]) return res.status(404).json({ success: false, error: '未找到该设备' });
-    delete paired[deviceId];
-    fs.writeFileSync(DEVICE_PAIRING_PAIRED_PATH, JSON.stringify(paired, null, 2));
-    console.log(`[node][unpair] deviceId=${deviceId}`);
-    res.json({ success: true });
+
+    let removedViaGateway = false;
+    let gatewayError = null;
+    let client = null;
+    try {
+      client = await createGatewayControlUiClient(5000);
+      await client.request('device.pair.remove', { deviceId }, 5000);
+      removedViaGateway = true;
+    } catch (err) {
+      gatewayError = err;
+    } finally {
+      try { client?.close(); } catch {}
+    }
+
+    if (!removedViaGateway) {
+      delete paired[deviceId];
+      fs.writeFileSync(DEVICE_PAIRING_PAIRED_PATH, JSON.stringify(paired, null, 2));
+      console.warn(`[node][unpair] gateway remove failed, fallback to paired.json deviceId=${deviceId}: ${String(gatewayError?.message || gatewayError || 'unknown error')}`);
+    }
+
+    console.log(`[node][unpair] deviceId=${deviceId} via=${removedViaGateway ? 'gateway' : 'file'}`);
+    res.json({ success: true, disconnected: removedViaGateway || undefined });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }

@@ -3571,7 +3571,7 @@ async function loadDeviceManagement(forceConnectedRefresh = false) {
   renderPairingList(pairRes);
 
   // 已配对设备列表
-  renderPairedList(pairRes);
+  renderPairedList(pairRes, connRes);
 
   // 安全配置
   if (secRes.success) {
@@ -3597,6 +3597,16 @@ function startDeviceManagementPolling() {
 function friendlyPlatform(p) {
   const m = { darwin: 'macOS', win32: 'Windows', linux: 'Linux' };
   return m[(p || '').toLowerCase()] || p || '';
+}
+
+function buildConnectedNodeIndex(r) {
+  const index = new Map();
+  if (!r || !r.success || !Array.isArray(r.nodes)) return index;
+  r.nodes.forEach((node) => {
+    const key = String(node?.nodeId || node?.deviceId || '').trim();
+    if (key) index.set(key, node);
+  });
+  return index;
 }
 
 function setDeviceCommandTab(mode) {
@@ -3694,7 +3704,7 @@ function renderPairingList(r) {
   });
 }
 
-function renderPairedList(r) {
+function renderPairedList(r, connRes) {
   const listEl = $('device-paired-list');
   if (!listEl) return;
   if (!r || !r.success) {
@@ -3702,6 +3712,7 @@ function renderPairedList(r) {
     return;
   }
   const paired = r.paired || [];
+  const connectedIndex = buildConnectedNodeIndex(connRes);
   if (!paired.length) {
     listEl.innerHTML = '<div class="muted" style="text-align:center;padding:20px">暂无已配对设备</div>';
     return;
@@ -3713,20 +3724,30 @@ function renderPairedList(r) {
     const roles = (d.roles || [d.role || 'operator']).map(esc).join(', ');
     const time = d.approvedAtMs ? new Date(d.approvedAtMs).toLocaleString() : '—';
     const devId = esc(d.deviceId || '');
+    const liveNode = connectedIndex.get(d.deviceId || '') || null;
+    const isConnected = Boolean(liveNode?.connected);
+    const liveStatus = isConnected
+      ? '<span class="muted small" style="color:#3fb950">在线，取消配对会立即断开</span>'
+      : '<span class="muted small">离线，取消配对仅删除配对记录</span>';
     return '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);flex-wrap:wrap">'
-      + '<span style="color:#3fb950;font-size:14px">●</span>'
+      + `<span style="color:${isConnected ? '#3fb950' : '#8b949e'};font-size:14px">●</span>`
       + '<b style="min-width:80px">' + name + '</b>'
       + (plat ? '<span class="muted small">(' + plat + ')</span>' : '')
       + '<span class="muted small">' + mode + '</span>'
       + '<span class="muted small">角色: ' + roles + '</span>'
       + '<span class="muted small">审批于: ' + time + '</span>'
+      + liveStatus
       + '<span style="flex:1"></span>'
       + '<code class="muted small" title="Device ID">' + devId.slice(0, 8) + '…</code>'
       + '<button class="btn btn-sm btn-danger" data-unpair-id="' + devId + '" style="font-size:11px;padding:2px 8px">取消配对</button>'
       + '</div>';
   }).join('');
   listEl.querySelectorAll('[data-unpair-id]').forEach((btn) => {
-    btn.addEventListener('click', () => unpairDevice(btn.dataset.unpairId));
+    const liveNode = connectedIndex.get(btn.dataset.unpairId || '') || null;
+    btn.addEventListener('click', () => unpairDevice(btn.dataset.unpairId, {
+      connected: Boolean(liveNode?.connected),
+      displayName: liveNode?.displayName || null
+    }));
   });
 }
 
@@ -3749,11 +3770,17 @@ async function approvePairing(requestId, btn) {
   }
 }
 
-async function unpairDevice(deviceId) {
-  if (!confirm('确定取消该设备的配对？设备将无法继续接入 Gateway。')) return;
+async function unpairDevice(deviceId, opts = {}) {
+  const connected = opts.connected === true;
+  const targetName = String(opts.displayName || '').trim();
+  const label = targetName ? `“${targetName}”` : '该设备';
+  const message = connected
+    ? `确定取消${label}的配对吗？\n\n该节点当前在线，确认后会立即断开连接，并删除配对关系。`
+    : `确定取消${label}的配对吗？\n\n该设备当前离线，确认后只会删除配对关系。`;
+  if (!confirm(message)) return;
   const r = await api('/api/node/unpair', { method: 'POST', body: { deviceId } });
   if (r.success) {
-    toast('已取消配对');
+    toast(r.disconnected ? '已取消配对并断开在线节点' : '已取消配对');
     loadDeviceManagement();
   } else {
     toast('操作失败', r.error || '');
