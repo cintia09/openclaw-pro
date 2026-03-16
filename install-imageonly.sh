@@ -478,24 +478,26 @@ curl_supports_retry_all_errors(){
 }
 
 probe_range_capable_source(){
-  local url header_file status_line
+  local url header_file probe_file status_line probe_hex
   header_file="${TMP_DIR}/.download-probe.$$"
+  probe_file="${TMP_DIR}/.download-probe-body.$$"
 
   for url in "$@"; do
     rm -f "$header_file" 2>/dev/null || true
-    if curl -r 0-0 -fsSL --connect-timeout 8 --max-time 20 -D "$header_file" -o /dev/null "$url" 2>/dev/null; then
+    rm -f "$probe_file" 2>/dev/null || true
+    if curl -r 0-2 -fsSL --connect-timeout 8 --max-time 20 -D "$header_file" -o "$probe_file" "$url" 2>/dev/null; then
       status_line="$(awk 'toupper($0) ~ /^HTTP\// { line=$0 } END { print line }' "$header_file" 2>/dev/null || true)"
-      if printf '%s\n' "$status_line" | grep -Eq ' 206 '; then
-        printf '%s\n' "$url"
-        continue
-      fi
-      if grep -Eiq '^content-range:[[:space:]]*bytes[[:space:]]+0-0/[0-9]+' "$header_file"; then
-        printf '%s\n' "$url"
+      probe_hex="$(od -An -tx1 -N 3 "$probe_file" 2>/dev/null | tr -d '[:space:]' || true)"
+      if { printf '%s\n' "$status_line" | grep -Eq ' 206 '; } || grep -Eiq '^content-range:[[:space:]]*bytes[[:space:]]+0-2/[0-9]+' "$header_file"; then
+        if [ "$probe_hex" = "1f8b08" ]; then
+          printf '%s\n' "$url"
+        fi
       fi
     fi
   done
 
   rm -f "$header_file" 2>/dev/null || true
+  rm -f "$probe_file" 2>/dev/null || true
 }
 
 clear_chunk_cache(){
@@ -810,6 +812,7 @@ EOF
 log_resume_state(){
   local output="$1"
   local total_bytes="${2:-}"
+  local show_hint="${3:-true}"
   local cached_bytes="0"
   local cached_mib="0"
   local total_mib="0"
@@ -826,7 +829,9 @@ log_resume_state(){
   else
     info "检测到断点缓存：已缓存 ${cached_mib} MiB（总大小暂不可得）"
   fi
-  info "说明：下面 curl 百分比显示的是本次新增下载进度，不是总体百分比。"
+  if [ "$show_hint" = "true" ]; then
+    info "说明：下面 curl 百分比显示的是本次新增下载进度，不是总体百分比。"
+  fi
 }
 
 download_with_resume(){
@@ -834,6 +839,7 @@ download_with_resume(){
   local output="$2"
   local total_bytes="${3:-}"
   local attempt rc=0 before_bytes after_bytes grown_bytes grown_mib
+  local resume_hint_shown="false"
   local -a curl_args
 
   mkdir -p "$(dirname "$output")" 2>/dev/null || true
@@ -850,7 +856,12 @@ download_with_resume(){
     before_bytes="$( [ -f "$output" ] && wc -c < "$output" 2>/dev/null | tr -d '[:space:]' || echo 0)"
     if [ "$before_bytes" -gt 0 ] 2>/dev/null; then
       info "继续断点续传：第 ${attempt}/3 次尝试"
-      log_resume_state "$output" "$total_bytes"
+      if [ "$resume_hint_shown" = "true" ]; then
+        log_resume_state "$output" "$total_bytes" "false"
+      else
+        log_resume_state "$output" "$total_bytes" "true"
+        resume_hint_shown="true"
+      fi
     elif [ "$attempt" -gt 1 ]; then
       info "重新发起下载：第 ${attempt}/3 次尝试"
     fi
@@ -1005,7 +1016,7 @@ download_tarball(){
         success "镜像下载并校验成功"
         return 0
       fi
-      warn "分块下载完成但 gzip 校验失败，清理当前分块缓存并回退其他下载方式"
+      warn "分块下载完成但 gzip 校验失败，说明该下载源虽然支持 Range，但返回内容不稳定；已清理分块缓存并回退线性续传"
       rm -f "$part" "$part_meta" || true
       clear_chunk_cache "$part"
     else
@@ -1018,9 +1029,6 @@ download_tarball(){
   for u in "${download_urls[@]}"; do
     [ -z "$u" ] && continue
     info "尝试下载：$u"
-    if [ -f "$part" ]; then
-      log_resume_state "$part" "$total_bytes"
-    fi
     printf 'sig=%s\nsize=%s\n' "$expected_sig" "${total_bytes:-0}" > "$part_meta" 2>/dev/null || true
     if download_with_resume "$u" "$part" "$total_bytes"; then
       echo ""
