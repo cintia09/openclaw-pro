@@ -817,7 +817,7 @@ async function testModelAvailability(provider, modelId, apiKey, baseUrl) {
       return { available: false, error: '未找到 API 端点' };
     }
 
-    const { execFileSync } = require('child_process');
+    const { execFile } = require('child_process');
 
     const url = `${endpoint}/chat/completions`;
     const authHeader = provider === 'anthropic' ? 'x-api-key' : 'Authorization';
@@ -829,7 +829,7 @@ async function testModelAvailability(provider, modelId, apiKey, baseUrl) {
       max_tokens: 5
     });
 
-    // execFileSync 以数组传参，不经过 shell，杜绝命令注入
+    // execFile 以数组传参，不经过 shell，杜绝命令注入
     const args = [
       '-sS', '--connect-timeout', '10', '--max-time', '20',
       '-X', 'POST',
@@ -840,10 +840,19 @@ async function testModelAvailability(provider, modelId, apiKey, baseUrl) {
       url
     ];
 
-    const result = execFileSync('curl', args, {
-      encoding: 'utf8',
-      timeout: 30000,
-      env: process.env
+    const result = await new Promise((resolve, reject) => {
+      execFile('curl', args, {
+        encoding: 'utf8',
+        timeout: 30000,
+        env: process.env,
+        maxBuffer: 1024 * 1024
+      }, (err, stdout, stderr) => {
+        if (err) {
+          reject(new Error(String(stderr || err.message || 'curl failed').trim()));
+          return;
+        }
+        resolve(String(stdout || ''));
+      });
     });
 
     const lines = result.trim().split('\n');
@@ -864,6 +873,165 @@ async function testModelAvailability(provider, modelId, apiKey, baseUrl) {
     console.log(`[model-test] ${provider}/${modelId} 测试异常: ${e.message} (${elapsed}ms)`);
     return { available: false, error: e.message };
   }
+}
+
+const pendingInferredModelValidationJobs = new Map();
+
+function buildSafePendingModelEntry(modelId) {
+  return {
+    id: modelId,
+    name: modelId,
+    api: 'openai-completions',
+    reasoning: false,
+    input: ['text'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+    maxTokens: 4096
+  };
+}
+
+function collectConfiguredModelStrings(config) {
+  const configuredModels = new Set();
+  const defaults = config?.agents?.defaults || {};
+  const primary = defaults.model?.primary;
+  if (primary && primary.includes('/')) configuredModels.add(primary);
+  if (Array.isArray(defaults.model?.fallbacks)) defaults.model.fallbacks.forEach(m => m && configuredModels.add(m));
+  const curSub = defaults.subagents?.model;
+  if (typeof curSub === 'string' && curSub) configuredModels.add(curSub);
+  if (curSub?.primary) configuredModels.add(curSub.primary);
+  if (Array.isArray(curSub?.fallbacks)) curSub.fallbacks.forEach(m => m && configuredModels.add(m));
+  return configuredModels;
+}
+
+function getModelValidationCredentials(providerName, authProfiles = null) {
+  let modelApiKey = '';
+  let modelBaseUrl = '';
+  try {
+    const modelsCfg = readAiModels();
+    modelApiKey = modelsCfg.providers?.[providerName]?.apiKey || '';
+    modelBaseUrl = modelsCfg.providers?.[providerName]?.baseUrl || '';
+  } catch {}
+
+  const resolvedAuthProfiles = authProfiles || readJson('/root/.openclaw/agents/main/agent/auth-profiles.json', {});
+  if (!modelApiKey) {
+    for (const [, profile] of Object.entries(resolvedAuthProfiles?.profiles || {})) {
+      if (profile?.provider === providerName) {
+        modelApiKey = getAuthProfileSecret(profile) || '';
+        break;
+      }
+    }
+  }
+
+  return { apiKey: modelApiKey, baseUrl: modelBaseUrl };
+}
+
+function ensureProviderShell(targetProviders, sourceProviders, provName) {
+  if (targetProviders[provName]) return;
+  const src = sourceProviders?.[provName] || {};
+  targetProviders[provName] = {
+    baseUrl: src.baseUrl || getDefaultBaseUrl(provName),
+    api: src.api || 'openai-completions',
+    models: []
+  };
+  if (src.apiKey && src.apiKey !== 'YOUR_API_KEY') {
+    targetProviders[provName].apiKey = src.apiKey;
+  }
+}
+
+function upsertProviderModelEntry(targetProviders, provName, modId, options = {}) {
+  if (!targetProviders[provName]) return;
+  if (!targetProviders[provName].models) targetProviders[provName].models = [];
+  const existingIdx = targetProviders[provName].models.findIndex(m => m.id === modId);
+  const catalogHit = lookupModelCapabilities(provName, modId);
+  const usePendingEntry = !!options.deferInferredValidation && catalogHit && !catalogHit._catalogUnavailable && catalogHit._inferred;
+  const entry = usePendingEntry ? buildSafePendingModelEntry(modId) : buildModelEntry(provName, modId);
+  if (existingIdx === -1) {
+    targetProviders[provName].models.push(entry);
+  } else {
+    const existing = targetProviders[provName].models[existingIdx];
+    for (const field of ['name', 'api', 'headers', 'reasoning', 'contextWindow', 'maxTokens', 'input', 'compat', 'cost']) {
+      if (entry[field] !== undefined) existing[field] = entry[field];
+    }
+  }
+  if (entry.api) {
+    const desiredProvApi = normalizeProviderApiForSync(targetProviders[provName].api, provName, entry.api);
+    if (desiredProvApi && desiredProvApi !== targetProviders[provName].api) {
+      console.log(`[ensureModelEntry] 修正 provider ${provName}.api: ${targetProviders[provName].api} → ${desiredProvApi}`);
+      targetProviders[provName].api = desiredProvApi;
+    }
+  }
+}
+
+async function finalizeInferredModelValidation(job) {
+  const configPath = '/root/.openclaw/openclaw.json';
+  const modelsPath = '/root/.openclaw/agents/main/agent/models.json';
+  let config = readJson(configPath, {});
+  if (!collectConfiguredModelStrings(config).has(job.model)) {
+    console.log(`[ai/config] ${job.model} 已不在当前配置中，跳过后台验证结果回写`);
+    return;
+  }
+
+  const creds = getModelValidationCredentials(job.providerName);
+  if (!creds.apiKey || creds.apiKey === 'YOUR_API_KEY') {
+    console.log(`[ai/config] ${job.model} 后台验证跳过：${job.providerName} 没有配置有效的 API Key`);
+    return;
+  }
+
+  console.log(`[ai/config] ${job.model} 家族匹配成功 (${job.matchedFamily})，已先保存配置，开始后台运行时验证...`);
+  const testResult = await testModelAvailability(job.providerName, job.modelId, creds.apiKey, creds.baseUrl);
+  if (!testResult.available) {
+    console.log(`[ai/config] ${job.model} 后台运行时验证失败，保留当前配置: ${testResult.error || '模型不可用'}`);
+    return;
+  }
+
+  config = readJson(configPath, {});
+  if (!collectConfiguredModelStrings(config).has(job.model)) {
+    console.log(`[ai/config] ${job.model} 在后台验证完成前已被移除，跳过结果回写`);
+    return;
+  }
+
+  const models = readAiModels();
+  if (!models.providers) models.providers = {};
+  if (!models.providers[job.providerName]) {
+    models.providers[job.providerName] = {
+      baseUrl: getDefaultBaseUrl(job.providerName),
+      apiKey: 'YOUR_API_KEY',
+      api: 'openai-completions',
+      models: []
+    };
+  }
+  if (!config.models) config.models = {};
+  if (!config.models.providers) config.models.providers = {};
+  ensureProviderShell(config.models.providers, models.providers, job.providerName);
+  upsertProviderModelEntry(models.providers, job.providerName, job.modelId);
+  upsertProviderModelEntry(config.models.providers, job.providerName, job.modelId);
+  writeOpenClawConfig(config);
+  fs.writeFileSync(modelsPath, JSON.stringify(models, null, 2), { encoding: 'utf8', mode: 0o600 });
+
+  const opState = getOpenClawOperationState();
+  if (opState.type === 'idle') {
+    queueGatewayRestart('ai-config-async-model-validation');
+    console.log(`[ai/config] ${job.model} 后台运行时验证成功，已更新配置并提交 Gateway 重载请求`);
+  } else if (opState.type === 'restarting_gateway') {
+    console.log(`[ai/config] ${job.model} 后台运行时验证成功，配置已更新，Gateway 重载已在进行中`);
+  } else {
+    console.log(`[ai/config] ${job.model} 后台运行时验证成功，配置已更新；当前操作 ${opState.type} 进行中，暂不额外触发 Gateway 重载`);
+  }
+}
+
+function queueInferredModelValidation(job) {
+  const key = `${job.providerName}/${job.modelId}`;
+  if (pendingInferredModelValidationJobs.has(key)) return;
+  pendingInferredModelValidationJobs.set(key, Date.now());
+  setTimeout(async () => {
+    try {
+      await finalizeInferredModelValidation(job);
+    } catch (err) {
+      console.error(`[ai/config] ${job.model} 后台运行时验证异常:`, err?.message || err);
+    } finally {
+      pendingInferredModelValidationJobs.delete(key);
+    }
+  }, 0);
 }
 
 /**
@@ -5578,13 +5746,20 @@ app.post('/api/ai/config', async (req, res) => {
     if (Array.isArray(curSub?.fallbacks)) curSub.fallbacks.forEach(m => m && existingModels.add(m));
 
     // 收集本次要保存的所有模型
-    const allModelsToSave = [];
-    if (primaryModel) allModelsToSave.push({ model: primaryModel, role: '主模型' });
-    if (subModel) allModelsToSave.push({ model: subModel, role: '子代理模型' });
+    const allModelsToSave = new Map();
+    const addModelToSave = (model, role) => {
+      if (!model) return;
+      if (!allModelsToSave.has(model)) {
+        allModelsToSave.set(model, { model, roles: new Set() });
+      }
+      allModelsToSave.get(model).roles.add(role);
+    };
+    if (primaryModel) addModelToSave(primaryModel, '主模型');
+    if (subModel) addModelToSave(subModel, '子代理模型');
     if (fallbacks) {
       const addFb = (arr, label) => {
         if (!Array.isArray(arr)) return;
-        arr.filter(Boolean).forEach(m => allModelsToSave.push({ model: m, role: label }));
+        arr.filter(Boolean).forEach(m => addModelToSave(m, label));
       };
       if (Array.isArray(fallbacks)) {
         addFb(fallbacks, '主代理 Fallback');
@@ -5596,8 +5771,11 @@ app.post('/api/ai/config', async (req, res) => {
 
     // 验证每个模型
     const errors = [];
-    for (const { model, role } of allModelsToSave) {
+    const deferredValidationJobs = [];
+    const deferredValidationModels = new Set();
+    for (const { model, roles } of allModelsToSave.values()) {
       if (!model || !model.includes('/')) continue;
+      const role = Array.from(roles).join(' / ');
       // 已存在于当前配置中的模型跳过验证
       if (existingModels.has(model)) continue;
       const [prov] = model.split('/');
@@ -5616,38 +5794,18 @@ app.post('/api/ai/config', async (req, res) => {
         // 模型目录未加载（外部 catalog 不可用）- 跳过严格验证，允许保存
         console.log(`[ai/config] ${model} 模型目录未加载，跳过目录验证`);
       } else if (catalogHit._inferred) {
-        // 家族前缀匹配成功（推测匹配）- 需要进行运行时验证
-        console.log(`[ai/config] ${model} 家族匹配成功 (${catalogHit._matchedFamily})，将进行运行时验证...`);
-
-        // 获取该 provider 的 API Key 和 baseUrl
-        let modelApiKey = '';
-        let modelBaseUrl = '';
-        try {
-          const modelsCfg = readAiModels();
-          modelApiKey = modelsCfg.providers?.[provName]?.apiKey || '';
-          modelBaseUrl = modelsCfg.providers?.[provName]?.baseUrl || '';
-        } catch {}
-
-        // 如果没有找到 key，尝试从 auth-profiles 获取
-        if (!modelApiKey) {
-          for (const [, profile] of Object.entries(authProfiles.profiles || {})) {
-            if (profile.provider === provName) {
-              modelApiKey = getAuthProfileSecret(profile) || '';
-              break;
-            }
-          }
-        }
-
+        console.log(`[ai/config] ${model} 家族匹配成功 (${catalogHit._matchedFamily})，先保存配置，稍后进行后台运行时验证...`);
+        const { apiKey: modelApiKey } = getModelValidationCredentials(provName, authProfiles);
         if (!modelApiKey || modelApiKey === 'YOUR_API_KEY') {
           errors.push(`${role} "${model}" 需要进行运行时验证，但 ${provName} 没有配置有效的 API Key`);
         } else {
-          // 异步测试模型可用性
-          const testResult = await testModelAvailability(provName, modId, modelApiKey, modelBaseUrl);
-          if (!testResult.available) {
-            errors.push(`${role} "${model}" 运行时验证失败: ${testResult.error || '模型不可用'}`);
-          } else {
-            console.log(`[ai/config] ${model} 运行时验证成功，允许配置`);
-          }
+          deferredValidationJobs.push({
+            model,
+            providerName: provName,
+            modelId: modId,
+            matchedFamily: catalogHit._matchedFamily
+          });
+          deferredValidationModels.add(model);
         }
       }
       // 精确匹配成功 (catalogHit && !catalogHit._inferred) - 无需额外验证
@@ -5693,27 +5851,9 @@ app.post('/api/ai/config', async (req, res) => {
     // 辅助：确保 provider 的 models 数组中包含指定 model 条目
     // 使用 OpenClaw 内置模型目录自动探测能力
     const ensureModelEntry = (target, provName, modId) => {
-      if (!target[provName]) return; // provider 不存在则跳过
-      if (!target[provName].models) target[provName].models = [];
-      const existingIdx = target[provName].models.findIndex(m => m.id === modId);
-      const entry = buildModelEntry(provName, modId);
-      if (existingIdx === -1) {
-        target[provName].models.push(entry);
-      } else {
-        // 已存在时更新关键字段
-        const existing = target[provName].models[existingIdx];
-        for (const field of ['name', 'api', 'headers', 'reasoning', 'contextWindow', 'maxTokens', 'input', 'compat', 'cost']) {
-          if (entry[field] !== undefined) existing[field] = entry[field];
-        }
-      }
-      // provider 级 api 仅在当前值缺失或非法时修正，避免不同模型来回改写。
-      if (entry.api) {
-        const desiredProvApi = normalizeProviderApiForSync(target[provName].api, provName, entry.api);
-        if (desiredProvApi && desiredProvApi !== target[provName].api) {
-          console.log(`[ensureModelEntry] 修正 provider ${provName}.api: ${target[provName].api} → ${desiredProvApi}`);
-          target[provName].api = desiredProvApi;
-        }
-      }
+      upsertProviderModelEntry(target, provName, modId, {
+        deferInferredValidation: deferredValidationModels.has(`${provName}/${modId}`)
+      });
     };
 
     // 确保主模型的 provider 在 models.json 中存在
@@ -5751,16 +5891,7 @@ app.post('/api/ai/config', async (req, res) => {
     // 从 models.json 复制 provider 基本信息（不含 apiKey）
     const ensureConfigProvider = (provName) => {
       if (!config.models.providers[provName]) {
-        const src = models.providers[provName] || {};
-        config.models.providers[provName] = {
-          baseUrl: src.baseUrl || getDefaultBaseUrl(provName),
-          api: src.api || 'openai-completions',
-          models: []
-        };
-        // 复制 apiKey（如果 models.json 中有有效的）
-        if (src.apiKey && src.apiKey !== 'YOUR_API_KEY') {
-          config.models.providers[provName].apiKey = src.apiKey;
-        }
+        ensureProviderShell(config.models.providers, models.providers, provName);
         console.log(`[ai/config] 在 openclaw.json 中创建 provider: ${provName}`);
       }
     };
@@ -5808,6 +5939,13 @@ app.post('/api/ai/config', async (req, res) => {
     } else {
       message = `模型配置已保存，当前存在进行中的操作（${opState.type}），请在操作完成后重载 Gateway 以应用配置`;
       console.log(`[ai/config] 模型配置已保存，但当前操作 ${opState.type} 正在进行，暂不额外触发 Gateway 重载`);
+    }
+
+    if (deferredValidationJobs.length > 0) {
+      message += `；${deferredValidationJobs.length} 个家族匹配模型正在后台验证`;
+      for (const job of deferredValidationJobs) {
+        queueInferredModelValidation(job);
+      }
     }
 
     res.json({ success: true, message, operationState: nextOperationState });
