@@ -1829,7 +1829,7 @@ create_and_start(){
   fi
   echo ""
   printf '  %b升级命令%b\n' "$WHITE" "$NC"
-  printf '     %b%s%b\n' "$CYAN" "curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPO}/main/install-imageonly.sh | sudo bash" "$NC"
+  printf '     %b%s%b\n' "$CYAN" "curl -fsSL \"https://raw.githubusercontent.com/${GITHUB_REPO}/main/install-imageonly.sh?ts=$(date +%s)\" | sudo bash" "$NC"
   echo ""
   printf '  %b完整日志: %s%b\n' "$DIM" "$LOG_FILE" "$NC"
 

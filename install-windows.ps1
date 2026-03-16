@@ -710,7 +710,7 @@ function Assert-Administrator {
     Write-Host "     1. 右键点击 '开始' 菜单 → 'Windows PowerShell (管理员)'" -ForegroundColor White
     Write-Host "        或搜索 PowerShell → 右键 → 以管理员身份运行" -ForegroundColor Gray
     Write-Host "     2. 运行以下命令:" -ForegroundColor White
-    Write-Host "        irm $SCRIPT_URL | iex" -ForegroundColor Cyan
+    Write-Host '        irm "https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1?ts=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())" | iex' -ForegroundColor Cyan
     Write-Host ""
     Write-Host "     如果已下载 install-windows.bat，可右键 → 以管理员身份运行" -ForegroundColor Gray
     Write-Host ""
@@ -3018,7 +3018,7 @@ function Show-Completion {
         Write-Warn "远程 SSH 登录需手动注入公钥（宿主机可通过 docker exec 进入容器）"
         Write-Host "" 
         Write-Host "  升级命令" -ForegroundColor White
-        Write-Host "     irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1 | iex" -ForegroundColor Cyan
+        Write-Host '     irm "https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1?ts=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())" | iex' -ForegroundColor Cyan
     } else {
         Write-Host ""
         Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray
@@ -3222,7 +3222,7 @@ function Main {
             Write-Host "        (系统托盘出现 Docker 鲸鱼图标，状态为 Running)" -ForegroundColor Gray
             Write-Host ""
             Write-Host "     5. 安装完毕后，重新运行本安装命令:" -ForegroundColor Yellow
-            Write-Host "        irm $SCRIPT_URL | iex" -ForegroundColor Cyan
+            Write-Host '        irm "https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1?ts=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())" | iex' -ForegroundColor Cyan
             Write-Host ""
             Write-Host "  ------------------------------------------------" -ForegroundColor DarkGray
             Write-Host ""
