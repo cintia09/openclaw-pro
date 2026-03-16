@@ -2140,6 +2140,35 @@ function Normalize-ReleaseVersion {
     return $v.TrimStart('v','V')
 }
 
+function Resolve-LatestReleaseTag {
+    $resolvedTag = ""
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $releaseApi = "https://api.github.com/repos/$GITHUB_REPO/releases/latest"
+        $releaseInfo = Invoke-RestMethod -Uri $releaseApi -TimeoutSec 10 -ErrorAction Stop
+        $resolvedTag = ($releaseInfo.tag_name | ForEach-Object { "$_" }).Trim()
+        if ($resolvedTag) {
+            return $resolvedTag
+        }
+    } catch {
+        Write-Log "Resolve latest release tag via releases API failed: $_"
+    }
+
+    try {
+        $versionUrl = "https://raw.githubusercontent.com/$GITHUB_REPO/main/version.txt"
+        $versionText = (Invoke-WebRequest -Uri $versionUrl -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop).Content
+        $resolvedTag = (("$versionText") -split "`r?`n" | Select-Object -First 1).Trim()
+        if ($resolvedTag -match '^v\d+(\.\d+){1,3}([.-][A-Za-z0-9._-]+)?$') {
+            Write-Log "Resolve latest release tag via version.txt fallback: $resolvedTag"
+            return $resolvedTag
+        }
+    } catch {
+        Write-Log "Resolve latest release tag via version.txt failed: $_"
+    }
+
+    return ""
+}
+
 function Get-ContainerReleaseVersion {
     param(
         [string]$ContainerName,
@@ -3333,6 +3362,9 @@ function Main {
         } catch {
             Write-Log "Fetch latest release failed: $_"
         }
+        if (-not $latestReleaseTag) {
+            $latestReleaseTag = Resolve-LatestReleaseTag
+        }
 
         $needDeployPackageDownload = -not (Test-Path "$localDeployDir\Dockerfile.lite")
 
@@ -3774,6 +3806,7 @@ function Main {
             $preferredUpgradeContainer = ""
             $targetReleaseNorm = Normalize-ReleaseVersion $latestReleaseTag
             $allSameAsTarget = $false
+            $hasOutdatedContainers = $false
             if ($targetReleaseNorm) {
                 $outdated = @($runningContainerMeta | Where-Object {
                     $_.VersionNorm -and ($_.VersionNorm -ne $targetReleaseNorm)
@@ -3785,10 +3818,11 @@ function Main {
                 if ($runningContainerMeta.Count -gt 0 -and $unknownVersion.Count -eq 0 -and $sameVersion.Count -eq $runningContainerMeta.Count) {
                     $allSameAsTarget = $true
                     Write-Host "  ✅ 检测到运行中容器版本已与远端一致（目标版本: $latestReleaseTag）" -ForegroundColor Green
-                    Write-Host "     如无异常，通常无需重装；如需修复运行环境，可继续选择 [2]/[3]。" -ForegroundColor DarkGray
+                    Write-Host "     如无异常，通常无需重装；如需修复运行环境，可继续选择 [1]/[2]。" -ForegroundColor DarkGray
                     Write-Host ""
                 }
                 if ($outdated.Count -gt 0) {
+                    $hasOutdatedContainers = $true
                     $hotUpdateEligible = @()
                     $hotUpdateReinstallConfirmed = $false
                     foreach ($item in $outdated) {
@@ -3844,7 +3878,7 @@ function Main {
                         Write-Host ""
                         Write-Host "  推荐操作:" -ForegroundColor Cyan
                         Write-Host "     [默认 N] 先执行 Web 热更新（推荐）" -ForegroundColor White
-                        Write-Host "     [输入 y] 继续安装流程，仍可再选升级/重装/全新重装" -ForegroundColor White
+                        Write-Host "     [输入 y] 继续安装流程，仍可再选升级重建/全新升级重建" -ForegroundColor White
                         Write-Host "" 
                         Write-Host "  ⚠️  重建容器风险提示:" -ForegroundColor Yellow
                         Write-Host "     - 将删除并重建容器（容器文件系统会重置）" -ForegroundColor Yellow
@@ -3905,16 +3939,20 @@ function Main {
 
             if (-not $choice) {
                 Write-Host "  请选择操作:" -ForegroundColor White
-                Write-Host "     [1] 新建一个容器（不删除旧容器）" -ForegroundColor Gray
-                Write-Host "     [2] 重装（切换到目标版本，或在当前版本上重建容器；保留状态卷中的 openclaw 数据，重新配置端口/HTTPS）" -ForegroundColor Gray
-                Write-Host "     [3] 全新重装（切换到目标版本，或在当前版本上全量重建；删除旧容器 + 配置 + 状态卷数据，重新配置端口/HTTPS）" -ForegroundColor Gray
+                if ($hasOutdatedContainers) {
+                    Write-Host "     [1] 升级重建（切换到目标版本；保留状态卷中的 openclaw 数据，重新配置端口/HTTPS）" -ForegroundColor Gray
+                    Write-Host "     [2] 全新升级重建（切换到目标版本；删除旧容器 + 配置 + 状态卷数据，重新配置端口/HTTPS）" -ForegroundColor Gray
+                } else {
+                    Write-Host "     [1] 重装（切换到目标版本，或在当前版本上重建容器；保留状态卷中的 openclaw 数据，重新配置端口/HTTPS）" -ForegroundColor Gray
+                    Write-Host "     [2] 全新重装（切换到目标版本，或在当前版本上全量重建；删除旧容器 + 配置 + 状态卷数据，重新配置端口/HTTPS）" -ForegroundColor Gray
+                }
                 Write-Host ""
-                Write-Host "  输入选择 [2]: " -NoNewline -ForegroundColor White
+                Write-Host "  输入选择 [1]: " -NoNewline -ForegroundColor White
                 $choice = (Read-Host).Trim()
-                if (-not $choice) { $choice = '2' }
+                if (-not $choice) { $choice = '1' }
             }
 
-            if ($choice -eq '2' -or $choice -eq '3') {
+            if ($choice -eq '1' -or $choice -eq '2') {
                 Write-Host ""
                 if ($allSameAsTarget) {
                     Write-Host "  ⚠️  当前容器版本已与目标版本一致（$latestReleaseTag）" -ForegroundColor Yellow
@@ -3928,7 +3966,7 @@ function Main {
                     }
                     Write-Host ""
                 }
-                if ($choice -eq '3') {
+                if ($choice -eq '2') {
                     Write-Host "  ⚠️  高风险操作：将删除旧容器、配置和状态卷数据（不可恢复）" -ForegroundColor Yellow
                 } else {
                     Write-Host "  ⚠️  将删除并重建旧容器；状态卷中的 openclaw 数据保留，但端口/HTTPS 会重新配置" -ForegroundColor Yellow
@@ -3943,26 +3981,6 @@ function Main {
             }
 
             if ($choice -eq '1') {
-                # 保留旧容器，生成新容器名和独立数据目录
-                $idx = 2
-                while ($true) {
-                    $candidate = "openclaw-pro-$idx"
-                    $existing = & docker ps -a --filter "name=$candidate" --format "{{.Names}}" 2>&1
-                    if (-not ($existing -match $candidate)) {
-                        $containerName = $candidate
-                        break
-                    }
-                    $idx++
-                    if ($idx -gt 20) {
-                        $randId = Get-Random -Maximum 999
-                        $containerName = "openclaw-pro-$randId"
-                        $idx = $randId
-                        break
-                    }
-                }
-                $newStateVolume = Get-StateVolumeName -ContainerName $containerName
-                Write-Info "将创建新容器: $containerName（状态卷: $newStateVolume）"
-            } elseif ($choice -eq '2') {
                 # -- 升级模式：读取旧容器对应的配置，删除旧容器后复用相同配置 --
                 $upgradeContainerName = ""
                 if ($preferredUpgradeContainer) {
@@ -4103,7 +4121,7 @@ function Main {
                 Write-Info "💡 状态卷 ($upgradeStateVolume) 不会被删除，原有配置和数据均保留"
                 Write-Info "   如需彻底删除数据，可手动执行: docker volume rm $upgradeStateVolume"
             } else {
-                # [3] 全量重装：删除旧容器，并删除对应配置与数据目录
+                # [2] 全量重装：删除旧容器，并删除对应配置与数据目录
                 if ($runningContainers.Count -eq 1) {
                     # 只有一个，直接删除
                     $rcName = ($runningContainers[0] -split '\|')[0]
