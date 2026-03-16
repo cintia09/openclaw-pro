@@ -137,9 +137,9 @@ function Get-WslDeployConfig {
 
     try {
         if ($WslUser) {
-            $configText = (& wsl -d $DistroName -u $WslUser --exec bash -lc "sudo service docker start >/dev/null 2>&1 || true; docker exec openclaw-pro sh -lc 'cat /root/.openclaw/docker-config.json 2>/dev/null' 2>/dev/null || true" 2>$null | Out-String).Trim()
+            $configText = (& wsl -d $DistroName -u $WslUser -- bash -c "sudo service docker start >/dev/null 2>&1 || true; docker exec openclaw-pro sh -c 'cat /root/.openclaw/docker-config.json 2>/dev/null' 2>/dev/null || true" 2>$null | Out-String).Trim()
         } else {
-            $configText = (& wsl -d $DistroName --exec bash -lc "service docker start >/dev/null 2>&1 || true; docker exec openclaw-pro sh -lc 'cat /root/.openclaw/docker-config.json 2>/dev/null' 2>/dev/null || true" 2>$null | Out-String).Trim()
+            $configText = (& wsl -d $DistroName -- bash -c "service docker start >/dev/null 2>&1 || true; docker exec openclaw-pro sh -c 'cat /root/.openclaw/docker-config.json 2>/dev/null' 2>/dev/null || true" 2>$null | Out-String).Trim()
         }
 
         if (-not $configText) { return $null }
@@ -1867,21 +1867,21 @@ exec bash "`$TMP_SCRIPT"
     # cold start, so pre-warm the distro and show explicit progress before the
     # bootstrap script takes over.
     try {
-        $warmupStart = Get-Date
-        Write-Info "正在进入 WSL 用户会话（首次或冷启动通常需要几秒到几十秒）..."
-        if ($WslUser) {
-            & wsl -d $DistroName -u $WslUser --exec sh -lc "printf '[INFO] WSL 用户会话已就绪\\n'" 2>$null
-        } else {
-            & wsl -d $DistroName --exec sh -lc "printf '[INFO] WSL 用户会话已就绪\\n'" 2>$null
-        }
-        $warmupSeconds = [Math]::Round(((Get-Date) - $warmupStart).TotalSeconds, 1)
-        Write-Info "WSL 已就绪，准备启动安装脚本（耗时 ${warmupSeconds}s）..."
-
         $originalInputEncoding = [Console]::InputEncoding
         $originalOutputEncoding = [Console]::OutputEncoding
         $utf8Encoding = New-Object System.Text.UTF8Encoding($false)
         [Console]::InputEncoding = $utf8Encoding
         [Console]::OutputEncoding = $utf8Encoding
+
+        $warmupStart = Get-Date
+        Write-Info "正在进入 WSL 用户会话（首次或冷启动通常需要几秒到几十秒）..."
+        if ($WslUser) {
+            & wsl -d $DistroName -u $WslUser -- sh -c "printf '[INFO] WSL 用户会话已就绪\\n'" 2>$null
+        } else {
+            & wsl -d $DistroName -- sh -c "printf '[INFO] WSL 用户会话已就绪\\n'" 2>$null
+        }
+        $warmupSeconds = [Math]::Round(((Get-Date) - $warmupStart).TotalSeconds, 1)
+        Write-Info "WSL 已就绪，准备启动安装脚本（耗时 ${warmupSeconds}s）..."
 
         if ($WslUser) {
             & wsl -d $DistroName -u $WslUser -- bash $wslTmpDeploy
@@ -3367,7 +3367,7 @@ function Main {
 
         try {
             if ($script:wslDefaultUser) {
-                $dockerCheck = & wsl -d $distroName -u $script:wslDefaultUser --exec bash -lc "command -v docker >/dev/null 2>&1 && docker --version" 2>$null
+                $dockerCheck = & wsl -d $distroName -u $script:wslDefaultUser -- bash -c "command -v docker >/dev/null 2>&1 && docker --version" 2>$null
             } else {
                 $dockerCheck = & wsl -d $distroName --exec bash -c "command -v docker && docker --version" 2>$null
             }
@@ -6008,7 +6008,7 @@ function Main {
         $containerExists = $false
         try {
             if ($script:wslDefaultUser) {
-                $containerCheck = & wsl -d $distroName -u $script:wslDefaultUser --exec bash -lc "sudo service docker start >/dev/null 2>&1 || true; docker ps -a --filter 'name=^/openclaw-pro$' --format '{{.Names}}' 2>/dev/null" 2>$null
+                $containerCheck = & wsl -d $distroName -u $script:wslDefaultUser -- bash -c "sudo service docker start >/dev/null 2>&1 || true; docker ps -a --filter 'name=^/openclaw-pro$' --format '{{.Names}}' 2>/dev/null" 2>$null
             } else {
                 $containerCheck = & wsl -d $distroName --exec bash -c "docker ps -a --filter 'name=^/openclaw-pro$' --format '{{.Names}}' 2>/dev/null" 2>$null
             }
