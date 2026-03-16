@@ -11,7 +11,7 @@
 ## 2) 安装链路
 
 - [ ] Linux/macOS 一键安装可执行：`install.sh`。
-- [ ] Windows 一键安装可执行：`install-windows.bat` / `install-windows.ps1`。
+- [ ] Windows 一键安装可执行：`install-windows.bat` / `install-windows.ps1`（Docker Desktop 路径）。
 - [ ] 升级链路可执行（重复安装脚本能够走升级流程）。
 
 ## 3) Web 面板与终端

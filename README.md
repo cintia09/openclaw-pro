@@ -13,6 +13,9 @@ curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.
 
 ### Windows（管理员 PowerShell）
 
+Windows 安装当前仅保留 Docker Desktop 方案。
+请先安装并启动 Docker Desktop，再执行下面的安装命令。
+
 ```powershell
 irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1 | iex
 ```

@@ -2,17 +2,18 @@
 <#
 .SYNOPSIS
     OpenClaw Pro - Windows Installer
-    Installs WSL2 + Ubuntu + Docker Engine + OpenClaw Pro
+    Deploys OpenClaw Pro with Docker Desktop on Windows
 
 .DESCRIPTION
-    This script automates the complete installation of OpenClaw Pro on Windows
-    by setting up WSL2, installing Docker Engine inside Ubuntu, and deploying
-    the OpenClaw Pro container.
+    This script automates the Windows installation path for OpenClaw Pro by
+    checking Docker Desktop and then deploying the OpenClaw Pro container.
+    The legacy WSL-based installer implementation is intentionally kept in this
+    file for later use, but the current main flow no longer enters that path.
 
     Phases:
-    1. Environment detection (admin check, Windows version, WSL2, Ubuntu)
-    2. Install WSL2 if needed (may require reboot)
-    3. Configure Ubuntu + install Docker Engine
+    1. Environment detection (admin check, Windows version, Docker Desktop)
+    2. Validate Docker Desktop path
+    3. Prepare local deployment assets
     4. Deploy OpenClaw Pro
     5. Cleanup + show completion info
 #>
@@ -1126,6 +1127,31 @@ function Test-DockerDesktopRunning {
     return $false
 }
 
+function Show-DockerDesktopRequiredMessage {
+    Write-Host ""
+    Write-Host "  ==================================================" -ForegroundColor Yellow
+    Write-Host "         未检测到 Docker Desktop" -ForegroundColor Yellow
+    Write-Host "  ==================================================" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  Windows 安装当前仅保留 Docker Desktop 方案。" -ForegroundColor White
+    Write-Host "  请先安装并启动 Docker Desktop，再重新运行安装脚本。" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  下载地址:" -ForegroundColor Yellow
+    Write-Host "    https://www.docker.com/products/docker-desktop/" -ForegroundColor Cyan
+    Write-Host ""
+
+    try {
+        Start-Process "https://www.docker.com/products/docker-desktop/"
+        Write-OK "已自动打开 Docker Desktop 下载页面"
+    } catch {
+        Write-Info "请手动打开上述链接下载安装 Docker Desktop"
+    }
+
+    Write-Host ""
+    Read-Host "安装完成后按回车退出，然后重新运行此脚本"
+}
+
+# 保留旧的 WSL 安装/恢复逻辑，当前 Windows 主流程不再进入这些函数。
 # --- Scheduled task for post-reboot resume ------------------------------------
 function Register-ResumeTask {
     $psExe    = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -3142,263 +3168,51 @@ function Main {
     Write-InstallProgress -Activity $phase1Activity -Status "检查 Windows 版本" -Percent 15
     $buildNumber = Test-WindowsVersion
 
-    Write-Info "正在检测 Docker Desktop 和 WSL2，首次检测可能需要几十秒..."
+    Write-Info "正在检测 Docker Desktop..."
 
-    # Detect Docker Desktop and WSL
+    # Detect Docker Desktop only. The legacy WSL path remains in this file but
+    # is intentionally hidden from the active Windows installer flow.
     Write-InstallProgress -Activity $phase1Activity -Status "检测 Docker Desktop" -Percent 35
     $hasDockerDesktop = Test-DockerDesktopInstalled
-
-    Write-InstallProgress -Activity $phase1Activity -Status "检测 WSL2" -Percent 60
-    $wslInstalled     = Test-Wsl2Installed
-    $dockerDesktopMode = $false
+    $dockerDesktopMode = $true
+    $wslInstalled = $false
     $ubuntuPresent = $false
+    $distroName = $null
 
     if ($hasDockerDesktop) {
         Write-OK "检测到 Docker Desktop 已安装"
         if (Test-DockerDesktopRunning) {
             Write-OK "Docker Desktop 正在运行"
         } else {
-            Write-Warn "Docker Desktop 已安装但未运行"
+            Write-Warn "Docker Desktop 已安装但未运行，安装流程会继续，但后续 Docker 命令可能失败"
         }
-        $dockerDesktopMode = $true
-    }
-
-    if ($wslInstalled) {
-        Write-OK "WSL2 已安装"
-
-        Write-InstallProgress -Activity $phase1Activity -Status "检测 Ubuntu 发行版" -Percent 80
-        $ubuntuPresent = Test-UbuntuInstalled
-        if ($ubuntuPresent) {
-            Write-OK "Ubuntu 发行版已存在"
-        }
+    } else {
+        Write-Warn "未检测到 Docker Desktop"
     }
 
     Write-InstallProgress -Activity $phase1Activity -Status "环境检测完成" -Percent 100
     Write-InstallProgress -Activity $phase1Activity -Completed
 
-    # -- If neither Docker Desktop nor WSL is available, let user choose --
-    if (-not $hasDockerDesktop -and -not $wslInstalled) {
-        Write-Host ""
-        Write-Host "  ==================================================" -ForegroundColor Yellow
-        Write-Host "         未检测到 Docker Desktop 或 WSL2" -ForegroundColor Yellow
-        Write-Host "  ==================================================" -ForegroundColor Yellow
-        Write-Host ""
-        Write-Host "  请选择安装方式:" -ForegroundColor White
-        Write-Host ""
-        Write-Host "  [A] 方案A: Docker Desktop (推荐)" -ForegroundColor Cyan
-        Write-Host "      |- 图形化管理界面，操作简单" -ForegroundColor Gray
-        Write-Host "      |- 自带 WSL2 后端，无需单独配置" -ForegroundColor Gray
-        Write-Host "      \- 需要手动下载安装 Docker Desktop" -ForegroundColor Gray
-        Write-Host ""
-        Write-Host "  [B] 方案B: WSL2 + Docker Engine (自动)" -ForegroundColor Cyan
-        Write-Host "      |- 全自动安装，无需手动操作" -ForegroundColor Gray
-        Write-Host "      |- 轻量级，资源占用少" -ForegroundColor Gray
-        Write-Host "      \- 安装后可能需要重启一次" -ForegroundColor Gray
-        Write-Host ""
-
-        $choice = ""
-        while ($choice -ne "A" -and $choice -ne "B") {
-            $choice = (Read-Host "  请输入 A 或 B").Trim().ToUpper()
-            if ($choice -ne "A" -and $choice -ne "B") {
-                Write-Host "  请输入 A 或 B" -ForegroundColor Red
-            }
-        }
-
-        if ($choice -eq "A") {
-            $dockerDesktopMode = $true
-            Write-Host ""
-            Write-Host "  ------------------------------------------------" -ForegroundColor DarkGray
-            Write-Host ""
-            Write-Host "  请先安装 Docker Desktop:" -ForegroundColor White
-            Write-Host ""
-            Write-Host "     1. 打开浏览器访问:" -ForegroundColor Yellow
-            Write-Host "        https://www.docker.com/products/docker-desktop/" -ForegroundColor Cyan
-            Write-Host ""
-            Write-Host "     2. 点击 'Download for Windows' 下载安装包" -ForegroundColor Yellow
-            Write-Host ""
-            Write-Host "     3. 运行安装包，按提示完成安装" -ForegroundColor Yellow
-            Write-Host ""
-            Write-Host "     4. 启动 Docker Desktop 并等待其完全启动" -ForegroundColor Yellow
-            Write-Host "        (系统托盘出现 Docker 鲸鱼图标，状态为 Running)" -ForegroundColor Gray
-            Write-Host ""
-            Write-Host "     5. 安装完毕后，重新运行本安装命令:" -ForegroundColor Yellow
-            Write-Host '        irm "https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1?ts=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())" | iex' -ForegroundColor Cyan
-            Write-Host ""
-            Write-Host "  ------------------------------------------------" -ForegroundColor DarkGray
-            Write-Host ""
-
-            # Try to open the browser automatically
-            try {
-                Start-Process "https://www.docker.com/products/docker-desktop/"
-                Write-OK "已自动打开浏览器下载页面"
-            } catch {
-                Write-Info "请手动打开上述链接"
-            }
-
-            Write-Host ""
-            Read-Host "  安装 Docker Desktop 后，按回车退出，然后重新运行安装命令"
-            return
-        } else {
-            # Option B: auto-install WSL2
-            Write-Info "将自动安装 WSL2 + Docker Engine"
-        }
-    } elseif ($hasDockerDesktop -and $wslInstalled) {
-        # Both available, prefer Docker Desktop
-        $dockerDesktopMode = $true
+    if (-not $hasDockerDesktop) {
+        Show-DockerDesktopRequiredMessage
+        return
     }
 
-    # Display selected mode
-    if ($dockerDesktopMode) {
-        Write-Host ""
-        Write-Host "  安装模式: 方案A - Docker Desktop (本地)" -ForegroundColor Green
-    } else {
-        Write-Host ""
-        Write-Host "  安装模式: 方案B - WSL2 + Docker Engine" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "  安装模式: Docker Desktop (本地)" -ForegroundColor Green
+
+    Write-Log "State: hasDockerDesktop=$hasDockerDesktop, dockerDesktopMode=$dockerDesktopMode"
+
+    # -- Phase 2: Validate Docker Desktop path ---------------------------------
+    Write-Step 2 5 "检查 Docker Desktop..."
+    Write-OK "Windows 安装当前仅使用 Docker Desktop 路径"
+    if (-not (Test-DockerDesktopRunning)) {
+        Write-Suggestion "建议先启动 Docker Desktop，并等待状态变为 Running"
     }
 
-    # Report WSL/Ubuntu status for the selected mode
-    if (-not $dockerDesktopMode) {
-        if (-not $wslInstalled) {
-            Write-Info "WSL2 未安装，将进行安装"
-        } elseif (-not $ubuntuPresent) {
-            Write-Info "未找到 Ubuntu 发行版，将安装 $UBUNTU_DISTRO"
-        }
-    } else {
-        if (-not $wslInstalled) {
-            Write-Info "WSL2 未安装（Docker Desktop 模式下可选）"
-        } elseif (-not $ubuntuPresent) {
-            Write-Info "未找到 Ubuntu 发行版（Docker Desktop 模式下可选）"
-        }
-    }
-
-    Write-Log "State: wslInstalled=$wslInstalled, ubuntuPresent=$ubuntuPresent, dockerDesktopMode=$dockerDesktopMode"
-
-    # -- Phase 2: Install WSL2 if needed ---------------------------------------
-    if ($dockerDesktopMode) {
-        # Docker Desktop mode — WSL is optional, Docker is already available
-        Write-Step 2 5 "Docker Desktop 模式"
-        Write-OK "使用 Docker Desktop，跳过 WSL2 + Ubuntu 安装"
-
-        if (-not $wslInstalled -or -not $ubuntuPresent) {
-            Write-Info "提示: Docker Desktop 已包含 WSL2 后端，无需单独安装"
-        }
-    } elseif (-not $wslInstalled -or -not $ubuntuPresent) {
-        if (-not $wslInstalled) {
-            Write-Step 2 5 "安装 WSL2 + Ubuntu..."
-            Write-Info "预计时间: 3-5 分钟（需要下载 Ubuntu 镜像，取决于网速）"
-        } else {
-            Write-Step 2 5 "安装 Ubuntu 发行版..."
-            Write-Info "预计时间: 3-5 分钟（需要下载 Ubuntu 镜像，取决于网速）"
-        }
-
-        $result = Install-Wsl2
-
-        if ($result -eq "reboot") {
-            Write-OK "WSL2 安装包已安装，需要重启以完成配置"
-            Register-ResumeTask
-            Show-RebootMessage
-            return
-        } elseif ($result -eq "distro-download-error") {
-            Show-Error `
-                "Ubuntu 发行版安装" `
-                "下载 Ubuntu 镜像失败" `
-                "脚本已自动尝试官方离线 Ubuntu 包安装；若仍失败，请检查网络、代理或 DNS 设置后重试，也可在开始菜单打开 Ubuntu 24.04 LTS 完成初始化后再重新执行脚本"
-            Read-Host "按回车退出"
-            return
-        } elseif ($result -eq "pending") {
-            $state = Get-InstallState
-            $state.RebootPending = $false
-            Save-InstallState $state
-            Remove-ResumeTask
-            Write-Warn "WSL 仍在后台完成安装，当前无需再次重启"
-            Write-Suggestion "请等待 1-2 分钟后重新运行此脚本；如果仍失败，再手动执行 wsl --install"
-            Read-Host "按回车退出"
-            return
-        } elseif ($result -eq "error") {
-            Show-Error `
-                "WSL2 安装" `
-                "wsl --install 命令失败" `
-                "请访问 https://aka.ms/wsl 手动安装 WSL2，然后重新运行此脚本"
-            Read-Host "按回车退出"
-            return
-        }
-
-        Write-OK "WSL2 + $UBUNTU_DISTRO 安装成功"
-
-        # Re-check
-        $wslInstalled  = Test-Wsl2Installed
-        $ubuntuPresent = Test-UbuntuInstalled
-    } else {
-        Write-Step 2 5 "WSL2 已就绪，跳过安装"
-        Write-OK "WSL2 + Ubuntu 均已安装，无需重复安装"
-    }
-
-    # -- Phase 3: Configure Docker ----------------------------------------------
-    if ($dockerDesktopMode) {
-        Write-Step 3 5 "Docker 已就绪"
-        Write-OK "Docker Desktop 可用，跳过 Docker Engine 安装"
-        $distroName = $null
-    } else {
-        # Get actual distro name
-        $distroName = Get-UbuntuDistroName
-        Write-Info "使用发行版: $distroName"
-
-        $ready = Wait-WslReady -DistroName $distroName
-        if (-not $ready) {
-            Show-Error `
-                "等待 Ubuntu 就绪" `
-                "$distroName 启动超时" `
-                "请尝试手动运行: wsl -d $distroName，然后重新运行此脚本"
-            Read-Host "按回车退出"
-            return
-        }
-
-        # Check if Docker is already installed in WSL
-        $dockerInstalled = $false
-        $wslUserReady = Ensure-WslDefaultUser -DistroName $distroName
-        if (-not $wslUserReady) {
-            Show-Error `
-                "WSL 普通用户初始化" `
-                "无法为 $distroName 配置默认普通用户" `
-                "请先手动进入 WSL，确认 Ubuntu 正常，再重新运行此脚本"
-            Read-Host "按回车退出"
-            return
-        }
-
-        try {
-            if ($script:wslDefaultUser) {
-                $dockerCheck = & wsl -d $distroName -u $script:wslDefaultUser -- bash -c "command -v docker >/dev/null 2>&1 && docker --version" 2>$null
-            } else {
-                $dockerCheck = & wsl -d $distroName --exec bash -c "command -v docker && docker --version" 2>$null
-            }
-            if ($dockerCheck -match "Docker version") {
-                $dockerInstalled = $true
-                Write-OK "Docker 已安装在 WSL 中: $($dockerCheck | Select-String 'Docker version')"
-            }
-        } catch { }
-
-        if (-not $dockerInstalled) {
-            Write-Step 3 5 "配置 Ubuntu + 安装 Docker Engine..."
-            Write-Info "预计时间: 5-10 分钟（取决于网速和服务器响应）"
-            Write-Host ""
-            Write-Host "  ℹ️  此步骤需要较长时间，请勿关闭窗口" -ForegroundColor Yellow
-            Write-Host ""
-
-            $dockerOK = Install-DockerInWsl -DistroName $distroName -WslUser $script:wslDefaultUser
-
-            if (-not $dockerOK) {
-                Show-Error `
-                    "Docker Engine 安装" `
-                    "在 WSL 中安装 Docker 失败" `
-                    "请手动运行: wsl -d $distroName，然后参考 https://docs.docker.com/engine/install/ubuntu/ 安装 Docker"
-                Read-Host "按回车退出"
-                return
-            }
-        } else {
-            Write-Step 3 5 "Docker 已安装，跳过"
-            Write-OK "Docker Engine 已就绪"
-        }
-    }
+    # -- Phase 3: Hide legacy WSL installer path --------------------------------
+    Write-Step 3 5 "准备 Docker 环境..."
+    Write-OK "已跳过 WSL 安装与 WSL 内 Docker Engine 配置"
 
     # -- Phase 4: Prepare container deployment ----------------------------------
     Write-Step 4 5 "准备容器部署..."

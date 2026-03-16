@@ -1316,7 +1316,8 @@ prompt_deploy_config(){
       DOMAIN="$(detect_local_ip)"
       CERT_MODE="internal"
       HTTP_PORT=0
-      info "域名留空，自动启用 IP 自签名 HTTPS：$DOMAIN"
+      info "检测到 HTTPS IP：$DOMAIN"
+      info "域名留空，自动启用 IP 自签 HTTPS：$DOMAIN"
       if [ "$DOMAIN" = "127.0.0.1" ]; then
         warn "未检测到可用局域网 IP，当前回退到 127.0.0.1；如需局域网访问，请手动输入域名或 IP"
       fi
