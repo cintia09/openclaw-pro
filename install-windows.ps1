@@ -94,9 +94,16 @@ function Get-WslPrimaryIPv4 {
 
     if (-not $DistroName) { return "" }
     try {
-        $raw = (& wsl -d $DistroName --exec sh -lc "ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if(\$i==\"src\") {print \$(i+1); exit}}; hostname -I 2>/dev/null | awk '{for(i=1;i<=NF;i++) if (\$i != \"127.0.0.1\") {print \$i; exit}}; ip -o -4 addr show 2>/dev/null | awk '{split(\$4,a,\"/\"); if (a[1] != \"127.0.0.1\") { print a[1]; exit }}'" 2>$null | Out-String).Trim()
-        $ip = ($raw -split "`r?`n" | Where-Object { $_ -match '^\d{1,3}(?:\.\d{1,3}){3}$' } | Select-Object -First 1)
-        if ($ip) { return $ip.Trim() }
+        # Use single-quoted shell command to avoid PowerShell $-expansion breaking awk
+        $raw = (& wsl -d $DistroName --exec sh -lc 'hostname -I 2>/dev/null; ip route get 1.1.1.1 2>/dev/null; ip -o -4 addr show scope global 2>/dev/null' 2>$null | Out-String).Trim()
+        # Extract first valid non-loopback IPv4 from combined output
+        $ipMatches = [regex]::Matches($raw, '\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b')
+        foreach ($m in $ipMatches) {
+            $candidate = $m.Groups[1].Value
+            if ($candidate -ne '127.0.0.1' -and $candidate -ne '0.0.0.0' -and $candidate -ne '1.1.1.1' -and $candidate -ne '255.255.255.255' -and $candidate -notmatch '\.255$') {
+                return $candidate
+            }
+        }
     } catch { }
     return ""
 }
@@ -119,7 +126,7 @@ function Test-ReservedWslRelayPort {
 
         foreach ($pid in $pids) {
             $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
-            if (-not $proc -or $proc.ProcessName -notmatch '^wslrelay$') {
+            if (-not $proc -or $proc.ProcessName -notmatch '^wsl') {
                 return $false
             }
         }
