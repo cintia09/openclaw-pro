@@ -847,7 +847,7 @@ download_with_resume(){
   )
 
   for attempt in 1 2 3; do
-    before_bytes="$(wc -c < "$output" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+    before_bytes="$( [ -f "$output" ] && wc -c < "$output" 2>/dev/null | tr -d '[:space:]' || echo 0)"
     if [ "$before_bytes" -gt 0 ] 2>/dev/null; then
       info "继续断点续传：第 ${attempt}/3 次尝试"
       log_resume_state "$output" "$total_bytes"
@@ -861,7 +861,7 @@ download_with_resume(){
       rc=$?
     fi
 
-    after_bytes="$(wc -c < "$output" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+    after_bytes="$( [ -f "$output" ] && wc -c < "$output" 2>/dev/null | tr -d '[:space:]' || echo 0)"
     grown_bytes=$(( after_bytes - before_bytes ))
     echo ""
     warn "下载中断：${url}（第 ${attempt}/3 次，curl exit ${rc}）"
