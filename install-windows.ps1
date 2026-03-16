@@ -1969,6 +1969,44 @@ function Remove-ReplacedImageIdsFromLoadOutput {
     }
 }
 
+function Get-DanglingImageIds {
+    $ids = @()
+    try {
+        $raw = & docker image ls --filter dangling=true --format '{{.ID}}' 2>$null
+        foreach ($line in @($raw)) {
+            $id = [string]$line
+            if ([string]::IsNullOrWhiteSpace($id)) { continue }
+            $ids += $id.Trim()
+        }
+    } catch { }
+    return @($ids | Select-Object -Unique)
+}
+
+function Remove-NewDanglingImages {
+    param(
+        [string[]]$BeforeIds
+    )
+
+    $beforeSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($id in @($BeforeIds)) {
+        if (-not [string]::IsNullOrWhiteSpace($id)) {
+            [void]$beforeSet.Add($id.Trim())
+        }
+    }
+
+    foreach ($id in @(Get-DanglingImageIds)) {
+        if ([string]::IsNullOrWhiteSpace($id)) { continue }
+        $trimmedId = $id.Trim()
+        if ($beforeSet.Contains($trimmedId)) { continue }
+        try { & docker image rm $trimmedId 2>$null | Out-Null } catch { }
+        if ($LASTEXITCODE -eq 0) {
+            Write-Info "已清理本次加载产生的悬空镜像：$trimmedId"
+        } else {
+            Write-Warn "本次加载产生的悬空镜像仍被占用，跳过清理：$trimmedId"
+        }
+    }
+}
+
 # --- Port availability check --------------------------------------------------
 function Test-PortAvailable {
     param(
@@ -4429,6 +4467,8 @@ function Main {
                             }
                         } catch { }
 
+                        $danglingBeforeLoad = @(Get-DanglingImageIds)
+
                         # 后台加载 + 前台旋转动画
                         $loadJob = Start-Job -ScriptBlock {
                             param($tar)
@@ -4543,6 +4583,7 @@ function Main {
                         $loadCheck = & docker image inspect openclaw-pro:latest 2>$null
                         if ($LASTEXITCODE -eq 0) {
                             Remove-ReplacedImageIdsFromLoadOutput -LoadOutput $loadOutput
+                            Remove-NewDanglingImages -BeforeIds $danglingBeforeLoad
                             $totalSec = [math]::Floor($loadTimer.Elapsed.TotalSeconds)
                             $imageReady = $true
                             Write-OK "预构建镜像加载完成 (耗时 ${totalSec} 秒)"
@@ -4554,6 +4595,7 @@ function Main {
                                 }
                             } catch { }
                         } else {
+                            Remove-NewDanglingImages -BeforeIds $danglingBeforeLoad
                             Write-Warn "docker load 失败，继续尝试其他方式..."
                             Write-Info "镜像文件已保留: $imageTar（下次运行可直接加载，无需重新下载）"
                         }
@@ -5590,6 +5632,8 @@ function Main {
                             }
                         } catch { }
 
+                        $recoverDanglingBeforeLoad = @(Get-DanglingImageIds)
+
                         # 后台加载 + 前台旋转动画
                         $loadJob = Start-Job -ScriptBlock {
                             param($tar)
@@ -5692,9 +5736,11 @@ function Main {
                         $chk = & docker image inspect openclaw-pro:latest 2>$null
                         if ($LASTEXITCODE -eq 0) {
                             Remove-ReplacedImageIdsFromLoadOutput -LoadOutput $loadOutput
+                            Remove-NewDanglingImages -BeforeIds $recoverDanglingBeforeLoad
                             Write-OK "Release 镜像加载完成 (耗时 ${totalLoadSec} 秒)"
                             $recoverOK = $true
                         } else {
+                            Remove-NewDanglingImages -BeforeIds $recoverDanglingBeforeLoad
                             if ($loadAttempt -lt 2) {
                                 Write-Warn "docker load 失败，删除镜像文件并重新下载重试..."
                                 Remove-Item $recoverTar -Force -ErrorAction SilentlyContinue

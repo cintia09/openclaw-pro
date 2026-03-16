@@ -1066,6 +1066,7 @@ download_tarball(){
 load_image(){
   local f="$TMP_DIR/$IMAGE_TARBALL"
   local load_log="$TMP_DIR/.docker-load.log"
+  local dangling_before_file=""
   local load_pid start_ts elapsed next_report rc
   if ! check_local_tarball; then return 1; fi
   if ! docker info >/dev/null 2>&1; then
@@ -1076,6 +1077,9 @@ load_image(){
     esac
     exit 1
   fi
+
+  dangling_before_file="$(mktemp "${TMP_DIR}/.docker-dangling-before.XXXXXX")"
+  capture_dangling_image_ids > "$dangling_before_file" 2>/dev/null || true
 
   info "正在导入镜像（docker load）: $f"
   rm -f "$load_log" || true
@@ -1100,8 +1104,10 @@ load_image(){
     cat "$load_log"
     tag_loaded_image_if_needed
     cleanup_replaced_image_from_load_log "$load_log"
+    cleanup_new_dangling_images "$dangling_before_file"
     success "镜像导入完成"
     rm -f "$load_log" || true
+    rm -f "$dangling_before_file" 2>/dev/null || true
     return 0
   fi
 
@@ -1109,11 +1115,13 @@ load_image(){
   cat "$load_log" || true
   rm -f "$load_log" || true
   if command -v unpigz >/dev/null 2>&1; then
-    if unpigz -c "$f" | docker load; then tag_loaded_image_if_needed; success "流式解压导入成功"; return 0; fi
+    if unpigz -c "$f" | docker load; then tag_loaded_image_if_needed; cleanup_new_dangling_images "$dangling_before_file"; success "流式解压导入成功"; rm -f "$dangling_before_file" 2>/dev/null || true; return 0; fi
   elif command -v gunzip >/dev/null 2>&1; then
-    if gunzip -c "$f" | docker load; then tag_loaded_image_if_needed; success "流式解压导入成功"; return 0; fi
+    if gunzip -c "$f" | docker load; then tag_loaded_image_if_needed; cleanup_new_dangling_images "$dangling_before_file"; success "流式解压导入成功"; rm -f "$dangling_before_file" 2>/dev/null || true; return 0; fi
   fi
 
+  cleanup_new_dangling_images "$dangling_before_file"
+  rm -f "$dangling_before_file" 2>/dev/null || true
   warn "本地镜像导入失败"
   return 1
 }
@@ -1135,6 +1143,34 @@ cleanup_replaced_image_from_load_log(){
     fi
   done <<EOF
 $old_ids
+EOF
+}
+
+capture_dangling_image_ids(){
+  docker image ls --filter dangling=true --format '{{.ID}}' 2>/dev/null | awk 'NF && !seen[$0]++'
+}
+
+cleanup_new_dangling_images(){
+  local baseline_file="$1"
+  local current_file new_ids old_id
+  [ -f "$baseline_file" ] || return 0
+
+  current_file="$(mktemp)"
+  capture_dangling_image_ids > "$current_file" 2>/dev/null || true
+  new_ids="$(comm -13 <(sort "$baseline_file" 2>/dev/null || true) <(sort "$current_file" 2>/dev/null || true) 2>/dev/null || true)"
+  rm -f "$current_file" 2>/dev/null || true
+
+  [ -n "$new_ids" ] || return 0
+
+  while IFS= read -r old_id; do
+    [ -n "$old_id" ] || continue
+    if docker image rm "$old_id" >/dev/null 2>&1; then
+      info "已清理加载失败遗留的悬空镜像：$old_id"
+    else
+      warn "加载失败后发现悬空镜像仍被占用，跳过清理：$old_id"
+    fi
+  done <<EOF
+$new_ids
 EOF
 }
 
