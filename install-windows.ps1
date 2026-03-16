@@ -117,7 +117,7 @@ function Test-ReservedWslRelayPort {
 
         $pids = @()
         foreach ($line in $netstat) {
-            $pid_ = ($line -split '\s+' | Select-Object -Last 1)
+            $pid_ = ($line.Trim() -split '\s+' | Select-Object -Last 1)
             if ($pid_ -match '^\d+$') { $pids += [int]$pid_ }
         }
 
@@ -1876,9 +1876,9 @@ exec bash "`$TMP_SCRIPT"
         [Console]::OutputEncoding = $utf8Encoding
 
         if ($WslUser) {
-            & wsl -d $DistroName -u $WslUser --exec bash $wslTmpDeploy
+            & wsl -d $DistroName -u $WslUser -- bash -li $wslTmpDeploy
         } else {
-            & wsl -d $DistroName --exec bash $wslTmpDeploy
+            & wsl -d $DistroName -- bash -li $wslTmpDeploy
         }
         return ($LASTEXITCODE -eq 0)
     } catch {
