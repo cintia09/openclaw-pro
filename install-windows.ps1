@@ -1285,7 +1285,10 @@ function Ensure-WslDefaultUser {
 
         $preferredUser = Get-PreferredWslUserName
         try {
-                $currentUser = (& wsl -d $DistroName --exec sh -lc "id -un 2>/dev/null || true" 2>&1 | Out-String).Trim()
+                $rawId = (& wsl -d $DistroName --exec sh -lc "id -un 2>/dev/null || true" 2>&1 | Out-String).Trim()
+                # Filter out WSL proxy/system warnings (e.g. "wsl: 检测到 localhost 代理配置...")
+                $currentUser = ($rawId -split "`r?`n" | Where-Object { $_ -and $_ -notmatch '^wsl:' } | Select-Object -Last 1)
+                if ($currentUser) { $currentUser = $currentUser.Trim() }
                 if ($currentUser -and $currentUser -ne "root") {
                         $preferredUser = $currentUser
                 }
@@ -1382,8 +1385,8 @@ echo "OPENCLAW_WSL_HOME=$home_dir"
         $wslTmpPath = "/tmp/openclaw-wsl-user-setup.sh"
 
         try {
-                Get-Content $tmpScript -Raw | & wsl -d $DistroName -u root --exec bash -c "cat > $wslTmpPath"
-                & wsl -d $DistroName -u root --exec bash -c "chmod +x $wslTmpPath"
+                Get-Content $tmpScript -Raw | & wsl -d $DistroName -u root --exec bash -c "cat > $wslTmpPath" 2>$null
+                & wsl -d $DistroName -u root --exec bash -c "chmod +x $wslTmpPath" 2>$null
                 $setupOutput = & wsl -d $DistroName -u root --exec env OPENCLAW_PREFERRED_USER=$preferredUser LANG=C.UTF-8 LC_ALL=C.UTF-8 bash $wslTmpPath 2>&1 | Out-String
                 Write-Log "WSL user setup output: $setupOutput"
 
@@ -1478,8 +1481,8 @@ echo "DOCKER_INSTALL_COMPLETE"
     $wslTmpPath = "/tmp/openclaw-docker-setup.sh"
 
     try {
-        Get-Content $tmpScript -Raw | & wsl -d $DistroName -u root --exec bash -c "cat > $wslTmpPath"
-        & wsl -d $DistroName -u root --exec bash -c "chmod +x $wslTmpPath"
+        Get-Content $tmpScript -Raw | & wsl -d $DistroName -u root --exec bash -c "cat > $wslTmpPath" 2>$null
+        & wsl -d $DistroName -u root --exec bash -c "chmod +x $wslTmpPath" 2>$null
 
         # Run with real-time output parsing for step progress
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
