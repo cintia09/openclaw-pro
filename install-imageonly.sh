@@ -235,7 +235,7 @@ success(){ log OK "$*"; }
 print_summary_line(){
   local label="$1"
   local value="$2"
-  printf '  %b%-10s%b %b%s%b\n' "$DIM" "$label" "$NC" "$WHITE" "$value" "$NC"
+  printf '  %b%-10s%b %b%s%b\n' "$YELLOW" "$label" "$NC" "$CYAN" "$value" "$NC"
 }
 
 prompt(){
@@ -1748,7 +1748,6 @@ create_and_start(){
       && docker exec "$CONTAINER_NAME" bash -c "touch /root/.ssh/authorized_keys && while IFS= read -r k; do [ -z \"\$k\" ] && continue; grep -qxF \"\$k\" /root/.ssh/authorized_keys || echo \"\$k\" >> /root/.ssh/authorized_keys; done < /root/.ssh/authorized_keys.tmp && chmod 600 /root/.ssh/authorized_keys && test -s /root/.ssh/authorized_keys && rm -f /root/.ssh/authorized_keys.tmp" >/dev/null 2>&1; then
       key_injected="true"
       ssh_login_user="root"
-      warn "普通用户公钥注入失败，已回退 root 密钥登录"
       break
     fi
   done
@@ -1769,7 +1768,6 @@ create_and_start(){
         && docker exec "$CONTAINER_NAME" bash -c "touch /root/.ssh/authorized_keys && while IFS= read -r k; do [ -z \"\$k\" ] && continue; grep -qxF \"\$k\" /root/.ssh/authorized_keys || echo \"\$k\" >> /root/.ssh/authorized_keys; done < /root/.ssh/authorized_keys.tmp && chmod 600 /root/.ssh/authorized_keys && test -s /root/.ssh/authorized_keys && rm -f /root/.ssh/authorized_keys.tmp" >/dev/null 2>&1; then
         key_injected="true"
         ssh_login_user="root"
-        warn "未发现宿主机公钥，已自动生成并回退 root 密钥登录"
       fi
     fi
   fi
@@ -1818,15 +1816,11 @@ create_and_start(){
     print_summary_line "提权" "ssh 登录后执行 sudo -i"
   fi
 
-  if [ "$key_injected" != "true" ]; then
-    warn "SSH 公钥未自动注入，请手动执行以下命令："
-    local current_user="${ssh_login_user:-root}"
-    echo -e "    ${WHITE}cat ~/.ssh/id_rsa.pub | ssh -p ${SSH_PORT} ${current_user}@<host> \"mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys\"${NC}"
+  if [ "$key_injected" != "true" ] || [ "$ssh_login_user" = "root" ]; then
+    info "宿主机或者远端机器需要SSH公钥注入，才能通过SSH方式登录容器(宿主机也可通过上面提示的docker命令进入)，如不需要，请忽略。"
   fi
   if [ "$ssh_hardened" != "true" ]; then
     warn "SSH 密码认证状态未确认，请手动检查容器内 sshd 配置"
-  elif [ "$ssh_password_disabled" = "true" ] && [ "$ssh_login_user" = "root" ]; then
-    warn "SSH 已禁用密码登录，但当前仅保留 root 密钥登录，请检查普通用户公钥注入"
   fi
 }
 
