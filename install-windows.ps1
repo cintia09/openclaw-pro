@@ -3944,36 +3944,43 @@ function Main {
                 Write-Host ""
                 Write-Host "  请选择操作:" -ForegroundColor White
                 if ($hasOutdatedContainers) {
-                    Write-Host "     [1] 升级重建（切换到目标版本；保留状态卷数据与配置，沿用当前端口/HTTPS）" -ForegroundColor Gray
-                    Write-Host "     [2] 全新升级重建（切换到目标版本；删除旧容器 + 配置 + 状态卷数据，重新配置端口/HTTPS）" -ForegroundColor Gray
+                    Write-Host "     [1] 升级（保留状态卷中的 openclaw 相关数据与配置，沿用当前端口/HTTPS）" -ForegroundColor Gray
+                    Write-Host "     [2] 升级重建（保留容器内 openclaw 相关数据，重新配置端口/HTTPS）" -ForegroundColor Gray
+                    Write-Host "     [3] 全新升级重建（删除旧容器 + 配置 + 状态卷数据，重新配置端口/HTTPS）" -ForegroundColor Gray
+                    Write-Host "     [4] 退出" -ForegroundColor Gray
+                    Write-Host ""
+                    Write-Host "  输入选择 [1]: " -NoNewline -ForegroundColor White
+                    $choice = (Read-Host).Trim()
+                    if (-not $choice) { $choice = '1' }
+                    if ($choice -eq '4') {
+                        Write-Host ""; Write-Host "  已取消。" -ForegroundColor Yellow; return
+                    }
                 } else {
-                    Write-Host "     [1] 重装（切换到目标版本，或在当前版本上重建容器；保留状态卷中的 openclaw 数据，重新配置端口/HTTPS）" -ForegroundColor Gray
-                    Write-Host "     [2] 全新重装（切换到目标版本，或在当前版本上全量重建；删除旧容器 + 配置 + 状态卷数据，重新配置端口/HTTPS）" -ForegroundColor Gray
+                    Write-Host "     [1] 重建（保留容器内 openclaw 相关数据，重新配置端口/HTTPS）" -ForegroundColor Gray
+                    Write-Host "     [2] 全新重建（删除旧容器 + 配置 + 状态卷数据，重新配置端口/HTTPS）" -ForegroundColor Gray
+                    Write-Host "     [3] 退出" -ForegroundColor Gray
+                    Write-Host ""
+                    Write-Host "  输入选择 [1]: " -NoNewline -ForegroundColor White
+                    $choice = (Read-Host).Trim()
+                    if (-not $choice) { $choice = '1' }
+                    if ($choice -eq '3') {
+                        Write-Host ""; Write-Host "  已取消。" -ForegroundColor Yellow; return
+                    }
+                    # Map same-version choices: [1]rebuild→'2', [2]full rebuild→'3'
+                    # so downstream logic uses unified numbering: 1=upgrade, 2=rebuild, 3=full rebuild
+                    if ($choice -eq '2') { $choice = '3' }
+                    elseif ($choice -eq '1') { $choice = '2' }
                 }
-                Write-Host ""
-                Write-Host "  输入选择 [1]: " -NoNewline -ForegroundColor White
-                $choice = (Read-Host).Trim()
-                if (-not $choice) { $choice = '1' }
             }
 
-            if ($choice -eq '1' -or $choice -eq '2') {
+            if ($choice -eq '1' -or $choice -eq '2' -or $choice -eq '3') {
                 Write-Host ""
-                if ($allSameAsTarget) {
-                    Write-Host "  ⚠️  当前容器版本已与目标版本一致（$latestReleaseTag）" -ForegroundColor Yellow
-                    Write-Host "  当前没有新版本可升级；继续仅用于修复环境。" -ForegroundColor Yellow
-                    Write-Host "  是否仍继续执行重装/全新重装？[y/N]: " -NoNewline -ForegroundColor White
-                    $sameVersionReinstall = (Read-Host).Trim().ToLower()
-                    if ($sameVersionReinstall -ne 'y' -and $sameVersionReinstall -ne 'yes') {
-                        Write-Host ""
-                        Write-Host "  已取消本次重装（当前版本已是最新）。" -ForegroundColor Yellow
-                        return
-                    }
-                    Write-Host ""
-                }
-                if ($choice -eq '2') {
+                if ($choice -eq '3') {
                     Write-Host "  ⚠️  高风险操作：将删除旧容器、配置和状态卷数据（不可恢复）" -ForegroundColor Yellow
+                } elseif ($choice -eq '2') {
+                    Write-Host "  ⚠️  将删除并重建旧容器；状态卷中的 openclaw 相关数据保留，端口/HTTPS 会重新配置" -ForegroundColor Yellow
                 } else {
-                    Write-Host "  ⚠️  将删除并重建旧容器；状态卷中的 openclaw 数据保留，但端口/HTTPS 会重新配置" -ForegroundColor Yellow
+                    Write-Host "  ⚠️  将删除并重建旧容器；状态卷中的 openclaw 相关数据与配置均保留" -ForegroundColor Yellow
                 }
                 Write-Host "  请输入 YES 确认继续: " -NoNewline -ForegroundColor White
                 $confirmReinstall = (Read-Host).Trim()
@@ -4122,10 +4129,55 @@ function Main {
                 & docker rm -f $containerName 2>&1 | Out-Null
                 Start-Sleep -Seconds 2
                 Write-OK "旧容器已删除"
-                Write-Info "💡 状态卷 ($upgradeStateVolume) 不会被删除，原有配置和数据均保留"
+                Write-Info "💡 状态卷 ($upgradeStateVolume) 不会被删除，原有 openclaw 相关数据与配置均保留"
                 Write-Info "   如需彻底删除数据，可手动执行: docker volume rm $upgradeStateVolume"
-            } else {
-                # [2] 全量重装：删除旧容器，并删除对应配置与数据目录
+            } elseif ($choice -eq '2') {
+                # -- 重建模式：删除旧容器但保留状态卷，重新配置端口/HTTPS --
+                $rebuildContainerName = ""
+                if ($preferredUpgradeContainer) {
+                    $rebuildContainerName = $preferredUpgradeContainer
+                } elseif ($runningContainers.Count -eq 1) {
+                    $rebuildContainerName = ($runningContainers[0] -split '\|')[0]
+                } else {
+                    Write-Host ""
+                    Write-Host "  请选择要重建的容器:" -ForegroundColor Cyan
+                    $menuSource = if ($runningContainerMeta -and $runningContainerMeta.Count -gt 0) { $runningContainerMeta } else { $runningContainers }
+                    for ($i = 0; $i -lt $menuSource.Count; $i++) {
+                        if ($menuSource[$i] -is [hashtable]) {
+                            $mv = if ($menuSource[$i].VersionRaw) { $menuSource[$i].VersionRaw } else { "未知" }
+                            Write-Host "     [$($i + 1)] $($menuSource[$i].Name)  (版本: $mv  状态: $($menuSource[$i].Status)  端口: $($menuSource[$i].Ports))" -ForegroundColor White
+                        } else {
+                            $parts = $menuSource[$i] -split '\|'
+                            Write-Host "     [$($i + 1)] $($parts[0])  (状态: $($parts[1])  端口: $($parts[2]))" -ForegroundColor White
+                        }
+                    }
+                    Write-Host ""
+                    Write-Host "  输入选择 [默认1]: " -NoNewline -ForegroundColor White
+                    $rbChoice = (Read-Host).Trim()
+                    if ($rbChoice -match '^\d+$' -and [int]$rbChoice -ge 1 -and [int]$rbChoice -le $menuSource.Count) {
+                        if ($menuSource[[int]$rbChoice - 1] -is [hashtable]) {
+                            $rebuildContainerName = $menuSource[[int]$rbChoice - 1].Name
+                        } else {
+                            $rebuildContainerName = ($menuSource[[int]$rbChoice - 1] -split '\|')[0]
+                        }
+                    } else {
+                        if ($menuSource[0] -is [hashtable]) {
+                            $rebuildContainerName = $menuSource[0].Name
+                        } else {
+                            $rebuildContainerName = ($menuSource[0] -split '\|')[0]
+                        }
+                    }
+                }
+                $containerName = $rebuildContainerName
+                Write-Info "停止并删除: $containerName"
+                & docker rm -f $containerName 2>&1 | Out-Null
+                Start-Sleep -Seconds 2
+                Write-OK "旧容器已删除"
+                $rbStateVolume = Get-StateVolumeName -ContainerName $containerName
+                Write-Info "💡 状态卷 ($rbStateVolume) 不会被删除，容器内 openclaw 相关数据保留"
+                Write-Info "   端口/HTTPS 将重新配置"
+            } elseif ($choice -eq '3') {
+                # -- 全新重建模式：删除旧容器 + 状态卷，重新配置端口/HTTPS --
                 if ($runningContainers.Count -eq 1) {
                     # 只有一个，直接删除
                     $rcName = ($runningContainers[0] -split '\|')[0]

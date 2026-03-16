@@ -1592,17 +1592,17 @@ handle_existing_installation(){
   fi
 
   if has_tty; then
-    printf "处理方式：\n" > "$TTY_IN"
+    printf "\n处理方式：\n" > "$TTY_IN"
     if [ "$latest_matched" = "true" ]; then
-      printf "  [1] 重装（只保留 /root/.openclaw 中的 openclaw 相关数据，其他容器内数据会删除，重新配置端口/HTTPS）\n" > "$TTY_IN"
-      printf "  [2] 全新重装（删除旧容器和 /root/.openclaw 中的全部持久化数据，重新配置端口/HTTPS）\n" > "$TTY_IN"
+      printf "  [1] 重建（保留容器内 openclaw 相关数据，重新配置端口/HTTPS）\n" > "$TTY_IN"
+      printf "  [2] 全新重建（删除旧容器和全部持久化数据，重新配置端口/HTTPS）\n" > "$TTY_IN"
       printf "  [3] 退出\n" > "$TTY_IN"
       choice="$(prompt "当前已是最新版本，请选择 1/2/3（默认1）: ")"
       [ -z "$choice" ] && choice="1"
     else
-      printf "  [1] 升级（仅在检测到新版本时出现，保留 /root/.openclaw 数据与配置，默认沿用当前端口/HTTPS）\n" > "$TTY_IN"
-      printf "  [2] 重装（切换到新版本，或在当前版本上重建容器；只保留 /root/.openclaw 中的 openclaw 相关数据，重新配置端口/HTTPS）\n" > "$TTY_IN"
-      printf "  [3] 全新重装（切换到新版本，或在当前版本上全量重建；删除旧容器和 /root/.openclaw 中的全部持久化数据，重新配置端口/HTTPS）\n" > "$TTY_IN"
+      printf "  [1] 升级（保留 /root/.openclaw 中的 openclaw 相关数据与配置，沿用当前端口/HTTPS）\n" > "$TTY_IN"
+      printf "  [2] 升级重建（保留容器内 openclaw 相关数据，重新配置端口/HTTPS）\n" > "$TTY_IN"
+      printf "  [3] 全新升级重建（删除旧容器和全部持久化数据，重新配置端口/HTTPS）\n" > "$TTY_IN"
       printf "  [4] 退出\n" > "$TTY_IN"
       choice="$(prompt "请选择 1/2/3/4（默认1）: ")"
       [ -z "$choice" ] && choice="1"
@@ -1614,25 +1614,25 @@ handle_existing_installation(){
   if [ "$latest_matched" = "true" ]; then
     case "${choice:-1}" in
       3) warn "用户取消安装。"; exit 0 ;;
-      2) info "全新重装：删除旧容器，并清空 /root/.openclaw 持久化数据，随后重新配置端口/HTTPS"
+      2) info "全新重建：删除旧容器，并清空 /root/.openclaw 持久化数据，随后重新配置端口/HTTPS"
          docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
          reset_persistent_state
          UPGRADE_MODE="false" ;;
-      *) info "重装：保留 /root/.openclaw 中的 openclaw 相关数据，删除其他容器内数据，并重新配置端口/HTTPS"
+      *) info "重建：保留容器内 openclaw 相关数据，重新配置端口/HTTPS"
          docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
          UPGRADE_MODE="false" ;;
     esac
   else
     case "${choice:-1}" in
       4) warn "用户取消安装。"; exit 0 ;;
-      3) info "全新重装：删除旧容器，并清空 /root/.openclaw 持久化数据，随后切换到目标版本并重新配置端口/HTTPS"
+      3) info "全新升级重建：删除旧容器，并清空 /root/.openclaw 持久化数据，随后切换到目标版本并重新配置端口/HTTPS"
          docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
          reset_persistent_state
          UPGRADE_MODE="false" ;;
-      2) info "重装：保留 /root/.openclaw 中的 openclaw 相关数据，删除其他容器内数据，并切换到目标版本后重新配置端口/HTTPS"
+      2) info "升级重建：保留容器内 openclaw 相关数据，切换到目标版本后重新配置端口/HTTPS"
          docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
          UPGRADE_MODE="false" ;;
-      *) info "升级：保留 /root/.openclaw 数据与配置，默认沿用当前端口/HTTPS"
+      *) info "升级：保留 /root/.openclaw 中的 openclaw 相关数据与配置，沿用当前端口/HTTPS"
          load_existing_config || true
          docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
          UPGRADE_MODE="true" ;;
