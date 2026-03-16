@@ -1643,7 +1643,7 @@ F2B
 # ─── container create & start ─────────────────────────────────
 
 create_and_start(){
-  local host_user host_uid host_gid key_injected ssh_login_user user_ready ssh_hardened ssh_password_disabled
+  local host_user host_uid host_gid key_injected ssh_login_user user_ready ssh_hardened ssh_password_disabled container_exec_hint
   host_user="${SUDO_USER:-$(id -un 2>/dev/null || true)}"
   host_uid="$(id -u 2>/dev/null || true)"
   host_gid="$(id -g 2>/dev/null || true)"
@@ -1652,6 +1652,11 @@ create_and_start(){
   user_ready="false"
   ssh_hardened="false"
   ssh_password_disabled="false"
+  container_exec_hint="docker exec -it ${CONTAINER_NAME} bash"
+
+  if [ -n "${OPENCLAW_WSL_DISTRO:-}" ]; then
+    container_exec_hint="wsl -d ${OPENCLAW_WSL_DISTRO} docker exec -it ${CONTAINER_NAME} bash"
+  fi
 
   ensure_state_volume
 
@@ -1808,7 +1813,7 @@ create_and_start(){
   echo ""
   printf '%b安装完成%b\n' "$GREEN" "$NC"
   print_summary_line "主站" "$main_url"
-  print_summary_line "容器" "docker exec -it ${CONTAINER_NAME} bash"
+  print_summary_line "容器" "$container_exec_hint"
   print_summary_line "SSH" "$ssh_target"
   print_summary_line "目录" "$BASE_DIR"
   print_summary_line "日志" "$LOG_FILE"

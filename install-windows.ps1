@@ -1489,6 +1489,7 @@ set -e
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
 export http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= all_proxy= ALL_PROXY=
 export OPENCLAW_HOST_IP="$hostLanIp"
+export OPENCLAW_WSL_DISTRO="$DistroName"
 
 # Redirect stdout/stderr to /dev/tty so all output is visible in the console.
 # Without this, wsl --exec pipes stdout through PowerShell which buffers/discards it.
@@ -1547,7 +1548,7 @@ exec bash "`$TMP_SCRIPT"
         [Console]::InputEncoding = $utf8Encoding
         [Console]::OutputEncoding = $utf8Encoding
 
-        & wsl -d $DistroName --exec env OPENCLAW_HOST_IP=$hostLanIp LANG=C.UTF-8 LC_ALL=C.UTF-8 TERM=xterm-256color bash $wslTmpDeploy
+        & wsl -d $DistroName --exec env OPENCLAW_HOST_IP=$hostLanIp OPENCLAW_WSL_DISTRO=$DistroName LANG=C.UTF-8 LC_ALL=C.UTF-8 TERM=xterm-256color bash $wslTmpDeploy
         return ($LASTEXITCODE -eq 0)
     } catch {
         Write-Err "WSL 交互安装失败: $_"
