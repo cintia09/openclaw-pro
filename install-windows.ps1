@@ -1941,6 +1941,34 @@ function Remove-LiteLocalImageTag {
     }
 }
 
+function Remove-ReplacedImageIdsFromLoadOutput {
+    param(
+        $LoadOutput
+    )
+
+    if ($null -eq $LoadOutput) { return }
+
+    $oldImageIds = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($line in $LoadOutput) {
+        $text = [string]$line
+        if ([string]::IsNullOrWhiteSpace($text)) { continue }
+        $match = [regex]::Match($text, 'renaming the old one with ID\s+([^\s]+)\s+to empty string', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        if (-not $match.Success) { continue }
+        $oldId = $match.Groups[1].Value.Trim()
+        if ([string]::IsNullOrWhiteSpace($oldId)) { continue }
+        [void]$oldImageIds.Add($oldId)
+    }
+
+    foreach ($oldId in $oldImageIds) {
+        try { & docker image rm $oldId 2>$null | Out-Null } catch { }
+        if ($LASTEXITCODE -eq 0) {
+            Write-Info "已清理被替换的旧镜像：$oldId"
+        } else {
+            Write-Warn "旧镜像仍被占用，跳过清理：$oldId"
+        }
+    }
+}
+
 # --- Port availability check --------------------------------------------------
 function Test-PortAvailable {
     param(
@@ -4514,6 +4542,7 @@ function Main {
                         # 检查镜像是否加载成功（尝试过多种 tag 修正后再检查）
                         $loadCheck = & docker image inspect openclaw-pro:latest 2>$null
                         if ($LASTEXITCODE -eq 0) {
+                            Remove-ReplacedImageIdsFromLoadOutput -LoadOutput $loadOutput
                             $totalSec = [math]::Floor($loadTimer.Elapsed.TotalSeconds)
                             $imageReady = $true
                             Write-OK "预构建镜像加载完成 (耗时 ${totalSec} 秒)"
@@ -5662,6 +5691,7 @@ function Main {
 
                         $chk = & docker image inspect openclaw-pro:latest 2>$null
                         if ($LASTEXITCODE -eq 0) {
+                            Remove-ReplacedImageIdsFromLoadOutput -LoadOutput $loadOutput
                             Write-OK "Release 镜像加载完成 (耗时 ${totalLoadSec} 秒)"
                             $recoverOK = $true
                         } else {
