@@ -1730,7 +1730,7 @@ create_and_start(){
     fi
   fi
 
-  # Public key injection（优先普通用户；仅在普通用户未就绪时才回退 root）
+  # Public key injection（优先普通用户；非 root 宿主机场景不再回退 root 登录）
   for keyfile in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_rsa.pub" "$HOME/.ssh/id_ecdsa.pub"; do
     [ -f "$keyfile" ] || continue
     if [ "$user_ready" = "true" ]; then
@@ -1743,7 +1743,7 @@ create_and_start(){
       fi
       continue
     fi
-    if docker exec "$CONTAINER_NAME" bash -c "chmod 700 /root 2>/dev/null || true; mkdir -p /root/.ssh && chmod 700 /root/.ssh" >/dev/null 2>&1 \
+    if [ "$host_user" = "root" ] && docker exec "$CONTAINER_NAME" bash -c "chmod 700 /root 2>/dev/null || true; mkdir -p /root/.ssh && chmod 700 /root/.ssh" >/dev/null 2>&1 \
       && docker cp "$keyfile" "$CONTAINER_NAME:/root/.ssh/authorized_keys.tmp" >/dev/null 2>&1 \
       && docker exec "$CONTAINER_NAME" bash -c "touch /root/.ssh/authorized_keys && while IFS= read -r k; do [ -z \"\$k\" ] && continue; grep -qxF \"\$k\" /root/.ssh/authorized_keys || echo \"\$k\" >> /root/.ssh/authorized_keys; done < /root/.ssh/authorized_keys.tmp && chmod 600 /root/.ssh/authorized_keys && test -s /root/.ssh/authorized_keys && rm -f /root/.ssh/authorized_keys.tmp" >/dev/null 2>&1; then
       key_injected="true"
@@ -1763,7 +1763,7 @@ create_and_start(){
           key_injected="true"
           ssh_login_user="$host_user"
         fi
-      elif docker exec "$CONTAINER_NAME" bash -c "chmod 700 /root 2>/dev/null || true; mkdir -p /root/.ssh && chmod 700 /root/.ssh" >/dev/null 2>&1 \
+      elif [ "$host_user" = "root" ] && docker exec "$CONTAINER_NAME" bash -c "chmod 700 /root 2>/dev/null || true; mkdir -p /root/.ssh && chmod 700 /root/.ssh" >/dev/null 2>&1 \
         && docker cp "$auto_pub" "$CONTAINER_NAME:/root/.ssh/authorized_keys.tmp" >/dev/null 2>&1 \
         && docker exec "$CONTAINER_NAME" bash -c "touch /root/.ssh/authorized_keys && while IFS= read -r k; do [ -z \"\$k\" ] && continue; grep -qxF \"\$k\" /root/.ssh/authorized_keys || echo \"\$k\" >> /root/.ssh/authorized_keys; done < /root/.ssh/authorized_keys.tmp && chmod 600 /root/.ssh/authorized_keys && test -s /root/.ssh/authorized_keys && rm -f /root/.ssh/authorized_keys.tmp" >/dev/null 2>&1; then
         key_injected="true"
