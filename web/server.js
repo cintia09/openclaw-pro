@@ -1207,9 +1207,13 @@ function upsertProviderModelEntry(targetProviders, provName, modId, options = {}
   if (!targetProviders[provName]) return;
   if (!targetProviders[provName].models) targetProviders[provName].models = [];
   const existingIdx = targetProviders[provName].models.findIndex(m => m.id === modId);
-  const catalogHit = lookupModelCapabilities(provName, modId);
+  const catalogHit = options.resolvedCatalogHit !== undefined
+    ? options.resolvedCatalogHit
+    : lookupModelCapabilities(provName, modId);
   const usePendingEntry = !!options.deferInferredValidation && catalogHit && !catalogHit._catalogUnavailable && catalogHit._inferred;
-  const baseEntry = usePendingEntry ? buildSafePendingModelEntry(modId) : buildModelEntry(provName, modId);
+  const baseEntry = options.resolvedEntry
+    ? { ...options.resolvedEntry }
+    : (usePendingEntry ? buildSafePendingModelEntry(modId) : buildModelEntry(provName, modId));
   const entry = applyModelFieldOverrides(baseEntry, options.fieldOverrides);
   if (existingIdx === -1) {
     targetProviders[provName].models.push(entry);
@@ -6223,6 +6227,25 @@ app.post('/api/ai/config', async (req, res) => {
     const errors = [];
     const deferredValidationJobs = [];
     const deferredValidationModels = new Set();
+    const catalogHitCache = new Map();
+    const builtModelEntryCache = new Map();
+    const getModelCacheKey = (provName, modId) => `${provName}/${modId}`;
+    const getCachedCatalogHit = (provName, modId) => {
+      const key = getModelCacheKey(provName, modId);
+      if (!catalogHitCache.has(key)) {
+        catalogHitCache.set(key, lookupModelCapabilities(provName, modId));
+      }
+      return catalogHitCache.get(key);
+    };
+    const getCachedModelEntry = (provName, modId) => {
+      const key = getModelCacheKey(provName, modId);
+      if (!builtModelEntryCache.has(key)) {
+        builtModelEntryCache.set(key, buildModelEntry(provName, modId));
+      }
+      const cached = builtModelEntryCache.get(key);
+      return cached ? { ...cached } : cached;
+    };
+
     for (const { model, roles } of allModelsToSave.values()) {
       if (!model || !model.includes('/')) continue;
       const role = Array.from(roles).join(' / ');
@@ -6235,7 +6258,7 @@ app.post('/api/ai/config', async (req, res) => {
       }
       // 检查模型是否在目录中被支持
       const [provName, modId] = model.split('/');
-      const catalogHit = lookupModelCapabilities(provName, modId);
+      const catalogHit = getCachedCatalogHit(provName, modId);
 
       if (!catalogHit) {
         // 完全未找到 - 可能是全新模型或拼写错误
@@ -6301,8 +6324,12 @@ app.post('/api/ai/config', async (req, res) => {
     // 辅助：确保 provider 的 models 数组中包含指定 model 条目
     // 使用 OpenClaw 内置模型目录自动探测能力
     const ensureModelEntry = (target, provName, modId) => {
+      const cacheKey = `${provName}/${modId}`;
+      const deferred = deferredValidationModels.has(cacheKey);
       upsertProviderModelEntry(target, provName, modId, {
-        deferInferredValidation: deferredValidationModels.has(`${provName}/${modId}`)
+        deferInferredValidation: deferred,
+        resolvedCatalogHit: getCachedCatalogHit(provName, modId),
+        resolvedEntry: deferred ? buildSafePendingModelEntry(modId) : getCachedModelEntry(provName, modId)
       });
     };
 
