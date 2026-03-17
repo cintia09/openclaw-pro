@@ -3565,7 +3565,12 @@ async function loadDeviceManagement(forceConnectedRefresh = false) {
     }
   }
   if (cmdNoteEl) {
-    cmdNoteEl.textContent = cmdRes.tlsNote || '命令会根据当前 HTTPS 配置决定是否保留 NODE_TLS_REJECT_UNAUTHORIZED=0；无法可靠判断时会保守保留。';
+    const noteParts = [];
+    noteParts.push(cmdRes.tlsNote || '命令会根据当前 HTTPS 配置决定是否保留 NODE_TLS_REJECT_UNAUTHORIZED=0；无法可靠判断时会保守保留。');
+    if (cmdRes.nodeBgDir) {
+      noteParts.push(`后台模式会为当前网关使用独立目录 ${cmdRes.nodeBgDir}，不同网关可同时运行。`);
+    }
+    cmdNoteEl.textContent = noteParts.join(' ');
   }
 
   // 在线节点列表
@@ -3731,7 +3736,7 @@ function renderPairedList(r, connRes) {
     const liveNode = connectedIndex.get(d.deviceId || '') || null;
     const isConnected = Boolean(liveNode?.connected);
     const liveStatus = isConnected
-      ? '<span class="muted small" style="color:#3fb950">在线，取消配对会立即断开</span>'
+      ? '<span class="muted small" style="color:#3fb950">在线，取消配对后当前会话会失效；远端后台进程不会自动退出</span>'
       : '<span class="muted small">离线，取消配对仅删除配对记录</span>';
     return '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);flex-wrap:wrap">'
       + `<span style="color:${isConnected ? '#3fb950' : '#8b949e'};font-size:14px">●</span>`
@@ -3779,12 +3784,12 @@ async function unpairDevice(deviceId, opts = {}) {
   const targetName = String(opts.displayName || '').trim();
   const label = targetName ? `“${targetName}”` : '该设备';
   const message = connected
-    ? `确定取消${label}的配对吗？\n\n该节点当前在线，确认后会立即断开连接，并删除配对关系。`
+    ? `确定取消${label}的配对吗？\n\n该节点当前在线，确认后会删除配对关系，当前连接会失效。\n如果远端是后台运行，远端命令不会自动退出，仍会继续重试连接。`
     : `确定取消${label}的配对吗？\n\n该设备当前离线，确认后只会删除配对关系。`;
   if (!confirm(message)) return;
   const r = await api('/api/node/unpair', { method: 'POST', body: { deviceId } });
   if (r.success) {
-    toast(r.disconnected ? '已取消配对并断开在线节点' : '已取消配对');
+    toast(r.disconnected ? '已取消配对；当前连接已失效，远端后台命令需手动停止或重新配对' : '已取消配对');
     loadDeviceManagement();
   } else {
     toast('操作失败', r.error || '');

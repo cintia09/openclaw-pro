@@ -1957,6 +1957,17 @@ function shellSingleQuote(value) {
   return `'${String(value || '').replace(/'/g, `'"'"'`)}'`;
 }
 
+function getNodeGatewayInstanceKey(host, port) {
+  const normalizedHost = String(host || '').trim().toLowerCase();
+  const normalizedPort = Number(port || 0) || 0;
+  const hostSlug = normalizedHost
+    .replace(/[^a-z0-9]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase() || 'gateway';
+  const hash = crypto.createHash('sha256').update(`${normalizedHost}:${normalizedPort}`).digest('hex').slice(0, 10);
+  return `${hostSlug}-${normalizedPort || 'default'}-${hash}`;
+}
+
 // ============================================================
 // Docker config
 // ============================================================
@@ -4744,6 +4755,13 @@ app.get('/api/node/setup-command', (req, res) => {
     const execSecurity = cfg?.tools?.exec?.security || 'full';
     const tlsEnvPrefix = tlsMode.disableVerify ? 'NODE_TLS_REJECT_UNAUTHORIZED=0 ' : '';
     const tlsEnvWindows = tlsMode.disableVerify ? "$env:NODE_TLS_REJECT_UNAUTHORIZED='0'; " : '';
+    const gatewayInstanceKey = getNodeGatewayInstanceKey(host, gatewayTlsPort);
+    const nodeDirDisplay = `~/.openclaw/nodes/${gatewayInstanceKey}`;
+    const nodeLogPathDisplay = `${nodeDirDisplay}/node-host.log`;
+    const nodeStopCmd = `if [ -f ${nodeDirDisplay}/node-host.pid ]; then kill "$(cat ${nodeDirDisplay}/node-host.pid)"; fi`;
+    const nodeDirWindowsDisplay = `%USERPROFILE%\\.openclaw\\nodes\\${gatewayInstanceKey}`;
+    const nodeLogPathWindowsDisplay = `${nodeDirWindowsDisplay}\\node-host.log`;
+    const nodeStopCmdWindows = `$pidFile = Join-Path $env:USERPROFILE ".openclaw\\nodes\\${gatewayInstanceKey}\\node-host.pid"; if (Test-Path $pidFile) { Stop-Process -Id ([int](Get-Content $pidFile | Select-Object -First 1)) }`;
 
     // Linux/macOS: auto-configure node host exec security via openclaw.json before launch
     const initCmd = `mkdir -p ~/.openclaw && cat > ~/.openclaw/openclaw.json << 'NODEEOF'\n{"tools":{"exec":{"security":"${execSecurity}"}}}\nNODEEOF`;
@@ -4751,10 +4769,11 @@ app.get('/api/node/setup-command', (req, res) => {
 
     const bashRunner = [
       'set -eu',
-      'mkdir -p ~/.openclaw',
-      'pid_file="$HOME/.openclaw/node-host.pid"',
-      'runner_file="$HOME/.openclaw/node-host-runner.sh"',
-      'log_file="$HOME/.openclaw/node-host.log"',
+      `node_dir="$HOME/.openclaw/nodes/${gatewayInstanceKey}"`,
+      'mkdir -p "$node_dir"',
+      'pid_file="$node_dir/node-host.pid"',
+      'runner_file="$node_dir/node-host-runner.sh"',
+      'log_file="$node_dir/node-host.log"',
       'if [ -f "$pid_file" ]; then',
       '  old_pid="$(cat "$pid_file" 2>/dev/null || true)"',
       '  if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then',
@@ -4767,8 +4786,19 @@ app.get('/api/node/setup-command', (req, res) => {
       'cat > "$runner_file" <<\'NODEBG\'',
       '#!/usr/bin/env bash',
       'set -eu',
-      'echo $$ > "$HOME/.openclaw/node-host.pid"',
-      'trap \'rm -f "$HOME/.openclaw/node-host.pid"\' EXIT INT TERM',
+      `node_dir="$HOME/.openclaw/nodes/${gatewayInstanceKey}"`,
+      'mkdir -p "$node_dir"',
+      'echo $$ > "$node_dir/node-host.pid"',
+      'child=""',
+      'cleanup() {',
+      '  if [ -n "${child:-}" ] && kill -0 "$child" 2>/dev/null; then',
+      '    kill -TERM "$child" 2>/dev/null || true',
+      '    sleep 2',
+      '    kill -KILL "$child" 2>/dev/null || true',
+      '  fi',
+      '  rm -f "$node_dir/node-host.pid"',
+      '}',
+      'trap cleanup EXIT INT TERM',
       'max_session="${OPENCLAW_NODE_MAX_SESSION_SEC:-900}"',
       'while true; do',
       `  ${runCmd} &`,
@@ -4785,15 +4815,17 @@ app.get('/api/node/setup-command', (req, res) => {
       '    sleep 5',
       '  done',
       '  wait "$child" 2>/dev/null || true',
+      '  child=""',
       '  sleep 5',
       'done',
       'NODEBG',
       'chmod +x "$runner_file"',
       'nohup bash "$runner_file" > "$log_file" 2>&1 </dev/null &',
-      'echo "✅ Node 已在后台启动（单实例模式），日志: ~/.openclaw/node-host.log"'
+      `echo "✅ Node 已在后台启动（多网关隔离模式），日志: ${nodeLogPathDisplay}"`,
+      `echo "🛑 停止当前网关: ${nodeStopCmd}"`
     ].join('\n');
     const windowsRunner = [
-      '$d = Join-Path $env:USERPROFILE ".openclaw"',
+      `$d = Join-Path $env:USERPROFILE ".openclaw\\nodes\\${gatewayInstanceKey}"`,
       'if (!(Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }',
       '$pidFile = Join-Path $d "node-host.pid"',
       '$runnerFile = Join-Path $d "node-host-runner.ps1"',
@@ -4806,7 +4838,8 @@ app.get('/api/node/setup-command', (req, res) => {
       `$runner = @'\n$ErrorActionPreference = "Continue"\n$pid = $PID\nSet-Content -Path "${'${pidFile}'}" -Value $pid -Encoding ASCII\ntry {\n  if ($env:OPENCLAW_NODE_MAX_SESSION_SEC) { $maxSession = [int]$env:OPENCLAW_NODE_MAX_SESSION_SEC } else { $maxSession = 900 }\n  while ($true) {\n    ${tlsMode.disableVerify ? "$env:NODE_TLS_REJECT_UNAUTHORIZED='0'\n    " : ''}$env:OPENCLAW_GATEWAY_TOKEN='${token}'\n    $proc = Start-Process openclaw -ArgumentList 'node','run','--host','${host}','--port','${gatewayTlsPort}','--tls' -PassThru -WindowStyle Hidden\n    $startedAt = Get-Date\n    while (-not $proc.HasExited) {\n      if ($maxSession -gt 0 -and ((Get-Date) - $startedAt).TotalSeconds -ge $maxSession) {\n        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue\n        break\n      }\n      Start-Sleep 5\n      $proc.Refresh()\n    }\n    Start-Sleep 5\n  }\n} finally {\n  Remove-Item "${'${pidFile}'}" -Force -ErrorAction SilentlyContinue\n}\n'@`,
       'Set-Content -Path $runnerFile -Value $runner -Encoding UTF8',
       `Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File',$runnerFile -RedirectStandardOutput $logFile -RedirectStandardError $logFile | Out-Null`,
-      'Write-Host "✅ Node 已在后台启动（单实例模式），日志: $logFile"'
+      `Write-Host "✅ Node 已在后台启动（多网关隔离模式），日志: ${nodeLogPathWindowsDisplay}"`,
+      `Write-Host "🛑 停止当前网关: ${nodeStopCmdWindows}"`
     ].join('\n');
 
     const command = `${initCmd}\n${runCmd}`;
@@ -4818,7 +4851,7 @@ app.get('/api/node/setup-command', (req, res) => {
 
     const bgCmdWindows = `$d = "$env:USERPROFILE\\.openclaw"; if (!(Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }; '{"tools":{"exec":{"security":"${execSecurity}"}}}' | Set-Content "$d\\openclaw.json" -Encoding UTF8\n${windowsRunner}`;
 
-    res.json({ success: true, command, commandWindows, bgCmd, bgCmdWindows, hasToken: true, host, port: gatewayTlsPort, tlsNote: tlsMode.note, tlsBypass: tlsMode.disableVerify });
+    res.json({ success: true, command, commandWindows, bgCmd, bgCmdWindows, hasToken: true, host, port: gatewayTlsPort, tlsNote: tlsMode.note, tlsBypass: tlsMode.disableVerify, gatewayInstanceKey, nodeBgDir: nodeDirDisplay, nodeBgLogPath: nodeLogPathDisplay, nodeBgStopCmd: nodeStopCmd, nodeBgDirWindows: nodeDirWindowsDisplay, nodeBgLogPathWindows: nodeLogPathWindowsDisplay, nodeBgStopCmdWindows: nodeStopCmdWindows });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
