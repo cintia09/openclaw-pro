@@ -920,6 +920,10 @@ web_is_healthy() {
 
 WEB_UNHEALTHY_STREAK=0
 WEB_RESTART_THRESHOLD="${WEB_RESTART_THRESHOLD:-3}"
+WEB_CONSECUTIVE_RESTART_FAILURES=0
+WEB_ROLLBACK_THRESHOLD="${WEB_ROLLBACK_THRESHOLD:-3}"
+WEB_PANEL_BACKUP_DIR="/root/.openclaw/web-panel-backup"
+ROLLBACK_COOLDOWN_UNTIL=0
 
 current_operation_type() {
     local lock_file="/root/.openclaw/locks/operation.lock"
@@ -971,6 +975,77 @@ restart_web_panel() {
     fi
     stop_web_panel_processes
     start_web_panel
+}
+
+# 等待面板启动成功（最多 15 秒）
+web_panel_started_ok() {
+    local i
+    for i in 1 2 3 4 5; do
+        sleep 3
+        if web_is_healthy; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# 从备份回退 Web 面板文件
+rollback_web_panel() {
+    local backup_dir="$WEB_PANEL_BACKUP_DIR"
+    local meta_file="$backup_dir/.backup-meta"
+
+    if [ ! -f "$meta_file" ]; then
+        echo "[health] ROLLBACK: 无可用备份（$meta_file 不存在）"
+        return 1
+    fi
+
+    local backup_version
+    backup_version=$(jq -r '.version // "unknown"' "$meta_file" 2>/dev/null || echo "unknown")
+    echo "[health] ROLLBACK: 尝试回退到备份版本 $backup_version..."
+
+    # 最关键的是 server.js
+    local server_backup="$backup_dir/server.js"
+    if [ -f "$server_backup" ]; then
+        if node -c "$server_backup" 2>/dev/null; then
+            cp "$server_backup" /opt/openclaw-web/server.js
+            echo "[health] ROLLBACK: server.js 已恢复"
+        else
+            echo "[health] ROLLBACK: 备份的 server.js 也有语法错误，无法回退"
+            return 1
+        fi
+    else
+        echo "[health] ROLLBACK: 备份中无 server.js"
+        return 1
+    fi
+
+    # 恢复其他前端文件
+    local f target
+    for f in app.js index.html login.html login.js style.css; do
+        if [ -f "$backup_dir/$f" ]; then
+            target=$(jq -r ".files[\"$f\"] // empty" "$meta_file" 2>/dev/null)
+            if [ -n "$target" ] && [ -f "$target" ] || [ -n "$target" ]; then
+                cp "$backup_dir/$f" "$target" 2>/dev/null && echo "[health] ROLLBACK: $f 已恢复"
+            fi
+        fi
+    done
+
+    # 恢复版本号
+    if [ "$backup_version" != "unknown" ]; then
+        echo "$backup_version" > /etc/openclaw-version
+        echo "[health] ROLLBACK: 版本号恢复为 $backup_version"
+    fi
+
+    echo "[health] ROLLBACK: 文件恢复完成，重启面板..."
+    stop_web_panel_processes
+    start_web_panel
+
+    if web_panel_started_ok; then
+        echo "[health] ROLLBACK: ✅ 面板回退成功，服务已恢复"
+        return 0
+    else
+        echo "[health] ROLLBACK: ❌ 回退后面板仍无法启动"
+        return 1
+    fi
 }
 
 gateway_is_healthy() {
@@ -1119,6 +1194,7 @@ while true; do
     # 检查 Web 面板（避免单次抖动导致误重启）
     if web_is_healthy; then
         WEB_UNHEALTHY_STREAK=0
+        WEB_CONSECUTIVE_RESTART_FAILURES=0
     else
         WEB_UNHEALTHY_STREAK=$((WEB_UNHEALTHY_STREAK + 1))
         current_op="$(current_operation_type)"
@@ -1130,6 +1206,32 @@ while true; do
             echo "[health] WARNING: Web panel unhealthy for $WEB_UNHEALTHY_STREAK checks, restarting..."
             WEB_UNHEALTHY_STREAK=0
             restart_web_panel
+
+            # 检查重启是否成功（8秒内）
+            sleep 8
+            if web_is_healthy; then
+                WEB_CONSECUTIVE_RESTART_FAILURES=0
+                echo "[health] Web panel 重启成功"
+            else
+                WEB_CONSECUTIVE_RESTART_FAILURES=$((WEB_CONSECUTIVE_RESTART_FAILURES + 1))
+                echo "[health] WARNING: 重启后面板仍不健康 (连续失败 $WEB_CONSECUTIVE_RESTART_FAILURES/$WEB_ROLLBACK_THRESHOLD)"
+
+                if [ "$WEB_CONSECUTIVE_RESTART_FAILURES" -ge "$WEB_ROLLBACK_THRESHOLD" ]; then
+                    now=$(date +%s)
+                    if [ "$now" -lt "$ROLLBACK_COOLDOWN_UNTIL" ]; then
+                        echo "[health] CRITICAL: 回退冷却中，距下次尝试还有 $((ROLLBACK_COOLDOWN_UNTIL - now)) 秒"
+                    else
+                        echo "[health] CRITICAL: 面板连续 $WEB_CONSECUTIVE_RESTART_FAILURES 次重启失败，尝试版本回退..."
+                        if rollback_web_panel; then
+                            WEB_CONSECUTIVE_RESTART_FAILURES=0
+                        else
+                            echo "[health] CRITICAL: 版本回退失败，300 秒后重试"
+                            ROLLBACK_COOLDOWN_UNTIL=$((now + 300))
+                            WEB_CONSECUTIVE_RESTART_FAILURES=0
+                        fi
+                    fi
+                fi
+            fi
         fi
     fi
 

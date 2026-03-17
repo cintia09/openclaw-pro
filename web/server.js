@@ -4111,6 +4111,54 @@ const HOTPATCH_FILES = [
 ];
 
 const GITHUB_RAW_BASE = `https://raw.githubusercontent.com/${GITHUB_REPO}`;
+const WEB_PANEL_BACKUP_DIR = '/root/.openclaw/web-panel-backup';
+
+/**
+ * 热更新前备份当前文件，供 watchdog 回退使用
+ */
+function backupCurrentHotpatchFiles() {
+  try {
+    fs.mkdirSync(WEB_PANEL_BACKUP_DIR, { recursive: true });
+    const meta = { version: getCurrentVersion(), timestamp: Date.now(), files: {} };
+    for (const [, localPath] of HOTPATCH_FILES) {
+      try {
+        if (fs.existsSync(localPath)) {
+          const basename = path.basename(localPath);
+          fs.copyFileSync(localPath, path.join(WEB_PANEL_BACKUP_DIR, basename));
+          meta.files[basename] = localPath;
+        }
+      } catch {}
+    }
+    // 同时备份版本号
+    try {
+      const ver = fs.readFileSync(VERSION_FILE, 'utf8').trim();
+      if (ver) meta.backupVersion = ver;
+    } catch {}
+    fs.writeFileSync(path.join(WEB_PANEL_BACKUP_DIR, '.backup-meta'), JSON.stringify(meta, null, 2));
+    return true;
+  } catch (e) {
+    console.error('[hotpatch] 备份当前文件失败:', e.message);
+    return false;
+  }
+}
+
+/**
+ * 从备份恢复指定文件
+ */
+function restoreHotpatchFile(basename) {
+  try {
+    const metaPath = path.join(WEB_PANEL_BACKUP_DIR, '.backup-meta');
+    if (!fs.existsSync(metaPath)) return false;
+    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+    const localPath = meta.files && meta.files[basename];
+    const backupPath = path.join(WEB_PANEL_BACKUP_DIR, basename);
+    if (localPath && fs.existsSync(backupPath)) {
+      fs.copyFileSync(backupPath, localPath);
+      return true;
+    }
+  } catch {}
+  return false;
+}
 
 let hotpatchState = { status: 'idle', log: '', startedAt: 0 };
 
@@ -4131,6 +4179,13 @@ app.post('/api/update/hotpatch', async (req, res) => {
   const log = (msg) => { hotpatchState.log += msg + '\n'; console.log('[hotpatch] ' + msg); };
 
   try {
+    // 在更新任何文件前，备份当前版本供回退使用
+    if (backupCurrentHotpatchFiles()) {
+      log('已备份当前文件到 web-panel-backup/');
+    } else {
+      log('⚠ 备份当前文件失败，继续更新（回退功能不可用）');
+    }
+
     log(`${force ? '强制' : ''}从 GitHub (${branch}) 拉取最新文件...`);
     let needCaddyRestart = false;
     let needWebRestart = false;
@@ -4182,6 +4237,26 @@ app.post('/api/update/hotpatch', async (req, res) => {
       } catch (e) {
         log(`  ❌ ${ghPath}: ${e.message}`);
         hotpatchState.failed.push(ghPath);
+      }
+    }
+
+    // server.js 语法预检：写入后立即验证，失败则立即回退
+    if (hotpatchState.updated.includes('web/server.js')) {
+      try {
+        execSync('node -c /opt/openclaw-web/server.js', { timeout: 15000, stdio: 'pipe' });
+        log('  ✓ server.js 语法检查通过');
+      } catch (syntaxErr) {
+        const stderr = (syntaxErr.stderr || '').toString().trim();
+        log(`  ❌ server.js 语法错误! ${stderr}`);
+        log('  ↩ 正在从备份恢复 server.js...');
+        if (restoreHotpatchFile('server.js')) {
+          log('  ✅ server.js 已从备份恢复，跳过本次 server.js 更新');
+          hotpatchState.updated = hotpatchState.updated.filter(f => f !== 'web/server.js');
+          needWebRestart = false;
+        } else {
+          log('  ⚠ 无法从备份恢复 server.js，面板可能无法启动');
+        }
+        hotpatchState.failed.push('web/server.js (语法错误，已回退)');
       }
     }
 
