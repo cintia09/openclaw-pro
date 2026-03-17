@@ -7895,6 +7895,27 @@ function readOperationLockFromFile() {
             pid
           };
         }
+        // 对于安装/更新类型，检查子进程（task.pid）是否仍存活，避免误删锁
+        if (type === 'installing' || type === 'updating') {
+          try {
+            if (fs.existsSync(OPENCLAW_TASK_PID_FILE)) {
+              const taskPidInfo = JSON.parse(fs.readFileSync(OPENCLAW_TASK_PID_FILE, 'utf8'));
+              const taskPid = Number(taskPidInfo?.pid || 0);
+              if (taskPid > 1) {
+                try {
+                  process.kill(taskPid, 0);
+                  // 子进程仍存活，保留锁
+                  return {
+                    type,
+                    taskId: String(parsed?.taskId || ''),
+                    startedAt: Number(parsed?.startedAt || 0),
+                    pid
+                  };
+                } catch {}
+              }
+            }
+          } catch {}
+        }
         try { fs.unlinkSync(OPENCLAW_OPERATION_LOCK_FILE); } catch {}
         return null;
       }
@@ -8862,10 +8883,11 @@ app.get('/api/openclaw', async (req, res) => {
       'printf "%s" "$pid"'
     ].join('\n');
 
-    const [gatewayHealthCodeText, gatewayRuntimePid, gatewayWatchdogRunning] = await Promise.all([
+    const [gatewayHealthCodeText, gatewayRuntimePid, gatewayWatchdogRunning, externalInstallProcessDetected] = await Promise.all([
       runCommandTextAsync(LOCAL_GATEWAY_HEALTH_CHECK_CMD, 3000),
       runCommandTextAsync(gatewayPidCmd, 1200),
-      runCommandOkAsync('pgrep -f "[o]penclaw-gateway-watchdog.sh" >/dev/null 2>&1', 1200)
+      runCommandOkAsync('pgrep -f "[o]penclaw-gateway-watchdog.sh" >/dev/null 2>&1', 1200),
+      runCommandOkAsync('pgrep -f "[i]nstall-imageonly" >/dev/null 2>&1 || pgrep -f "[n]pm.*install.*openclaw" >/dev/null 2>&1', 2000)
     ]);
     const gatewayHealthCode = Number.parseInt(String(gatewayHealthCodeText || '').trim(), 10) || 0;
     const gatewayRunning = gatewayHealthCode === 200;
@@ -8931,16 +8953,23 @@ app.get('/api/openclaw', async (req, res) => {
     }
 
     if (!runtimeReady && operationState.type === 'idle' && !installTaskRunning) {
-      const recovery = await maybeTriggerOpenClawRuntimeRecovery(runtimeIssue || 'runtime-artifacts-missing');
-      if (recovery?.triggered && recovery.taskId) {
-        runtimeRecoveryTriggered = true;
-        runtimeRecoveryTaskId = recovery.taskId;
-        runtimeRecoveryReason = 'auto-runtime-recovery';
-        activeInstallTaskId = recovery.taskId;
-        activeInstallTask = installLogs[recovery.taskId] || null;
+      // 检测到外部安装进程（如用户直接运行 install-imageonly.sh 或 npm install -g openclaw），
+      // 跳过自动恢复，避免发起重复安装，同时让前端显示"安装中"而非"未安装"
+      if (externalInstallProcessDetected) {
+        operationState = { type: 'installing', taskId: '', startedAt: 0, pid: 0, external: true };
         installTaskRunning = true;
-      } else if (recovery?.reason) {
-        runtimeRecoveryReason = recovery.reason;
+      } else {
+        const recovery = await maybeTriggerOpenClawRuntimeRecovery(runtimeIssue || 'runtime-artifacts-missing');
+        if (recovery?.triggered && recovery.taskId) {
+          runtimeRecoveryTriggered = true;
+          runtimeRecoveryTaskId = recovery.taskId;
+          runtimeRecoveryReason = 'auto-runtime-recovery';
+          activeInstallTaskId = recovery.taskId;
+          activeInstallTask = installLogs[recovery.taskId] || null;
+          installTaskRunning = true;
+        } else if (recovery?.reason) {
+          runtimeRecoveryReason = recovery.reason;
+        }
       }
     }
 
