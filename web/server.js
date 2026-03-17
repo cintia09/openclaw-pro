@@ -4830,15 +4830,17 @@ app.get('/api/node/setup-command', (req, res) => {
       '$pidFile = Join-Path $d "node-host.pid"',
       '$runnerFile = Join-Path $d "node-host-runner.ps1"',
       '$logFile = Join-Path $d "node-host.log"',
+      '$errLogFile = Join-Path $d "node-host.stderr.log"',
       'if (Test-Path $pidFile) {',
       '  try { $oldPid = [int](Get-Content $pidFile -ErrorAction Stop | Select-Object -First 1); Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue } catch {}',
       '}',
       '$existing = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "^(powershell|pwsh)(\\.exe)?$" -and $_.CommandLine -match "node-host-runner\\.ps1" }',
       'foreach ($proc in @($existing)) { try { Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }',
-      `$runner = @'\n$ErrorActionPreference = "Continue"\n$pid = $PID\nSet-Content -Path "${'${pidFile}'}" -Value $pid -Encoding ASCII\ntry {\n  if ($env:OPENCLAW_NODE_MAX_SESSION_SEC) { $maxSession = [int]$env:OPENCLAW_NODE_MAX_SESSION_SEC } else { $maxSession = 900 }\n  while ($true) {\n    ${tlsMode.disableVerify ? "$env:NODE_TLS_REJECT_UNAUTHORIZED='0'\n    " : ''}$env:OPENCLAW_GATEWAY_TOKEN='${token}'\n    $proc = Start-Process openclaw -ArgumentList 'node','run','--host','${host}','--port','${gatewayTlsPort}','--tls' -PassThru -WindowStyle Hidden\n    $startedAt = Get-Date\n    while (-not $proc.HasExited) {\n      if ($maxSession -gt 0 -and ((Get-Date) - $startedAt).TotalSeconds -ge $maxSession) {\n        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue\n        break\n      }\n      Start-Sleep 5\n      $proc.Refresh()\n    }\n    Start-Sleep 5\n  }\n} finally {\n  Remove-Item "${'${pidFile}'}" -Force -ErrorAction SilentlyContinue\n}\n'@`,
+      `$runner = @'\n$ErrorActionPreference = "Continue"\n$pid = $PID\nSet-Content -Path "${'${pidFile}'}" -Value $pid -Encoding ASCII\ntry {\n  if ($env:OPENCLAW_NODE_MAX_SESSION_SEC) { $maxSession = [int]$env:OPENCLAW_NODE_MAX_SESSION_SEC } else { $maxSession = 900 }\n  while ($true) {\n    ${tlsMode.disableVerify ? "$env:NODE_TLS_REJECT_UNAUTHORIZED='0'\n    " : ''}$env:OPENCLAW_GATEWAY_TOKEN='${token}'\n    $proc = Start-Process openclaw -ArgumentList 'node','run','--host','${host}','--port','${gatewayTlsPort}','--tls' -PassThru -WindowStyle Hidden -RedirectStandardOutput "${'${logFile}'}" -RedirectStandardError "${'${errLogFile}'}"\n    $startedAt = Get-Date\n    while (-not $proc.HasExited) {\n      if ($maxSession -gt 0 -and ((Get-Date) - $startedAt).TotalSeconds -ge $maxSession) {\n        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue\n        break\n      }\n      Start-Sleep 5\n      $proc.Refresh()\n    }\n    Start-Sleep 5\n  }\n} finally {\n  Remove-Item "${'${pidFile}'}" -Force -ErrorAction SilentlyContinue\n}\n'@`,
       'Set-Content -Path $runnerFile -Value $runner -Encoding UTF8',
-      `Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File',$runnerFile -RedirectStandardOutput $logFile -RedirectStandardError $logFile | Out-Null`,
+      `Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File',$runnerFile | Out-Null`,
       `Write-Host "✅ Node 已在后台启动（多网关隔离模式），日志: ${nodeLogPathWindowsDisplay}"`,
+      `Write-Host "⚠️ 错误日志: ${nodeDirWindowsDisplay}\\node-host.stderr.log"`,
       `Write-Host "🛑 停止当前网关: ${nodeStopCmdWindows}"`
     ].join('\n');
 
