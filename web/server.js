@@ -4765,7 +4765,7 @@ app.get('/api/node/setup-command', (req, res) => {
     const nodeStopCmd = `if [ -f ${nodeDirDisplay}/node-host.pid ]; then kill "$(cat ${nodeDirDisplay}/node-host.pid)"; fi`;
     const nodeDirWindowsDisplay = `%USERPROFILE%\\.openclaw\\nodes\\${gatewayInstanceKey}`;
     const nodeLogPathWindowsDisplay = `${nodeDirWindowsDisplay}\\node-host.log`;
-    const nodeStopCmdWindows = `$pidFile = Join-Path $env:USERPROFILE '.openclaw\\nodes\\${gatewayInstanceKey}\\node-host.pid'; if (Test-Path $pidFile) { Stop-Process -Id ([int](Get-Content $pidFile | Select-Object -First 1)) -Force -ErrorAction SilentlyContinue }; Unregister-ScheduledTask -TaskName 'OpenClawNode_${gatewayInstanceKey.slice(0, 20)}' -Confirm:$false -ErrorAction SilentlyContinue`;
+    const nodeStopCmdWindows = `$pidFile = Join-Path $env:USERPROFILE '.openclaw\\nodes\\${gatewayInstanceKey}\\node-host.pid'; if (Test-Path $pidFile) { Stop-Process -Id ([int](Get-Content $pidFile | Select-Object -First 1)) -Force -ErrorAction SilentlyContinue }; schtasks /Delete /TN 'OpenClawNode_${gatewayInstanceKey.slice(0, 20)}' /F 2>$null`;
 
     // Linux/macOS: auto-configure node host exec security via openclaw.json before launch
     const initCmd = `mkdir -p ~/.openclaw && cat > ~/.openclaw/openclaw.json << 'NODEEOF'\n{"tools":{"exec":{"security":"${execSecurity}"}}}\nNODEEOF`;
@@ -4842,18 +4842,16 @@ app.get('/api/node/setup-command', (req, res) => {
       'foreach ($proc in @($existing)) { try { Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }',
       `$runner = @'\n$ErrorActionPreference = "Continue"\n$d = Join-Path $env:USERPROFILE ".openclaw\\nodes\\${gatewayInstanceKey}"\nif (!(Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }\n$pidFile = Join-Path $d "node-host.pid"\n$logFile = Join-Path $d "node-host.log"\n$errLogFile = Join-Path $d "node-host.stderr.log"\nSet-Content -Path $pidFile -Value $PID -Encoding ASCII\nfunction Resolve-OpenClawCommand {\n  $candidates = @('openclaw.cmd', 'openclaw.exe', 'openclaw')\n  foreach ($candidate in $candidates) {\n    try {\n      $cmd = Get-Command $candidate -ErrorAction Stop | Select-Object -First 1\n      if ($cmd -and $cmd.Source) { return $cmd.Source }\n    } catch {}\n  }\n  $fallbacks = @(\n    (Join-Path $env:APPDATA 'npm\\openclaw.cmd'),\n    (Join-Path $env:APPDATA 'npm\\openclaw.exe'),\n    (Join-Path $env:LOCALAPPDATA 'Programs\\nodejs\\openclaw.cmd'),\n    (Join-Path $env:ProgramFiles 'nodejs\\openclaw.cmd')\n  )\n  foreach ($path in $fallbacks) {\n    if ($path -and (Test-Path $path)) { return $path }\n  }\n  throw 'openclaw CLI not found in PATH or common Windows install paths'\n}\nif ($env:OPENCLAW_NODE_MAX_SESSION_SEC) { $maxSession = [int]$env:OPENCLAW_NODE_MAX_SESSION_SEC } else { $maxSession = 900 }\nwhile ($true) {\n  try {\n    ${tlsMode.disableVerify ? "$env:NODE_TLS_REJECT_UNAUTHORIZED='0'\n    " : ''}$env:OPENCLAW_GATEWAY_TOKEN='${token}'\n    try {\n      $openclawCmd = Resolve-OpenClawCommand\n      $proc = Start-Process -FilePath $openclawCmd -ArgumentList 'node','run','--host','${host}','--port','${gatewayTlsPort}','--tls' -PassThru -WindowStyle Hidden -RedirectStandardOutput $logFile -RedirectStandardError $errLogFile\n    } catch {\n      Add-Content -Path $errLogFile -Value ("[{0}] start failed: {1}" -f (Get-Date -Format s), $_.Exception.Message)\n      Start-Sleep 5\n      continue\n    }\n    $startedAt = Get-Date\n    while (-not $proc.HasExited) {\n      if ($maxSession -gt 0 -and ((Get-Date) - $startedAt).TotalSeconds -ge $maxSession) {\n        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue\n        break\n      }\n      Start-Sleep 5\n      $proc.Refresh()\n    }\n    Add-Content -Path $errLogFile -Value ("[{0}] exited code={1}, reconnecting..." -f (Get-Date -Format s), $proc.ExitCode)\n  } catch {\n    try { Add-Content -Path $errLogFile -Value ("[{0}] runner error: {1}" -f (Get-Date -Format s), $_.Exception.Message) } catch {}\n  }\n  Start-Sleep 5\n}\n'@`,
       'Set-Content -Path $runnerFile -Value $runner -Encoding UTF8',
-      // Register Scheduled Task for auto-recovery on logon / crash
+      // Register Scheduled Task for auto-recovery on logon (schtasks works without admin)
       `$taskName = 'OpenClawNode_${gatewayInstanceKey.slice(0, 20)}'`,
-      'Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue',
-      '$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument ("-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `\"" + $runnerFile + "`\"")',
-      '$trigger = New-ScheduledTaskTrigger -AtLogOn',
-      '$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartInterval (New-TimeSpan -Minutes 1) -RestartCount 9999',
-      'try { Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null } catch { Write-Host "⚠️ 计划任务注册失败（需管理员权限才能开机自启）: $_" }',
+      'schtasks /Delete /TN $taskName /F 2>$null',
+      'try { schtasks /Create /TN $taskName /TR ("powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `\"" + $runnerFile + "`\"") /SC ONLOGON /RL LIMITED /F 2>&1 | Out-Null; $taskOk = $true } catch { $taskOk = $false }',
+      'if (-not $taskOk) { Write-Host "⚠️ 计划任务注册失败，后台进程仍会运行，但重启后需手动执行" }',
       // Start the runner now
       `Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File',$runnerFile | Out-Null`,
       `Write-Host "✅ Node 已在后台启动（多网关隔离模式），日志: ${nodeLogPathWindowsDisplay}"`,
       `Write-Host "⚠️ 错误日志: ${nodeDirWindowsDisplay}\\node-host.stderr.log"`,
-      `Write-Host "📌 已注册计划任务 '$taskName'，登录时自动启动、崩溃后自动恢复"`,
+      'if ($taskOk) { Write-Host "📌 已注册计划任务 \'$taskName\'，登录时自动启动" }',
       `Write-Host "🛑 停止当前网关: ${nodeStopCmdWindows}"`
     ].join('\n');
 
