@@ -5247,10 +5247,16 @@ async function refreshNodeStatusSnapshot(options = {}) {
           : (prev.connected ? now : Number(prev.offlineAtMs || 0));
         let ipAddress = String(prev.ipAddress || '').trim();
         if (connected) {
-          const shouldRefreshIp = forceIpRefresh || !prev.connected || !String(prev.ipAddress || '').trim();
-          if (shouldRefreshIp && gwNode?.nodeId) {
-            const refreshedIp = await fetchNodeIpv4Address(gwNode.nodeId, gwNode?.platform || entry.platform || '');
-            ipAddress = String(refreshedIp || prev.ipAddress || '').trim();
+          // Prefer gateway-reported remoteIp (most reliable: actual TCP connection IP)
+          const gwRemoteIp = String(gwNode?.remoteIp || '').trim();
+          if (gwRemoteIp && gwRemoteIp !== '127.0.0.1' && !gwRemoteIp.startsWith('::')) {
+            ipAddress = gwRemoteIp;
+          } else {
+            const shouldRefreshIp = forceIpRefresh || !prev.connected || !ipAddress;
+            if (shouldRefreshIp && gwNode?.nodeId) {
+              const refreshedIp = await fetchNodeIpv4Address(gwNode.nodeId, gwNode?.platform || entry.platform || '');
+              ipAddress = String(refreshedIp || prev.ipAddress || '').trim();
+            }
           }
         }
         nextNodes[entry.deviceId] = {
