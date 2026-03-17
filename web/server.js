@@ -4683,7 +4683,7 @@ async function fetchNodeIpv4Address(nodeId, platform) {
     if (normalizedPlatform.startsWith('darwin') && ifconfigBin) {
       command = [ifconfigBin];
     } else if (ipBin) {
-      command = [ipBin, '-4', 'addr', 'show'];
+      command = [ipBin, '-4', 'route', 'get', '1'];
     } else if (ipconfigBin) {
       command = [ipconfigBin];
     } else if (ifconfigBin) {
@@ -4718,8 +4718,12 @@ async function fetchNodeIpv4Address(nodeId, platform) {
     const run = runPayload && typeof runPayload === 'object' ? (runPayload.payload || runPayload) : {};
     const output = [run.stdout, run.stderr, run.output].filter(v => typeof v === 'string' && v.trim()).join('\n');
     if (ipBin) {
+      // "ip -4 route get 1" output: "1.0.0.0 via X.X.X.X dev ethN src 10.208.168.108 ..."
+      const routeMatch = String(output).match(/\bsrc\s+(\d{1,3}(?:\.\d{1,3}){3})\b/);
+      if (routeMatch && routeMatch[1] !== '127.0.0.1') return routeMatch[1];
+      // Fallback: parse "ip addr" style output
       const matches = Array.from(String(output).matchAll(/\binet\s+(\d{1,3}(?:\.\d{1,3}){3})\b/g)).map((m) => m[1]);
-      const picked = matches.find((ip) => ip !== '127.0.0.1');
+      const picked = matches.find((ip) => ip !== '127.0.0.1' && !ip.startsWith('169.254.') && !ip.startsWith('172.17.') && !ip.startsWith('172.18.'));
       return picked || '';
     }
     if (ifconfigBin && normalizedPlatform.startsWith('darwin')) {
