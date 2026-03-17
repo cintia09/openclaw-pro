@@ -1393,9 +1393,6 @@ function getOpenClawProviderModels(providerName) {
     input: m.input
   }));
 }
-    input: m.input
-  }));
-}
 
 // 启动时确保 models.json 和 openclaw.json 中的 models 数组包含已配置的模型
 // 使用 OpenClaw 内置模型目录自动探测能力
