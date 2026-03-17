@@ -875,7 +875,272 @@ async function testModelAvailability(provider, modelId, apiKey, baseUrl) {
   }
 }
 
+const INFERRED_MODEL_VALIDATION_MAX_ATTEMPTS = 8;
+const INFERRED_MODEL_VALIDATION_TOTAL_TIMEOUT_MS = 3 * 60 * 1000;
+const INFERRED_MODEL_VALIDATION_RETRY_DELAY_MS = 15000;
+const INFERRED_MODEL_VALIDATION_BUSY_DELAY_MS = 10000;
+const INFERRED_MODEL_FETCH_TIMEOUT_MS = 25000;
 const pendingInferredModelValidationJobs = new Map();
+
+function pickPositiveNumber(...values) {
+  for (const value of values) {
+    const num = Number(value);
+    if (Number.isFinite(num) && num > 0) return Math.round(num);
+  }
+  return undefined;
+}
+
+function pickBooleanValue(...values) {
+  for (const value of values) {
+    if (typeof value === 'boolean') return value;
+  }
+  return undefined;
+}
+
+function pickStringValue(...values) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function normalizeInputModalities(...values) {
+  const seen = new Set();
+  const result = [];
+  const pushValue = (value) => {
+    if (!value) return;
+    const normalized = String(value).trim().toLowerCase();
+    if (!normalized) return;
+    const mapped = normalized === 'vision'
+      ? 'image'
+      : normalized === 'images'
+        ? 'image'
+        : normalized === 'texts'
+          ? 'text'
+          : normalized;
+    if (!seen.has(mapped)) {
+      seen.add(mapped);
+      result.push(mapped);
+    }
+  };
+
+  for (const value of values) {
+    if (Array.isArray(value)) {
+      value.forEach(pushValue);
+    } else if (value && typeof value === 'object') {
+      Object.entries(value).forEach(([key, enabled]) => {
+        if (enabled) pushValue(key);
+      });
+    } else {
+      pushValue(value);
+    }
+  }
+
+  return result.length > 0 ? result : undefined;
+}
+
+function normalizeProviderModelId(providerName, rawId) {
+  if (!rawId) return '';
+  let normalized = String(rawId).trim();
+  if (!normalized) return '';
+  if (normalized.startsWith('models/')) normalized = normalized.slice('models/'.length);
+  const prefix = `${providerName}/`;
+  if (normalized.toLowerCase().startsWith(prefix.toLowerCase())) {
+    normalized = normalized.slice(prefix.length);
+  }
+  return normalized;
+}
+
+function buildRuntimeModelFieldOverrides(providerName, remoteModel) {
+  if (!remoteModel || typeof remoteModel !== 'object') return null;
+
+  const contextWindow = pickPositiveNumber(
+    remoteModel.contextWindow,
+    remoteModel.context_window,
+    remoteModel.contextLength,
+    remoteModel.context_length,
+    remoteModel.maxContextTokens,
+    remoteModel.max_context_tokens,
+    remoteModel.inputTokenLimit,
+    remoteModel.input_token_limit,
+    remoteModel.architecture?.context_length,
+    remoteModel.architecture?.max_context_length,
+    remoteModel.top_provider?.context_length,
+    remoteModel.capabilities?.contextWindow,
+    remoteModel.capabilities?.context_window,
+    remoteModel.limits?.contextWindow,
+    remoteModel.limits?.context_window,
+    remoteModel.metadata?.contextWindow,
+    remoteModel.metadata?.context_window
+  );
+
+  const maxTokens = pickPositiveNumber(
+    remoteModel.maxTokens,
+    remoteModel.max_tokens,
+    remoteModel.maxOutputTokens,
+    remoteModel.max_output_tokens,
+    remoteModel.outputTokenLimit,
+    remoteModel.output_token_limit,
+    remoteModel.top_provider?.max_completion_tokens,
+    remoteModel.capabilities?.maxTokens,
+    remoteModel.capabilities?.max_tokens,
+    remoteModel.limits?.maxTokens,
+    remoteModel.limits?.max_tokens,
+    remoteModel.metadata?.maxTokens,
+    remoteModel.metadata?.max_tokens
+  );
+
+  const reasoning = pickBooleanValue(
+    remoteModel.reasoning,
+    remoteModel.supportsReasoning,
+    remoteModel.supports_reasoning,
+    remoteModel.reasoning_enabled,
+    remoteModel.capabilities?.reasoning,
+    remoteModel.capabilities?.supportsReasoning,
+    remoteModel.features?.reasoning
+  );
+
+  const api = sanitizeApiValue(
+    pickStringValue(
+      remoteModel.api,
+      remoteModel.apiType,
+      remoteModel.api_type,
+      remoteModel.type
+    ),
+    providerName
+  );
+
+  const input = normalizeInputModalities(
+    remoteModel.input,
+    remoteModel.input_modalities,
+    remoteModel.supported_input_modalities,
+    remoteModel.modalities?.input,
+    remoteModel.capabilities?.input,
+    remoteModel.capabilities?.modalities,
+    remoteModel.features?.input
+  );
+
+  const overrides = {
+    name: pickStringValue(remoteModel.displayName, remoteModel.name),
+    api,
+    reasoning,
+    input,
+    contextWindow,
+    maxTokens
+  };
+
+  return Object.fromEntries(Object.entries(overrides).filter(([, value]) => value !== undefined));
+}
+
+function applyModelFieldOverrides(baseEntry, overrides) {
+  if (!overrides || typeof overrides !== 'object') return baseEntry;
+  const next = { ...baseEntry };
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) continue;
+    next[key] = value;
+  }
+  return next;
+}
+
+function shouldRetryInferredModelValidation(errorText) {
+  const text = String(errorText || '').toLowerCase();
+  if (!text) return false;
+  if (/http 400|http 401|http 403|http 404|invalid api key|模型不可用|model_not_found|not found/.test(text)) return false;
+  return /timeout|timed out|econn|socket|network|fetch failed|http 429|http 500|http 502|http 503|http 504|temporar|rate limit|unavailable/.test(text);
+}
+
+async function fetchRemoteProviderModels(provider, apiKey, baseUrl) {
+  const endpoint = baseUrl || getDefaultBaseUrl(provider);
+  if (!endpoint) return { ok: false, error: '未找到 API 端点', models: [] };
+  if (provider === 'anthropic') return { ok: false, error: 'Anthropic 不支持 /models 端点', models: [] };
+
+  const modelsUrl = provider === 'ollama' ? `${endpoint}/api/tags` : `${endpoint}/models`;
+  const headers = {};
+  let fetchUrl = modelsUrl;
+
+  if (provider === 'gemini') {
+    if (!apiKey) return { ok: false, error: 'Gemini 缺少 API Key', models: [] };
+    fetchUrl = `${modelsUrl}?key=${encodeURIComponent(apiKey)}`;
+  } else if (!['ollama', 'lmstudio', 'vllm'].includes(provider) && apiKey) {
+    headers['Authorization'] = `Bearer ${apiKey}`;
+  }
+
+  try {
+    const response = await fetch(fetchUrl, {
+      headers,
+      signal: AbortSignal.timeout(INFERRED_MODEL_FETCH_TIMEOUT_MS)
+    });
+
+    if (!response.ok) {
+      return { ok: false, error: `HTTP ${response.status}`, models: [] };
+    }
+
+    const data = await response.json();
+    const rawModels = provider === 'ollama'
+      ? (data.models || [])
+      : provider === 'gemini'
+        ? (data.models || [])
+        : (data.data || data.models || []);
+
+    const models = rawModels.map((rawModel) => {
+      const rawId = rawModel?.id || rawModel?.name || rawModel?.model || rawModel?.slug;
+      const modelId = normalizeProviderModelId(provider, rawId);
+      if (!modelId) return null;
+      return {
+        id: modelId,
+        raw: rawModel,
+        overrides: buildRuntimeModelFieldOverrides(provider, rawModel)
+      };
+    }).filter(Boolean);
+
+    return { ok: true, models };
+  } catch (err) {
+    return { ok: false, error: err?.message || '获取模型列表失败', models: [] };
+  }
+}
+
+function formatRuntimeModelOverrides(overrides) {
+  if (!overrides || typeof overrides !== 'object') return '无额外参数';
+  const parts = [];
+  if (overrides.reasoning !== undefined) parts.push(`reasoning=${overrides.reasoning}`);
+  if (overrides.api) parts.push(`api=${overrides.api}`);
+  if (overrides.contextWindow) parts.push(`ctx=${overrides.contextWindow}`);
+  if (overrides.maxTokens) parts.push(`max=${overrides.maxTokens}`);
+  if (Array.isArray(overrides.input) && overrides.input.length > 0) parts.push(`input=${overrides.input.join(',')}`);
+  return parts.length > 0 ? parts.join(', ') : '无额外参数';
+}
+
+const pendingDeferredGatewayRestartRequests = new Map();
+
+function queueGatewayRestartWhenIdle(source = 'manual-deferred', options = {}) {
+  const key = String(source || 'manual-deferred');
+  if (pendingDeferredGatewayRestartRequests.has(key)) return;
+
+  const pollMs = Math.max(1000, Number(options.pollMs || 5000));
+  const maxWaitMs = Math.max(pollMs, Number(options.maxWaitMs || 180000));
+  const startedAt = Date.now();
+
+  const tick = () => {
+    const current = getOpenClawOperationState();
+    if (current.type === 'idle') {
+      pendingDeferredGatewayRestartRequests.delete(key);
+      queueGatewayRestart(key);
+      console.log(`[openclaw][restart] deferred request activated (${key})`);
+      return;
+    }
+    if ((Date.now() - startedAt) >= maxWaitMs) {
+      pendingDeferredGatewayRestartRequests.delete(key);
+      console.log(`[openclaw][restart] deferred request expired (${key}), current operation=${current.type}`);
+      return;
+    }
+    const timer = setTimeout(tick, pollMs);
+    pendingDeferredGatewayRestartRequests.set(key, { startedAt, timer });
+  };
+
+  const timer = setTimeout(tick, pollMs);
+  pendingDeferredGatewayRestartRequests.set(key, { startedAt, timer });
+  console.log(`[openclaw][restart] deferred request scheduled (${key})`);
+}
 
 function buildSafePendingModelEntry(modelId) {
   return {
@@ -944,7 +1209,8 @@ function upsertProviderModelEntry(targetProviders, provName, modId, options = {}
   const existingIdx = targetProviders[provName].models.findIndex(m => m.id === modId);
   const catalogHit = lookupModelCapabilities(provName, modId);
   const usePendingEntry = !!options.deferInferredValidation && catalogHit && !catalogHit._catalogUnavailable && catalogHit._inferred;
-  const entry = usePendingEntry ? buildSafePendingModelEntry(modId) : buildModelEntry(provName, modId);
+  const baseEntry = usePendingEntry ? buildSafePendingModelEntry(modId) : buildModelEntry(provName, modId);
+  const entry = applyModelFieldOverrides(baseEntry, options.fieldOverrides);
   if (existingIdx === -1) {
     targetProviders[provName].models.push(entry);
   } else {
@@ -962,32 +1228,52 @@ function upsertProviderModelEntry(targetProviders, provName, modId, options = {}
   }
 }
 
-async function finalizeInferredModelValidation(job) {
+async function finalizeInferredModelValidation(job, state = {}) {
   const configPath = '/root/.openclaw/openclaw.json';
   const modelsPath = '/root/.openclaw/agents/main/agent/models.json';
   let config = readJson(configPath, {});
   if (!collectConfiguredModelStrings(config).has(job.model)) {
     console.log(`[ai/config] ${job.model} 已不在当前配置中，跳过后台验证结果回写`);
-    return;
+    return { status: 'done' };
   }
 
   const creds = getModelValidationCredentials(job.providerName);
   if (!creds.apiKey || creds.apiKey === 'YOUR_API_KEY') {
     console.log(`[ai/config] ${job.model} 后台验证跳过：${job.providerName} 没有配置有效的 API Key`);
-    return;
+    return { status: 'done' };
   }
 
-  console.log(`[ai/config] ${job.model} 家族匹配成功 (${job.matchedFamily})，已先保存配置，开始后台运行时验证...`);
+  console.log(`[ai/config] ${job.model} 家族匹配成功 (${job.matchedFamily})，开始第 ${state.attempts || 1} 次后台运行时验证...`);
+  const remoteModelsResult = await fetchRemoteProviderModels(job.providerName, creds.apiKey, creds.baseUrl);
+  const remoteModel = remoteModelsResult.models.find((item) => item.id.toLowerCase() === String(job.modelId || '').toLowerCase()) || null;
+  if (remoteModel?.overrides && Object.keys(remoteModel.overrides).length > 0) {
+    console.log(`[ai/config] ${job.model} 后台元数据命中，获取到真实参数: ${formatRuntimeModelOverrides(remoteModel.overrides)}`);
+  } else if (remoteModelsResult.ok) {
+    console.log(`[ai/config] ${job.model} 后台元数据已查询，但 provider 未返回更精确的参数，保留当前推测值`);
+  } else if (remoteModelsResult.error) {
+    console.log(`[ai/config] ${job.model} 后台元数据查询失败: ${remoteModelsResult.error}`);
+  }
+
   const testResult = await testModelAvailability(job.providerName, job.modelId, creds.apiKey, creds.baseUrl);
   if (!testResult.available) {
-    console.log(`[ai/config] ${job.model} 后台运行时验证失败，保留当前配置: ${testResult.error || '模型不可用'}`);
-    return;
+    const errorText = testResult.error || '模型不可用';
+    const attemptCount = Number(state.attempts || 1);
+    const queuedAt = Number(state.queuedAt || Date.now());
+    const canRetry = attemptCount < INFERRED_MODEL_VALIDATION_MAX_ATTEMPTS
+      && (Date.now() - queuedAt) < INFERRED_MODEL_VALIDATION_TOTAL_TIMEOUT_MS
+      && shouldRetryInferredModelValidation(errorText);
+    if (canRetry) {
+      console.log(`[ai/config] ${job.model} 后台运行时验证失败，将重试: ${errorText}`);
+      return { status: 'retry', delayMs: INFERRED_MODEL_VALIDATION_RETRY_DELAY_MS };
+    }
+    console.log(`[ai/config] ${job.model} 后台运行时验证失败，保留当前配置: ${errorText}`);
+    return { status: 'done' };
   }
 
   config = readJson(configPath, {});
   if (!collectConfiguredModelStrings(config).has(job.model)) {
     console.log(`[ai/config] ${job.model} 在后台验证完成前已被移除，跳过结果回写`);
-    return;
+    return { status: 'done' };
   }
 
   const models = readAiModels();
@@ -995,7 +1281,6 @@ async function finalizeInferredModelValidation(job) {
   if (!models.providers[job.providerName]) {
     models.providers[job.providerName] = {
       baseUrl: getDefaultBaseUrl(job.providerName),
-      apiKey: 'YOUR_API_KEY',
       api: 'openai-completions',
       models: []
     };
@@ -1003,35 +1288,79 @@ async function finalizeInferredModelValidation(job) {
   if (!config.models) config.models = {};
   if (!config.models.providers) config.models.providers = {};
   ensureProviderShell(config.models.providers, models.providers, job.providerName);
-  upsertProviderModelEntry(models.providers, job.providerName, job.modelId);
-  upsertProviderModelEntry(config.models.providers, job.providerName, job.modelId);
+  upsertProviderModelEntry(models.providers, job.providerName, job.modelId, { fieldOverrides: remoteModel?.overrides || null });
+  upsertProviderModelEntry(config.models.providers, job.providerName, job.modelId, { fieldOverrides: remoteModel?.overrides || null });
   writeOpenClawConfig(config);
+  const opState = getOpenClawOperationState();
   fs.writeFileSync(modelsPath, JSON.stringify(models, null, 2), { encoding: 'utf8', mode: 0o600 });
 
-  const opState = getOpenClawOperationState();
   if (opState.type === 'idle') {
     queueGatewayRestart('ai-config-async-model-validation');
     console.log(`[ai/config] ${job.model} 后台运行时验证成功，已更新配置并提交 Gateway 重载请求`);
   } else if (opState.type === 'restarting_gateway') {
-    console.log(`[ai/config] ${job.model} 后台运行时验证成功，配置已更新，Gateway 重载已在进行中`);
+    queueGatewayRestartWhenIdle('ai-config-async-model-validation-post-restart');
+    console.log(`[ai/config] ${job.model} 后台运行时验证成功，配置已更新；当前 Gateway 正在重载，已登记重载完成后的补充重启`);
   } else {
-    console.log(`[ai/config] ${job.model} 后台运行时验证成功，配置已更新；当前操作 ${opState.type} 进行中，暂不额外触发 Gateway 重载`);
+    queueGatewayRestartWhenIdle('ai-config-async-model-validation-after-busy');
+    console.log(`[ai/config] ${job.model} 后台运行时验证成功，配置已更新；当前操作 ${opState.type} 进行中，已登记稍后重载`);
   }
+
+  return { status: 'done' };
 }
 
 function queueInferredModelValidation(job) {
   const key = `${job.providerName}/${job.modelId}`;
-  if (pendingInferredModelValidationJobs.has(key)) return;
-  pendingInferredModelValidationJobs.set(key, Date.now());
-  setTimeout(async () => {
-    try {
-      await finalizeInferredModelValidation(job);
-    } catch (err) {
-      console.error(`[ai/config] ${job.model} 后台运行时验证异常:`, err?.message || err);
-    } finally {
-      pendingInferredModelValidationJobs.delete(key);
-    }
-  }, 0);
+  const existing = pendingInferredModelValidationJobs.get(key);
+  if (existing?.timer) return;
+  const state = existing || { queuedAt: Date.now(), attempts: 0, timer: null };
+
+  const schedule = (delayMs) => {
+    state.timer = setTimeout(async () => {
+      state.timer = null;
+      state.attempts += 1;
+
+      if ((Date.now() - state.queuedAt) >= INFERRED_MODEL_VALIDATION_TOTAL_TIMEOUT_MS) {
+        console.log(`[ai/config] ${job.model} 后台验证超过总超时 ${Math.floor(INFERRED_MODEL_VALIDATION_TOTAL_TIMEOUT_MS / 1000)}s，停止重试`);
+        pendingInferredModelValidationJobs.delete(key);
+        return;
+      }
+
+      const opState = getOpenClawOperationState();
+      if (opState.type === 'installing' || opState.type === 'updating' || opState.type === 'uninstalling' || opState.type === 'repairing_config') {
+        console.log(`[ai/config] ${job.model} 后台验证遇到操作 ${opState.type}，${Math.floor(INFERRED_MODEL_VALIDATION_BUSY_DELAY_MS / 1000)}s 后重试`);
+        schedule(INFERRED_MODEL_VALIDATION_BUSY_DELAY_MS);
+        return;
+      }
+
+      if (state.attempts > INFERRED_MODEL_VALIDATION_MAX_ATTEMPTS) {
+        console.log(`[ai/config] ${job.model} 后台验证超过最大重试次数 ${INFERRED_MODEL_VALIDATION_MAX_ATTEMPTS}，停止重试`);
+        pendingInferredModelValidationJobs.delete(key);
+        return;
+      }
+
+      try {
+        const result = await finalizeInferredModelValidation(job, state);
+        if (result?.status === 'retry') {
+          schedule(Number(result.delayMs || INFERRED_MODEL_VALIDATION_RETRY_DELAY_MS));
+          return;
+        }
+      } catch (err) {
+        if (state.attempts < INFERRED_MODEL_VALIDATION_MAX_ATTEMPTS
+          && (Date.now() - state.queuedAt) < INFERRED_MODEL_VALIDATION_TOTAL_TIMEOUT_MS) {
+          console.error(`[ai/config] ${job.model} 后台运行时验证异常，将重试:`, err?.message || err);
+          schedule(INFERRED_MODEL_VALIDATION_RETRY_DELAY_MS);
+          return;
+        }
+        console.error(`[ai/config] ${job.model} 后台运行时验证异常:`, err?.message || err);
+      } finally {
+        if (!state.timer) pendingInferredModelValidationJobs.delete(key);
+      }
+    }, Math.max(0, Number(delayMs || 0)));
+
+    pendingInferredModelValidationJobs.set(key, state);
+  };
+
+  schedule(0);
 }
 
 /**
@@ -1057,6 +1386,9 @@ function getOpenClawProviderModels(providerName) {
     api: m.api,
     contextWindow: m.contextWindow,
     maxTokens: m.maxTokens,
+    input: m.input
+  }));
+}
     input: m.input
   }));
 }
