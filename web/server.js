@@ -10201,9 +10201,26 @@ function resolveOpenclawPkgRoot() {
   }
   return candidateRoots[0];
 }
-const OPENCLAW_PKG_ROOT = resolveOpenclawPkgRoot();
-const OPENCLAW_BUNDLED_SKILLS_DIR = path.join(OPENCLAW_PKG_ROOT, 'skills');
-const OPENCLAW_EXTENSIONS_DIR = path.join(OPENCLAW_PKG_ROOT, 'extensions');
+let OPENCLAW_PKG_ROOT = resolveOpenclawPkgRoot();
+let OPENCLAW_BUNDLED_SKILLS_DIR = path.join(OPENCLAW_PKG_ROOT, 'skills');
+let OPENCLAW_EXTENSIONS_DIR = path.join(OPENCLAW_PKG_ROOT, 'extensions');
+let _pkgRootLastChecked = Date.now();
+const _PKG_ROOT_RECHECK_INTERVAL = 30000; // 30s
+/** Re-resolve OPENCLAW_PKG_ROOT when the current path no longer has skills/ */
+function ensureOpenclawPkgRoot() {
+  const valid = fs.existsSync(path.join(OPENCLAW_PKG_ROOT, 'skills'));
+  if (valid) return;
+  const now = Date.now();
+  if (now - _pkgRootLastChecked < _PKG_ROOT_RECHECK_INTERVAL) return;
+  _pkgRootLastChecked = now;
+  const fresh = resolveOpenclawPkgRoot();
+  if (fresh !== OPENCLAW_PKG_ROOT) {
+    console.log(`[skills] PKG_ROOT re-resolved: ${OPENCLAW_PKG_ROOT} → ${fresh}`);
+    OPENCLAW_PKG_ROOT = fresh;
+    OPENCLAW_BUNDLED_SKILLS_DIR = path.join(fresh, 'skills');
+    OPENCLAW_EXTENSIONS_DIR = path.join(fresh, 'extensions');
+  }
+}
 const OPENCLAW_MANAGED_SKILLS_DIR = path.join(process.env.HOME || '/root', '.openclaw', 'skills');
 const OPENCLAW_SKILLS_DIR = OPENCLAW_MANAGED_SKILLS_DIR; // install target = managed (~/.openclaw/skills/)
 const SKILL_SCAN_TMP = '/tmp/openclaw-skill-scan';
@@ -10274,6 +10291,7 @@ function scanSkillsDir(dir, source) {
 
 /** List all installed skills from bundled dir, extension skills, and managed dir */
 function listUserSkills() {
+  ensureOpenclawPkgRoot();
   const skills = new Map(); // name → skill entry (later sources override)
 
   // 1) Bundled skills  (lowest priority)
@@ -10496,6 +10514,7 @@ function cleanScanTmp() {
 
 /** Check if a skill is already installed in any recognized skills directory */
 function isSkillInstalled(dirName) {
+  ensureOpenclawPkgRoot();
   // Check bundled
   if (fs.existsSync(path.join(OPENCLAW_BUNDLED_SKILLS_DIR, dirName, 'SKILL.md'))) return true;
   // Check managed
@@ -10860,6 +10879,7 @@ app.post('/api/plugins/skill/install', async (req, res) => {
 });
 
 app.post('/api/plugins/skill/remove', async (req, res) => {
+  ensureOpenclawPkgRoot();
   const { name } = req.body || {};
   if (!name || typeof name !== 'string') return res.status(400).json({ error: 'missing name' });
 
