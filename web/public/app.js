@@ -10,7 +10,7 @@ function q(sel, root=document){ return root.querySelector(sel); }
 function qa(sel, root=document){ return Array.from(root.querySelectorAll(sel)); }
 
 // i18n helper — translates Chinese keys to English when locale=en
-const _t = typeof window.t === 'function' ? window.t : (x => x);
+function _t() { return typeof window.t === 'function' ? window.t.apply(null, arguments) : arguments[0]; }
 
 const OC_DEBUG = (() => {
   try {

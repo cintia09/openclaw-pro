@@ -1203,11 +1203,13 @@
     // Attributes
     const elements = root.querySelectorAll ? root.querySelectorAll('[placeholder],[title],[aria-label]') : [];
     for (const el of elements) {
+      if (el.closest('[data-i18n-skip]')) continue;
       _translateAttrs(el);
     }
     // <option> elements
     const options = root.querySelectorAll ? root.querySelectorAll('option') : [];
     for (const opt of options) {
+      if (opt.closest('[data-i18n-skip]')) continue;
       const text = opt.textContent;
       if (text && /[\u4e00-\u9fff]/.test(text)) {
         const trimmed = text.trim();
