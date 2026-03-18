@@ -1146,6 +1146,8 @@
 
   // Translate a single text node
   function _translateTextNode(node) {
+    // Skip nodes inside elements marked with data-i18n-skip
+    if (node.parentElement && node.parentElement.closest('[data-i18n-skip]')) return;
     const text = node.textContent;
     if (!text || !/[\u4e00-\u9fff]/.test(text)) return;
     const trimmed = text.trim();
@@ -1293,10 +1295,13 @@
   function _bindSettingsLanguage() {
     var sel = document.getElementById('settings-language');
     if (!sel) return;
+    // Restore correct value (DOM walker may have translated option text but value is intact)
     sel.value = _locale;
+    if (sel._i18nBound) return; // avoid duplicate listeners
+    sel._i18nBound = true;
     sel.addEventListener('change', function () {
       var lang = sel.value;
-      if (lang !== _locale) {
+      if (lang && lang !== _locale) {
         setLocale(lang);
         location.reload();
       }
@@ -1327,6 +1332,7 @@
   window.getLocale = getLocale;
   window.setLocale = setLocale;
   window.applyI18n = applyI18n;
+  window._bindSettingsLanguage = _bindSettingsLanguage;
 
   _init();
 })();

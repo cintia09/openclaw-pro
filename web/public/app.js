@@ -399,7 +399,7 @@ function setActiveRoute(route){
     setTimeout(() => ensureTerminalViewportFitted(), 600);
     focusTerminalInput();
   }
-  if (route === 'settings') { renderDetectedTimezone(); checkForUpdate(); }
+  if (route === 'settings') { renderDetectedTimezone(); checkForUpdate(); if (typeof window._bindSettingsLanguage === 'function') window._bindSettingsLanguage(); }
   if (route === 'logs') {
     // Reset WebSocket log dedup state
     shownWsLogIds.clear();
