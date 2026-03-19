@@ -1682,15 +1682,12 @@
   // Normalize smart/curly quotes to straight quotes for consistent key lookup
   function _normQ(s) { return s.replace(/[\u201c\u201d]/g, '"').replace(/[\u2018\u2019]/g, "'").replace(/[\u300c\u300d]/g, '"'); }
 
-  // Keys safe for DOM substring replacement (min 4 Chinese chars to avoid collateral damage)
-  let _safeSubKeys = null;
-  function _getSafeSubKeys() {
-    if (_safeSubKeys) return _safeSubKeys;
-    const MIN_ZH = 4;
-    _safeSubKeys = Object.keys(_en)
-      .filter(function (k) { return (k.match(/[\u4e00-\u9fff]/g) || []).length >= MIN_ZH; })
-      .sort(function (a, b) { return b.length - a.length; });
-    return _safeSubKeys;
+  // Sorted keys for substring replacement (longest first)
+  let _sortedKeys = null;
+  function _getSortedKeys() {
+    if (_sortedKeys) return _sortedKeys;
+    _sortedKeys = Object.keys(_en).sort(function (a, b) { return b.length - a.length; });
+    return _sortedKeys;
   }
 
   // Translate a single text node
@@ -1705,10 +1702,10 @@
       node.textContent = text.replace(trimmed, _en[trimmed]);
       return;
     }
-    // Try translating Chinese segments within mixed text (safe long keys only)
+    // Try translating Chinese segments within mixed text
     let result = text;
     let changed = false;
-    const sorted = _getSafeSubKeys();
+    const sorted = _getSortedKeys();
     for (const zh of sorted) {
       if (result.includes(zh)) {
         result = result.split(zh).join(_en[zh]);
@@ -1731,7 +1728,7 @@
       }
       let result = val;
       let changed = false;
-      const sorted = _getSafeSubKeys();
+      const sorted = _getSortedKeys();
       for (const zh of sorted) {
         if (result.includes(zh)) {
           result = result.split(zh).join(_en[zh]);
