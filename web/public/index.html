@@ -347,43 +347,40 @@
                     <div class="muted small" style="margin-top:8px">点击模型名称可自动填充到下方配置</div>
                   </div>
                 </div>
-              </div>
-            </div>
 
-            <div class="sep"></div>
-
-            <!-- 模型配置 -->
-            <div style="font-weight:700;margin-bottom:12px">模型配置</div>
-            <div class="grid">
-              <div style="grid-column: span 6;">
-                <div class="field">
-                  <div class="label"><span>主代理模型 (Primary)</span></div>
-                  <input class="input" id="ai-model-primary" placeholder="provider/model-name" />
-                  <div class="muted small" style="margin-top:4px">格式: provider/model-id</div>
+                <!-- 模型配置 -->
+                <div style="grid-column: span 12;"><div class="sep"></div></div>
+                <div style="grid-column: span 12;font-weight:700;margin-bottom:4px">模型配置</div>
+                <div style="grid-column: span 6;">
+                  <div class="field">
+                    <div class="label"><span>主代理模型 (Primary)</span></div>
+                    <input class="input" id="ai-model-primary" placeholder="provider/model-name" />
+                    <div class="muted small" style="margin-top:4px">格式: provider/model-id</div>
+                  </div>
                 </div>
-              </div>
-              <div style="grid-column: span 6;">
-                <div class="field">
-                  <div class="label"><span>主代理 Fallback 模型</span></div>
-                  <input class="input" id="ai-model-primary-fallback" placeholder="provider/fallback-model" />
-                  <div class="muted small" style="margin-top:4px">主模型不可用时使用，逗号分隔多个</div>
+                <div style="grid-column: span 6;">
+                  <div class="field">
+                    <div class="label"><span>主代理 Fallback 模型</span></div>
+                    <input class="input" id="ai-model-primary-fallback" placeholder="provider/fallback-model" />
+                    <div class="muted small" style="margin-top:4px">主模型不可用时使用，逗号分隔多个</div>
+                  </div>
                 </div>
-              </div>
-              <div style="grid-column: span 6;">
-                <div class="field">
-                  <div class="label"><span>子代理模型 (Sub Agent)</span></div>
-                  <input class="input" id="ai-model-sub" placeholder="provider/sub-model" />
+                <div style="grid-column: span 6;">
+                  <div class="field">
+                    <div class="label"><span>子代理模型 (Sub Agent)</span></div>
+                    <input class="input" id="ai-model-sub" placeholder="provider/sub-model" />
+                  </div>
                 </div>
-              </div>
-              <div style="grid-column: span 6;">
-                <div class="field">
-                  <div class="label"><span>子代理 Fallback 模型</span></div>
-                  <input class="input" id="ai-model-sub-fallback" placeholder="provider/sub-fallback" />
+                <div style="grid-column: span 6;">
+                  <div class="field">
+                    <div class="label"><span>子代理 Fallback 模型</span></div>
+                    <input class="input" id="ai-model-sub-fallback" placeholder="provider/sub-fallback" />
+                  </div>
                 </div>
-              </div>
-              <div style="grid-column: span 12;">
-                <div class="row" style="gap:12px;margin:8px 0">
-                  <button class="btn btn-primary" id="btn-ai-save">保存模型配置</button>
+                <div style="grid-column: span 12;">
+                  <div class="row" style="gap:12px;margin:8px 0">
+                    <button class="btn btn-primary" id="btn-ai-save">保存模型配置</button>
+                  </div>
                 </div>
               </div>
             </div>
