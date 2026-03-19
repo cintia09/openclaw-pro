@@ -1187,20 +1187,15 @@
     '限制远端命令执行': 'restrict remote command execution',
     '建议仅在可信局域网或 VPN 环境中使用': 'recommended only in trusted LAN or VPN environments',
 
-    // Text-node fragments split by HTML tags (short keys for substring matching)
+    // Text-node fragments split by HTML tags (specific multi-char keys only)
     '命令：使用': 'command: uses',
     '不同网关会写入': 'Different gateways write to',
     '日志输出到当前网关对应目录下的': 'Logs are written to',
     '后台运行使用': 'Background mode uses',
-    '点 📂 按钮选择文件夹，含客户端安全扫描（支持 Chrome/Edge/Safari）。': 'Click 📂 to select a folder with client-side security scan (Chrome/Edge/Safari).',
     '从浏览器本地选择目录': 'Select local directory from browser',
-    '使用': 'uses',
-    '包装': 'wrapper',
-    '验证': 'to verify',
-    '或': 'or',
-    '和': 'and',
-    '通过': 'via',
     '面板': 'Panel',
+    '当前：': 'Current: ',
+    '最新：': 'Latest: ',
 
     // Background Running Guide (details section)
     '后台运行与自动重连': 'Background Running & Auto-Reconnect',
@@ -1683,12 +1678,16 @@
 
   // --------------- DOM auto-translation ---------------
 
+  // Normalize smart/curly quotes to straight quotes for consistent key lookup
+  function _normQ(s) { return s.replace(/[\u201c\u201d]/g, '"').replace(/[\u2018\u2019]/g, "'"); }
+
   // Translate a single text node
   function _translateTextNode(node) {
     // Skip nodes inside elements marked with data-i18n-skip
     if (node.parentElement && node.parentElement.closest('[data-i18n-skip]')) return;
-    const text = node.textContent;
-    if (!text || !/[\u4e00-\u9fff]/.test(text)) return;
+    const raw = node.textContent;
+    if (!raw || !/[\u4e00-\u9fff]/.test(raw)) return;
+    const text = _normQ(raw);
     const trimmed = text.trim();
     if (_en[trimmed]) {
       node.textContent = text.replace(trimmed, _en[trimmed]);
@@ -1712,8 +1711,9 @@
   // Translate attributes (placeholder, title, aria-label, optgroup label)
   function _translateAttrs(el) {
     for (const attr of ['placeholder', 'title', 'aria-label', 'label']) {
-      const val = el.getAttribute(attr);
-      if (!val || !/[\u4e00-\u9fff]/.test(val)) continue;
+      const raw = el.getAttribute(attr);
+      if (!raw || !/[\u4e00-\u9fff]/.test(raw)) continue;
+      const val = _normQ(raw);
       const trimmed = val.trim();
       if (_en[trimmed]) {
         el.setAttribute(attr, val.replace(trimmed, _en[trimmed]));
@@ -1749,8 +1749,9 @@
     const options = root.querySelectorAll ? root.querySelectorAll('option') : [];
     for (const opt of options) {
       if (opt.closest('[data-i18n-skip]')) continue;
-      const text = opt.textContent;
-      if (text && /[\u4e00-\u9fff]/.test(text)) {
+      const raw = opt.textContent;
+      if (raw && /[\u4e00-\u9fff]/.test(raw)) {
+        const text = _normQ(raw);
         const trimmed = text.trim();
         if (_en[trimmed]) opt.textContent = text.replace(trimmed, _en[trimmed]);
       }
