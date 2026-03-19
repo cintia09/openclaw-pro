@@ -1658,8 +1658,9 @@
       }
       return str;
     }
-    // English: look up translation
-    let str = _en[zhKey] || zhKey;
+    // English: look up translation (normalize quotes for consistent matching)
+    var nk = _normQ(zhKey);
+    let str = _en[zhKey] || _en[nk] || zhKey;
     for (let i = 1; i < arguments.length; i++) {
       str = str.replace('{' + (i - 1) + '}', arguments[i] != null ? arguments[i] : '');
     }
@@ -1679,7 +1680,18 @@
   // --------------- DOM auto-translation ---------------
 
   // Normalize smart/curly quotes to straight quotes for consistent key lookup
-  function _normQ(s) { return s.replace(/[\u201c\u201d]/g, '"').replace(/[\u2018\u2019]/g, "'"); }
+  function _normQ(s) { return s.replace(/[\u201c\u201d]/g, '"').replace(/[\u2018\u2019]/g, "'").replace(/[\u300c\u300d]/g, '"'); }
+
+  // Keys safe for DOM substring replacement (min 4 Chinese chars to avoid collateral damage)
+  let _safeSubKeys = null;
+  function _getSafeSubKeys() {
+    if (_safeSubKeys) return _safeSubKeys;
+    const MIN_ZH = 4;
+    _safeSubKeys = Object.keys(_en)
+      .filter(function (k) { return (k.match(/[\u4e00-\u9fff]/g) || []).length >= MIN_ZH; })
+      .sort(function (a, b) { return b.length - a.length; });
+    return _safeSubKeys;
+  }
 
   // Translate a single text node
   function _translateTextNode(node) {
@@ -1693,11 +1705,10 @@
       node.textContent = text.replace(trimmed, _en[trimmed]);
       return;
     }
-    // Try translating Chinese segments within mixed text
+    // Try translating Chinese segments within mixed text (safe long keys only)
     let result = text;
     let changed = false;
-    // Sort keys by length (longest first) to avoid partial matches
-    const sorted = _sortedKeys || (_sortedKeys = Object.keys(_en).sort((a, b) => b.length - a.length));
+    const sorted = _getSafeSubKeys();
     for (const zh of sorted) {
       if (result.includes(zh)) {
         result = result.split(zh).join(_en[zh]);
@@ -1706,7 +1717,6 @@
     }
     if (changed) node.textContent = result;
   }
-  let _sortedKeys = null;
 
   // Translate attributes (placeholder, title, aria-label, optgroup label)
   function _translateAttrs(el) {
@@ -1721,7 +1731,7 @@
       }
       let result = val;
       let changed = false;
-      const sorted = _sortedKeys || (_sortedKeys = Object.keys(_en).sort((a, b) => b.length - a.length));
+      const sorted = _getSafeSubKeys();
       for (const zh of sorted) {
         if (result.includes(zh)) {
           result = result.split(zh).join(_en[zh]);
