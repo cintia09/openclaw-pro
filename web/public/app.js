@@ -3743,9 +3743,7 @@ function renderPairedList(r, connRes) {
     const devId = esc(d.deviceId || '');
     const liveNode = connectedIndex.get(d.deviceId || '') || null;
     const isConnected = Boolean(liveNode?.connected);
-    const liveStatus = isConnected
-      ? '<span class="muted small" style="color:#3fb950">' + _t('在线，取消配对后当前会话会失效；远端后台进程不会自动退出') + '</span>'
-      : '<span class="muted small">' + _t('离线，取消配对仅删除配对记录') + '</span>';
+    const liveStatus = '';
     return '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);flex-wrap:wrap">'
       + `<span style="color:${isConnected ? '#3fb950' : '#8b949e'};font-size:14px">●</span>`
       + '<b style="min-width:80px">' + name + '</b>'
