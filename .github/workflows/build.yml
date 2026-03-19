@@ -95,20 +95,27 @@ jobs:
             curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.sh | bash
             ```
 
-            ### Manual Install
-            1. Download the image file (Lite)
-            2. `docker load < openclaw-pro-image-lite.tar.gz`
-            3. Create state volume: `docker volume create openclaw-pro-state`
-            4. HTTP direct mode:
-              `docker run -d --name openclaw-pro -p 18789:18789 -p 3000:3000 -v openclaw-pro-state:/root/.openclaw --restart unless-stopped openclaw-pro:latest`
+            ### Local Install (Offline / No Internet)
 
-            5. HTTPS reverse-proxy mode (recommended; domain must resolve to this host):
-              - Write `docker-config.json` into the state volume first:
-                 `{"domain":"your.domain.com","http_port":80,"https_port":443,"browserEnabled":false}`
-               - Run the container:
-                `docker run -d --name openclaw-pro -p 80:80 -p 443:443 -v openclaw-pro-state:/root/.openclaw --restart unless-stopped openclaw-pro:latest`
+            Download **both** the source code (`Source code (tar.gz)`) and the Docker image (`openclaw-pro-image-lite.tar.gz`) from this Release page, then:
 
-            6. The browser feature is disabled by default. Enable it in the Web panel under **System Settings** (restart the container after saving).
+            **Linux / macOS**
+            ```bash
+            tar xzf openclaw-pro-*.tar.gz
+            cp openclaw-pro-image-lite.tar.gz openclaw-pro-*/
+            cd openclaw-pro-*
+            bash install-imageonly.sh
+            ```
+
+            **Windows (Administrator PowerShell)**
+            ```powershell
+            Expand-Archive openclaw-pro-*.zip -DestinationPath .
+            Copy-Item openclaw-pro-image-lite.tar.gz -Destination openclaw-pro-*\
+            cd openclaw-pro-*
+            powershell -ExecutionPolicy Bypass -File install-windows.ps1
+            ```
+
+            > The install script auto-detects the local image and skips downloading.
 
             ---
 
@@ -127,20 +134,27 @@ jobs:
             curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.sh | bash
             ```
 
-            ### 手动安装
-            1. 下载镜像文件（Lite）
-            2. `docker load < openclaw-pro-image-lite.tar.gz`
-            3. 创建状态卷：`docker volume create openclaw-pro-state`
-            4. HTTP 直连模式：
-              `docker run -d --name openclaw-pro -p 18789:18789 -p 3000:3000 -v openclaw-pro-state:/root/.openclaw --restart unless-stopped openclaw-pro:latest`
+            ### 本地安装（离线 / 无网络）
 
-            5. HTTPS 反代模式（推荐，需域名解析到本机）：
-              - 先写入状态卷中的 `docker-config.json`：
-                 `{"domain":"your.domain.com","http_port":80,"https_port":443,"browserEnabled":false}`
-               - 运行容器：
-                `docker run -d --name openclaw-pro -p 80:80 -p 443:443 -v openclaw-pro-state:/root/.openclaw --restart unless-stopped openclaw-pro:latest`
+            从本 Release 页面同时下载**源码包**（`Source code (tar.gz)`）和 **Docker 镜像**（`openclaw-pro-image-lite.tar.gz`），然后：
 
-            6. 浏览器功能默认关闭，可在 Web 面板「系统设置」里开启（保存后重启容器生效）。
+            **Linux / macOS**
+            ```bash
+            tar xzf openclaw-pro-*.tar.gz
+            cp openclaw-pro-image-lite.tar.gz openclaw-pro-*/
+            cd openclaw-pro-*
+            bash install-imageonly.sh
+            ```
+
+            **Windows（管理员 PowerShell）**
+            ```powershell
+            Expand-Archive openclaw-pro-*.zip -DestinationPath .
+            Copy-Item openclaw-pro-image-lite.tar.gz -Destination openclaw-pro-*\
+            cd openclaw-pro-*
+            powershell -ExecutionPolicy Bypass -File install-windows.ps1
+            ```
+
+            > 安装脚本会自动检测本地镜像文件，跳过下载步骤。
           files: |
             openclaw-pro-image-lite.tar.gz
             openclaw-pro-image-lite.tar.gz.sha256
