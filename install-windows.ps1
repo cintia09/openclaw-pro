@@ -5940,6 +5940,9 @@ function Main {
                             "-e", "TZ=Asia/Shanghai",
                             "--restart", "unless-stopped"
                         )
+                        if ($hostUser -and $hostUser -ne "root" -and $hostUser -ne "administrator") {
+                            $retryArgs += @("-e", "HOST_USER=$hostUser")
+                        }
                         $retryArgs += $deployConfig.PortArgs
                         $retryArgs += "clawnook:latest"
                         $retryResult = & docker @retryArgs 2>&1

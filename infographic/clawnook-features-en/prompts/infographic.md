@@ -111,11 +111,10 @@ Icon: Clay robot
 
 ## Spoke 5: 💬 Messaging Platforms
 Icon: Clay speech bubbles
-- Feishu (Lark)
-- Discord (multi-server/streaming)
-- Telegram (user allowlist)
-- Signal (CLI integration)
-- WhatsApp (API access)
+- Feishu (Lark) deep integration
+- Multiple popular IM platforms supported
+- Multiple overseas social platforms supported
+- Flexible message routing & forwarding
 - Pairing code approval
 
 ## Spoke 6: 📡 Remote Device Management
@@ -151,4 +150,4 @@ Icon: Clay shield + heartbeat line
 - TLS 1.2+ / fail2ban / container isolation
 
 Text labels (in en):
-ClawNook Feature Overview, Core Architecture, One-Click Install, Web Control Panel, AI Model Integration, Messaging Platforms, Remote Device Management, Skill Market, Hot Update, Self-Healing & Security, Gateway Engine, Watchdog Daemon, Docker Container, Single Command Install, Offline Install, HTTPS Certificate, Dashboard, Terminal, Logs, 20+ Providers, Dual-Agent Models, Fallback Switching, Feishu, Discord, Telegram, Signal, WhatsApp, Browser Control, TLS Encryption, Device Pairing, Security Scan, Built-in Extensions, Hot Patch, A/B Switch, Auto Rollback, Health Polling, Auto Recovery, Key Auth, Container Isolation
+ClawNook Feature Overview, Core Architecture, One-Click Install, Web Control Panel, AI Model Integration, Messaging Platforms, Remote Device Management, Skill Market, Hot Update, Self-Healing & Security, Gateway Engine, Watchdog Daemon, Docker Container, Single Command Install, Offline Install, HTTPS Certificate, Dashboard, Terminal, Logs, 20+ Providers, Dual-Agent Models, Fallback Switching, Feishu, IM Platforms, Social Platforms, Browser Control, TLS Encryption, Device Pairing, Security Scan, Built-in Extensions, Hot Patch, A/B Switch, Auto Rollback, Health Polling, Auto Recovery, Key Auth, Container Isolation

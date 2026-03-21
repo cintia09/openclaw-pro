@@ -96,7 +96,7 @@ Generate the infographic based on the content below:
 ## Spoke 3: 🎨 Web 控制面板
 图标：黏土电脑屏幕
 - 仪表盘（CPU/内存/磁盘监控）
-- OpenClaw 启动/停止/重启
+- ClawNook 启动/停止/重启
 - WebSocket 实时终端
 - 多维日志查看器
 - 系统设置中心
@@ -111,11 +111,10 @@ Generate the infographic based on the content below:
 
 ## Spoke 5: 💬 消息平台
 图标：黏土对话气泡
-- 飞书 (Feishu/Lark)
-- Discord（多服务器/流模式）
-- Telegram（用户白名单）
-- Signal（CLI集成）
-- WhatsApp（API接入）
+- 飞书 (Feishu/Lark) 深度集成
+- 支持多种主流即时通讯平台
+- 支持多种海外社交平台
+- 灵活的消息路由与转发
 - 配对码审批机制
 
 ## Spoke 6: 📡 远端设备管理
@@ -151,4 +150,4 @@ Generate the infographic based on the content below:
 - TLS 1.2+ / fail2ban / 容器安全隔离
 
 Text labels (in zh):
-ClawNook 功能全景, 核心架构, 一键安装, Web控制面板, AI模型接入, 消息平台, 远端设备管理, 技能市场, 热更新, 自愈与安全, Gateway网关, Watchdog守护, Docker容器, 一条命令安装, 离线安装, HTTPS证书, 仪表盘, 终端, 日志, 20+提供商, 双层模型, Fallback切换, 飞书, Discord, Telegram, Signal, WhatsApp, 浏览器操控, TLS加密, 设备配对, 安全检测, 内置扩展, 热补丁, A/B切换, 自动回退, 健康轮询, 自动恢复, 密钥认证, 容器隔离
+ClawNook 功能全景, 核心架构, 一键安装, Web控制面板, AI模型接入, 消息平台, 远端设备管理, 技能市场, 热更新, 自愈与安全, Gateway网关, Watchdog守护, Docker容器, 一条命令安装, 离线安装, HTTPS证书, 仪表盘, 终端, 日志, 20+提供商, 双层模型, Fallback切换, 飞书, 即时通讯, 社交平台, 浏览器操控, TLS加密, 设备配对, 安全检测, 内置扩展, 热补丁, A/B切换, 自动回退, 健康轮询, 自动恢复, 密钥认证, 容器隔离
