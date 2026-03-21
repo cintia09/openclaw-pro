@@ -7,7 +7,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: cintia09/openclaw-pro
+  IMAGE_NAME: menriothink/clawnook
 
 jobs:
   build:
@@ -31,7 +31,7 @@ jobs:
 
       # Build lite Docker image
       - name: Build lite Docker image
-        run: docker build --build-arg BUILD_VERSION=${{ github.ref_name }} -f Dockerfile.lite -t openclaw-pro:lite .
+        run: docker build --build-arg BUILD_VERSION=${{ github.ref_name }} -f Dockerfile.lite -t clawnook:lite .
 
       # Push to GHCR (optional, for users with access)
       - name: Tag and push to GHCR
@@ -59,9 +59,9 @@ jobs:
             return 1
           }
 
-          docker tag openclaw-pro:lite ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-          docker tag openclaw-pro:lite ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:lite
-          docker tag openclaw-pro:lite ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-lite
+          docker tag clawnook:lite ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          docker tag clawnook:lite ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:lite
+          docker tag clawnook:lite ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-lite
 
           push_with_retry "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
           push_with_retry "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:lite"
@@ -70,48 +70,48 @@ jobs:
       # Export image as tar.gz (direct download, no Docker Hub/GHCR needed)
       - name: Export images as tar.gz
         run: |
-          docker save openclaw-pro:lite | gzip > openclaw-pro-image-lite.tar.gz
-          ls -lh openclaw-pro-image-lite.tar.gz
-          sha256sum openclaw-pro-image-lite.tar.gz > openclaw-pro-image-lite.tar.gz.sha256
+          docker save clawnook:lite | gzip > clawnook-image-lite.tar.gz
+          ls -lh clawnook-image-lite.tar.gz
+          sha256sum clawnook-image-lite.tar.gz > clawnook-image-lite.tar.gz.sha256
 
       # Upload to GitHub Release
       - name: Create Release and upload image
         uses: softprops/action-gh-release@v2
         with:
-          name: OpenClaw Pro ${{ github.ref_name }}
+          name: ClawNook ${{ github.ref_name }}
           body: |
-            ## OpenClaw Pro Docker Image
+            ## ClawNook Docker Image
 
             ### Image Version
-            - **Lite (sole release edition)** `openclaw-pro-image-lite.tar.gz` (~250 MB)
+            - **Lite (sole release edition)** `clawnook-image-lite.tar.gz` (~250 MB)
 
             ### One-Click Install (Windows)
             ```powershell
-            irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1 | iex
+            irm https://raw.githubusercontent.com/menriothink/clawnook/main/install-windows.ps1 | iex
             ```
 
             ### One-Click Install (Linux / macOS)
             ```bash
-            curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.sh | bash
+            curl -fsSL https://raw.githubusercontent.com/menriothink/clawnook/main/install.sh | bash
             ```
 
             ### Local Install (Offline / No Internet)
 
-            Download **both** the source code (`Source code (tar.gz)`) and the Docker image (`openclaw-pro-image-lite.tar.gz`) from this Release page, then:
+            Download **both** the source code (`Source code (tar.gz)`) and the Docker image (`clawnook-image-lite.tar.gz`) from this Release page, then:
 
             **Linux / macOS**
             ```bash
-            tar xzf openclaw-pro-*.tar.gz
-            cp openclaw-pro-image-lite.tar.gz openclaw-pro-*/
-            cd openclaw-pro-*
+            tar xzf clawnook-*.tar.gz
+            cp clawnook-image-lite.tar.gz clawnook-*/
+            cd clawnook-*
             bash install-imageonly.sh
             ```
 
             **Windows (Administrator PowerShell)**
             ```powershell
-            Expand-Archive openclaw-pro-*.zip -DestinationPath .
-            Copy-Item openclaw-pro-image-lite.tar.gz -Destination openclaw-pro-*\
-            cd openclaw-pro-*
+            Expand-Archive clawnook-*.zip -DestinationPath .
+            Copy-Item clawnook-image-lite.tar.gz -Destination clawnook-*\
+            cd clawnook-*
             powershell -ExecutionPolicy Bypass -File install-windows.ps1
             ```
 
@@ -119,42 +119,42 @@ jobs:
 
             ---
 
-            ## OpenClaw Pro Docker 镜像
+            ## ClawNook Docker 镜像
 
             ### 镜像版本
-            - **Lite（唯一发布版本）** `openclaw-pro-image-lite.tar.gz` (~250MB)
+            - **Lite（唯一发布版本）** `clawnook-image-lite.tar.gz` (~250MB)
 
             ### 一键安装 (Windows)
             ```powershell
-            irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1 | iex
+            irm https://raw.githubusercontent.com/menriothink/clawnook/main/install-windows.ps1 | iex
             ```
 
             ### 一键安装 (Linux/macOS)
             ```bash
-            curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.sh | bash
+            curl -fsSL https://raw.githubusercontent.com/menriothink/clawnook/main/install.sh | bash
             ```
 
             ### 本地安装（离线 / 无网络）
 
-            从本 Release 页面同时下载**源码包**（`Source code (tar.gz)`）和 **Docker 镜像**（`openclaw-pro-image-lite.tar.gz`），然后：
+            从本 Release 页面同时下载**源码包**（`Source code (tar.gz)`）和 **Docker 镜像**（`clawnook-image-lite.tar.gz`），然后：
 
             **Linux / macOS**
             ```bash
-            tar xzf openclaw-pro-*.tar.gz
-            cp openclaw-pro-image-lite.tar.gz openclaw-pro-*/
-            cd openclaw-pro-*
+            tar xzf clawnook-*.tar.gz
+            cp clawnook-image-lite.tar.gz clawnook-*/
+            cd clawnook-*
             bash install-imageonly.sh
             ```
 
             **Windows（管理员 PowerShell）**
             ```powershell
-            Expand-Archive openclaw-pro-*.zip -DestinationPath .
-            Copy-Item openclaw-pro-image-lite.tar.gz -Destination openclaw-pro-*\
-            cd openclaw-pro-*
+            Expand-Archive clawnook-*.zip -DestinationPath .
+            Copy-Item clawnook-image-lite.tar.gz -Destination clawnook-*\
+            cd clawnook-*
             powershell -ExecutionPolicy Bypass -File install-windows.ps1
             ```
 
             > 安装脚本会自动检测本地镜像文件，跳过下载步骤。
           files: |
-            openclaw-pro-image-lite.tar.gz
-            openclaw-pro-image-lite.tar.gz.sha256
+            clawnook-image-lite.tar.gz
+            clawnook-image-lite.tar.gz.sha256

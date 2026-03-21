@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# OpenClaw Pro — One-command installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.sh | bash
+# ClawNook — One-command installer
+# Usage: curl -fsSL https://raw.githubusercontent.com/menriothink/clawnook/main/install.sh | bash
 set -euo pipefail
 
 INSTALLER_COMMIT="${INSTALLER_COMMIT:-}"
@@ -13,12 +13,12 @@ fetch_remote_installer(){
 
 fetch_imageonly_script(){
   local out_file="$1"
-  local api_url="https://api.github.com/repos/cintia09/openclaw-pro/commits/main"
+  local api_url="https://api.github.com/repos/menriothink/clawnook/commits/main"
   local sha=""
 
   if [ -n "$INSTALLER_COMMIT" ]; then
     echo "[INFO] 正在获取安装脚本（固定提交 ${INSTALLER_COMMIT}）..." >&2
-    if fetch_remote_installer "https://raw.githubusercontent.com/cintia09/openclaw-pro/${INSTALLER_COMMIT}/install-imageonly.sh" "$out_file"; then
+    if fetch_remote_installer "https://raw.githubusercontent.com/menriothink/clawnook/${INSTALLER_COMMIT}/install-imageonly.sh" "$out_file"; then
       return 0
     fi
   fi
@@ -27,13 +27,13 @@ fetch_imageonly_script(){
   sha="$(curl -fsSL --connect-timeout 8 --max-time 15 "$api_url" 2>/dev/null | awk -F'"' '/"sha"/ {print $4; exit}' || true)"
   if [ -n "$sha" ]; then
     echo "[INFO] 正在获取安装脚本（提交 ${sha}）..." >&2
-    if fetch_remote_installer "https://raw.githubusercontent.com/cintia09/openclaw-pro/${sha}/install-imageonly.sh" "$out_file"; then
+    if fetch_remote_installer "https://raw.githubusercontent.com/menriothink/clawnook/${sha}/install-imageonly.sh" "$out_file"; then
       return 0
     fi
   fi
 
   echo "[INFO] 回退获取 main 分支安装脚本..." >&2
-  fetch_remote_installer "https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-imageonly.sh?ts=$(date +%s)" "$out_file"
+  fetch_remote_installer "https://raw.githubusercontent.com/menriothink/clawnook/main/install-imageonly.sh?ts=$(date +%s)" "$out_file"
 }
 
 run_imageonly_installer(){
@@ -58,17 +58,17 @@ run_imageonly_installer(){
     exec env TARGET_DIR="$target_dir" bash "$target_dir/install-imageonly.sh"
   fi
 
-  if [ -f "$target_dir/openclaw-pro/install-imageonly.sh" ]; then
-    echo "⚠️ 远端安装脚本下载失败，回退使用本地仓库 openclaw-pro/install-imageonly.sh" >&2
-    chmod +x "$target_dir/openclaw-pro/install-imageonly.sh" || true
-    exec env TARGET_DIR="$target_dir" bash "$target_dir/openclaw-pro/install-imageonly.sh"
+  if [ -f "$target_dir/clawnook/install-imageonly.sh" ]; then
+    echo "⚠️ 远端安装脚本下载失败，回退使用本地仓库 clawnook/install-imageonly.sh" >&2
+    chmod +x "$target_dir/clawnook/install-imageonly.sh" || true
+    exec env TARGET_DIR="$target_dir" bash "$target_dir/clawnook/install-imageonly.sh"
   fi
 
   echo "⚠️ 无法下载 ImageOnly 安装脚本，请稍后重试。" >&2
   exit 1
 }
 
-echo "🐾 OpenClaw Pro Installer"
+echo "🐾 ClawNook Installer"
 echo "========================="
 echo "ImageOnly 是当前唯一安装路径。"
 echo ""

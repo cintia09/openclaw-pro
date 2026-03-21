@@ -2,19 +2,19 @@
 setlocal
 chcp 65001 >nul 2>&1
 
-REM OpenClaw Pro - One-Click Updater
+REM ClawNook - One-Click Updater
 REM Double-click this file to update
 
 echo.
 echo  =========================================
-echo   OpenClaw Pro - Quick Updater
+echo   ClawNook - Quick Updater
 echo  =========================================
 echo.
 
 powershell -ExecutionPolicy Bypass -Command ^
   "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;" ^
   "$nonce=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds();" ^
-  "$u='https://raw.githubusercontent.com/cintia09/openclaw-pro/main/update-windows.ps1?ts='+$nonce;" ^
+  "$u='https://raw.githubusercontent.com/menriothink/clawnook/main/update-windows.ps1?ts='+$nonce;" ^
   "$s=$null;" ^
   "Write-Host '  Downloading update script...';" ^
   "try{$s=Invoke-RestMethod $u -UseBasicParsing}catch{};" ^

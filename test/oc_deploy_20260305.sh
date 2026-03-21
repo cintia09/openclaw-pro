@@ -1,5 +1,5 @@
 set -e
-ROOT="/Volumes/MacData/MyData/Documents/project/openclaw-pro"
+ROOT="/Volumes/MacData/MyData/Documents/project/clawnook"
 REMOTE_TMP_DIR="/root/.openclaw/test-tmp"
 ssh -p 2223 wm_20@192.168.31.107 "sudo -n mkdir -p $REMOTE_TMP_DIR"
 scp -P 2223 "$ROOT/web/server.js" wm_20@192.168.31.107:$REMOTE_TMP_DIR/server.js.new

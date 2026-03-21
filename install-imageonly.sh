@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ──────────────────────────────────────────────────────────────
-# OpenClaw Pro — Image-Only Linux Installer
+# ClawNook — Image-Only Linux Installer
 # 完全对齐 Windows install-windows.ps1 行为：
 #   - HTTPS / 域名 / 证书模式配置
 #   - 防火墙 & fail2ban 自动配置
@@ -12,16 +12,16 @@ set -euo pipefail
 #   - 自动生成 root 密码（不弹密码输入）
 # ──────────────────────────────────────────────────────────────
 
-CONTAINER_NAME="openclaw-pro"
-IMAGE_NAME="openclaw-pro:latest"
-GITHUB_REPO="cintia09/openclaw-pro"
-IMAGE_TARBALL_LITE="openclaw-pro-image-lite.tar.gz"
-DEFAULT_BASE_DIR_NAME=".openclaw-pro"
+CONTAINER_NAME="clawnook"
+IMAGE_NAME="clawnook:latest"
+GITHUB_REPO="menriothink/clawnook"
+IMAGE_TARBALL_LITE="clawnook-image-lite.tar.gz"
+DEFAULT_BASE_DIR_NAME=".clawnook"
 TARGET_DIR="$HOME"
 
 BASE_DIR="${TARGET_DIR}/${DEFAULT_BASE_DIR_NAME}"
 TMP_DIR="$BASE_DIR"
-STATE_VOLUME_NAME="${STATE_VOLUME_NAME:-openclaw-pro-state}"
+STATE_VOLUME_NAME="${STATE_VOLUME_NAME:-clawnook-state}"
 STATE_MOUNT_POINT="/root/.openclaw"
 CONFIG_CACHE_FILE="$BASE_DIR/.docker-config.cache.json"
 LEGACY_HOME_DIR="$BASE_DIR/home-data"
@@ -1195,12 +1195,12 @@ pull_from_ghcr(){
 
 tag_loaded_image_if_needed(){
   local loaded_ref=""
-  if docker image inspect "openclaw-pro:lite" >/dev/null 2>&1; then
-    loaded_ref="openclaw-pro:lite"
+  if docker image inspect "clawnook:lite" >/dev/null 2>&1; then
+    loaded_ref="clawnook:lite"
   elif docker image inspect "ghcr.io/${GITHUB_REPO}:lite" >/dev/null 2>&1; then
     loaded_ref="ghcr.io/${GITHUB_REPO}:lite"
   else
-    loaded_ref="$(docker images --format '{{.Repository}}:{{.Tag}}' | awk '/openclaw-pro/ && $0 !~ /<none>/ {print; exit}')"
+    loaded_ref="$(docker images --format '{{.Repository}}:{{.Tag}}' | awk '/clawnook/ && $0 !~ /<none>/ {print; exit}')"
   fi
 
   if [ -n "$loaded_ref" ] && [ "$loaded_ref" != "$IMAGE_NAME" ]; then
@@ -1213,8 +1213,8 @@ tag_loaded_image_if_needed(){
 cleanup_local_lite_aliases(){
   local alias_removed="false"
 
-  if docker image inspect "openclaw-pro:lite" >/dev/null 2>&1; then
-    docker rmi "openclaw-pro:lite" >/dev/null 2>&1 || true
+  if docker image inspect "clawnook:lite" >/dev/null 2>&1; then
+    docker rmi "clawnook:lite" >/dev/null 2>&1 || true
     alias_removed="true"
   fi
 

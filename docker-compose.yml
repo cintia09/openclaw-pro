@@ -7,7 +7,7 @@
 services:
   openclaw:
     build: .
-    container_name: openclaw-pro
+    container_name: clawnook
     hostname: openclaw
     cap_drop:
       - ALL

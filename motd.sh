@@ -43,7 +43,7 @@ else
 fi
 
 echo ""
-echo -e "  ${BOLD}🐾 OpenClaw Pro${NC}  Gateway ${gw_s}  Web ${web_s}  ${BLUE}${URL}${NC}"
+echo -e "  ${BOLD}🐾 ClawNook${NC}  Gateway ${gw_s}  Web ${web_s}  ${BLUE}${URL}${NC}"
 if [ "$CURRENT_USER" != "root" ]; then
     echo -e "  👤 ${CYAN}${CURRENT_USER}${NC}  提权: sudo -i"
 fi

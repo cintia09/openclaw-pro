@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-CONTAINER_NAME="${1:-openclaw-pro}"
+CONTAINER_NAME="${1:-clawnook}"
 GATEWAY_DIST_PATH="/root/.openclaw/openclaw-source/dist/gateway-cli-CuZs0RlJ.js"
 WEB_ROOT="/opt/openclaw-web"
 

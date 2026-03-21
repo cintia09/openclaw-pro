@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="docs/images/banner-en.svg" alt="OpenClaw Pro" width="680" />
+  <img src="docs/images/banner-en.svg" alt="ClawNook" width="680" />
 </p>
 
 <p align="center">
-  <a href="https://github.com/cintia09/openclaw-pro/releases"><img src="https://img.shields.io/github/v/release/cintia09/openclaw-pro?style=for-the-badge&color=f97316" alt="GitHub release"></a>
+  <a href="https://github.com/menriothink/clawnook/releases"><img src="https://img.shields.io/github/v/release/menriothink/clawnook?style=for-the-badge&color=f97316" alt="GitHub release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
-  <a href="https://github.com/cintia09/openclaw-pro/stargazers"><img src="https://img.shields.io/github/stars/cintia09/openclaw-pro?style=for-the-badge&color=f97316" alt="Stars"></a>
+  <a href="https://github.com/menriothink/clawnook/stargazers"><img src="https://img.shields.io/github/stars/menriothink/clawnook?style=for-the-badge&color=f97316" alt="Stars"></a>
 </p>
 
 <p align="center">
@@ -21,22 +21,26 @@
 
 ---
 
-[OpenClaw](https://github.com/openclaw/openclaw) is an open-source personal AI assistant that connects to 20+ platforms including Discord, Feishu (Lark), WeChat, Telegram, Slack, WhatsApp, and more. Through a flexible Skills and Extensions mechanism, it integrates AI into your daily workflow.
+**ClawNook** deploys [OpenClaw](https://github.com/openclaw/openclaw) (an open-source personal AI assistant) inside a Docker container and provides a Web management panel that greatly simplifies installation, configuration, and day-to-day operations.
 
-**OpenClaw Pro** is a **one-click deployment toolkit** for Linux, macOS, and Windows, providing:
+Docker deployment ensures environment isolation and reproducibility — no dependency conflicts or system pollution, and the entire instance can be backed up, migrated, or restored along with its container. On top of that, the Web panel lets you handle the following without touching the command line:
 
-- 🚀 **One-Click Install** — A single command handles Docker image pull, container creation, and Gateway startup
-- 🔄 **Hot Update** — One-click upgrade from the Web control panel with A/B version swap and auto-rollback
-- 🛡️ **Self-Healing** — Gateway Watchdog health monitoring, automatic recovery, and runtime checkpoint resumption
-- 🎨 **Web Control Panel** — Visual management for config, models, skill plugins, install/update status
-- 🧩 **Skill Market** — Browse, install, and update community skill packages online
+- 🚀 **One-Click Install** — A single command completes image pull, container creation, Gateway startup, and HTTPS / domain configuration on Linux, macOS, and Windows
+- 🎨 **Config Management** — Visual editor for all settings, automatic snapshot backups, and one-click export for migrating to a new environment
+- 🧠 **Model Integration** — Built-in catalog of 50+ AI providers, online API validation, and encrypted key storage
+- 🧩 **Skill Market** — Scan and install community skills from GitHub / GitLab / Gitee, with built-in security scanning
+- 🔗 **Remote Nodes** — Token-based pairing for remote devices, with a unified view of all connected nodes in the panel
+- 💬 **Messaging Platforms** — Visual configuration for Feishu, Discord, Telegram, Signal, and WhatsApp, each with step-by-step setup guides
+- 📊 **Dashboard & Logs** — Real-time Gateway / Web / Caddy status and resource monitoring, with multi-source log viewer
+- 💻 **Browser Terminal** — Built-in WebSocket terminal for managing the container without SSH
+- 🛡️ **Self-Healing** — Gateway Watchdog health monitoring, automatic crash recovery, and surgical config repair from snapshots
 
 <p align="center">
-  <img src="docs/images/feature-overview-en.png" alt="OpenClaw Pro Feature Overview" width="600" />
+  <img src="docs/images/feature-overview-en.png" alt="ClawNook Feature Overview" width="600" />
 </p>
 
 <p align="center">
-  <img src="docs/images/screenshot-09.png" alt="OpenClaw Pro Screenshot" width="600" />
+  <img src="docs/images/screenshot-09.png" alt="ClawNook Screenshot" width="600" />
 </p>
 
 ## One-Click Install
@@ -44,7 +48,7 @@
 ### Linux / macOS
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/menriothink/clawnook/main/install.sh | bash
 ```
 
 ### Windows (Administrator PowerShell)
@@ -53,30 +57,30 @@ Windows installation currently uses the Docker Desktop approach only.
 Please install and start Docker Desktop first, then run the install command below.
 
 ```powershell
-irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows-bootstrap.ps1 | iex
+irm https://raw.githubusercontent.com/menriothink/clawnook/main/install-windows-bootstrap.ps1 | iex
 ```
 
 Or download and run `install-windows.bat` as Administrator.
 
 ## Local Install (Offline)
 
-If you have limited internet access or prefer offline installation, download both the **source code** and the **Docker image** (`openclaw-pro-image-lite.tar.gz`) from the [Releases](https://github.com/cintia09/openclaw-pro/releases) page.
+If you have limited internet access or prefer offline installation, download both the **source code** and the **Docker image** (`clawnook-image-lite.tar.gz`) from the [Releases](https://github.com/menriothink/clawnook/releases) page.
 
 ### Linux / macOS
 
 ```bash
-tar xzf openclaw-pro-*.tar.gz
-cp openclaw-pro-image-lite.tar.gz openclaw-pro-*/
-cd openclaw-pro-*
+tar xzf clawnook-*.tar.gz
+cp clawnook-image-lite.tar.gz clawnook-*/
+cd clawnook-*
 bash install-imageonly.sh
 ```
 
 ### Windows (Administrator PowerShell)
 
 ```powershell
-Expand-Archive openclaw-pro-*.zip -DestinationPath .
-Copy-Item openclaw-pro-image-lite.tar.gz -Destination openclaw-pro-*\
-cd openclaw-pro-*
+Expand-Archive clawnook-*.zip -DestinationPath .
+Copy-Item clawnook-image-lite.tar.gz -Destination clawnook-*\
+cd clawnook-*
 powershell -ExecutionPolicy Bypass -File install-windows.ps1
 ```
 

@@ -1,5 +1,5 @@
-# OpenClaw Pro - Quick Update Script
-# 快速更新 OpenClaw Pro 容器到最新版本
+# ClawNook - Quick Update Script
+# 快速更新 ClawNook 容器到最新版本
 # 读取现有容器配置，拉取最新镜像，重建容器（保留所有数据和配置）
 
 $ErrorActionPreference = "Stop"
@@ -8,9 +8,9 @@ $ErrorActionPreference = "Stop"
 # PowerShell 5.1 默认不启用 TLS 1.2，导致无法连接 GitHub
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 
-$GITHUB_REPO = "cintia09/openclaw-pro"
-$CONTAINER_NAME = "openclaw-pro"
-$IMAGE_NAME = "openclaw-pro"
+$GITHUB_REPO = "menriothink/clawnook"
+$CONTAINER_NAME = "clawnook"
+$IMAGE_NAME = "clawnook"
 
 function Write-Step($msg) { Write-Host "`n  ➡️  $msg" -ForegroundColor Cyan }
 function Write-OK($msg)   { Write-Host "  ✅ $msg" -ForegroundColor Green }
@@ -227,7 +227,7 @@ function Download-Robust {
 
 Write-Host ""
 Write-Host "  +==========================================+" -ForegroundColor Cyan
-Write-Host "  |     OpenClaw Pro - Quick Updater         |" -ForegroundColor Cyan
+Write-Host "  |     ClawNook - Quick Updater         |" -ForegroundColor Cyan
 Write-Host "  +==========================================+" -ForegroundColor Cyan
 Write-Host ""
 
@@ -538,7 +538,7 @@ Write-Dim "域名: $($config.domain)"
 Write-Dim "HTTP 端口: $($config.http_port)  HTTPS 端口: $($config.https_port)"
 
 # 获取挂载点（状态卷 /root/.openclaw）
-$stateVolumeName = "openclaw-pro-state"
+$stateVolumeName = "clawnook-state"
 $rawHostUser = $env:USERNAME
 $hostUser = Convert-ToContainerUserName $rawHostUser
 try {
@@ -631,7 +631,7 @@ try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$GITHUB_REPO/releases/latest" -UseBasicParsing -TimeoutSec 15
     $latestVersion = $release.tag_name
-    $updateAssetName = "openclaw-pro-image-lite.tar.gz"
+    $updateAssetName = "clawnook-image-lite.tar.gz"
     $imageAsset = $release.assets | Where-Object { $_.name -eq $updateAssetName } | Select-Object -First 1
     if ($imageAsset) {
         $downloadUrl = $imageAsset.browser_download_url
@@ -657,7 +657,7 @@ if ($latestVersion -and $latestVersion -eq $currentVersion -and -not $recommendF
 
 # -- 6. 下载最新镜像 --
 Write-Step "下载最新镜像..."
-# tmp 目录与 openclaw-pro 平级（如 C:\Mydata\docker-openclaw\tmp）
+# tmp 目录与 clawnook 平级（如 C:\Mydata\docker-openclaw\tmp）
 $scriptDir = if ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { $PWD.Path }
 $downloadDir = Join-Path (Split-Path $scriptDir -Parent) "tmp"
 if (-not (Test-Path $downloadDir)) { New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null }

@@ -37,7 +37,7 @@
 ## 3.1 环境要求
 
 1. Linux 主机，Docker 可用。
-2. `openclaw-pro` 容器可启动。
+2. `clawnook` 容器可启动。
 3. 主机可访问 GitHub（`github.com` / `api.github.com`）。
 4. Web 管理页可访问（默认 `http://<host>:3000`）。
 
@@ -61,12 +61,12 @@
 docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep openclaw
 ```
 
-如果容器名不是 `openclaw-pro`，将下文命令中的容器名替换为实际值。
+如果容器名不是 `clawnook`，将下文命令中的容器名替换为实际值。
 
 ## 4.2 进入容器（交互调试）
 
 ```bash
-docker exec -it openclaw-pro bash
+docker exec -it clawnook bash
 ```
 
 ## 4.3 容器内常用调试命令
@@ -88,7 +88,7 @@ curl -sS http://127.0.0.1:3000/api/openclaw | jq .
 ## 4.4 容器外快速单命令调试（无需进入交互 shell）
 
 ```bash
-docker exec openclaw-pro bash -lc 'pgrep -af "openclaw|watchdog"; tail -n 60 /root/.openclaw/logs/gateway-watchdog.log'
+docker exec clawnook bash -lc 'pgrep -af "openclaw|watchdog"; tail -n 60 /root/.openclaw/logs/gateway-watchdog.log'
 ```
 
 ---
@@ -100,13 +100,13 @@ docker exec openclaw-pro bash -lc 'pgrep -af "openclaw|watchdog"; tail -n 60 /ro
 3. 确保备份目录可写：
 
 ```bash
-docker exec openclaw-pro bash -lc 'mkdir -p /root/.openclaw/config-backups && chmod 700 /root/.openclaw/config-backups'
+docker exec clawnook bash -lc 'mkdir -p /root/.openclaw/config-backups && chmod 700 /root/.openclaw/config-backups'
 ```
 
 4. 清理历史测试噪声（仅测试环境）：
 
 ```bash
-docker exec openclaw-pro bash -lc 'rm -f /root/.openclaw/config-backups/openclaw-*.json'
+docker exec clawnook bash -lc 'rm -f /root/.openclaw/config-backups/openclaw-*.json'
 ```
 
 ---
@@ -195,7 +195,7 @@ docker exec openclaw-pro bash -lc 'rm -f /root/.openclaw/config-backups/openclaw
 
 1. 记录当前备份数量：
    ```bash
-   docker exec openclaw-pro bash -lc 'ls -1 /root/.openclaw/config-backups/openclaw-*.json 2>/dev/null | wc -l'
+   docker exec clawnook bash -lc 'ls -1 /root/.openclaw/config-backups/openclaw-*.json 2>/dev/null | wc -l'
    ```
 2. 修改配置（合法变更），触发 Gateway 重启。
 3. 检查备份目录数量 +1，且 `mtime` 最新。
@@ -282,14 +282,14 @@ curl -sS http://127.0.0.1:3000/api/openclaw | jq .
 curl -sS http://127.0.0.1:3000/api/status | jq .
 
 # 3) 检查 watchdog / gateway 进程
-docker exec openclaw-pro bash -lc 'pgrep -af "openclaw|watchdog"'
+docker exec clawnook bash -lc 'pgrep -af "openclaw|watchdog"'
 
 # 4) 检查备份列表
-docker exec openclaw-pro bash -lc 'ls -lt /root/.openclaw/config-backups'
+docker exec clawnook bash -lc 'ls -lt /root/.openclaw/config-backups'
 
 # 5) 查看关键日志
-docker exec openclaw-pro bash -lc 'tail -n 120 /root/.openclaw/logs/gateway-watchdog.log'
-docker exec openclaw-pro bash -lc 'tail -n 120 /root/.openclaw/logs/openclaw-gateway.log'
+docker exec clawnook bash -lc 'tail -n 120 /root/.openclaw/logs/gateway-watchdog.log'
+docker exec clawnook bash -lc 'tail -n 120 /root/.openclaw/logs/openclaw-gateway.log'
 ```
 
 ---

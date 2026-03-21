@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# openclaw-docker.sh — OpenClaw Pro Docker 管理脚本
+# openclaw-docker.sh — ClawNook Docker 管理脚本
 # 用法: ./openclaw-docker.sh [run|stop|status|config|shell|rebuild|logs]
 # ============================================================
 
@@ -15,11 +15,11 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-CONTAINER_NAME="openclaw-pro"
-IMAGE_NAME="openclaw-pro"
+CONTAINER_NAME="clawnook"
+IMAGE_NAME="clawnook"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TMP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)/tmp"
-STATE_VOLUME_NAME="${STATE_VOLUME_NAME:-openclaw-pro-state}"
+STATE_VOLUME_NAME="${STATE_VOLUME_NAME:-clawnook-state}"
 STATE_MOUNT_POINT="/root/.openclaw"
 CONFIG_FILE="$STATE_MOUNT_POINT/docker-config.json"
 MASTER_KEY_FILE="$STATE_MOUNT_POINT/.enc_key"
@@ -236,7 +236,7 @@ ensure_docker() {
     success "Docker 安装完成"
 }
 
-# 日志持久化（与 Windows 一致，放在 openclaw-pro 同级 tmp 目录）
+# 日志持久化（与 Windows 一致，放在 clawnook 同级 tmp 目录）
 LOG_DIR="$TMP_DIR"
 LOG_FILE="$LOG_DIR/openclaw-docker.log"
 mkdir -p "$LOG_DIR" 2>/dev/null || true
@@ -247,9 +247,9 @@ log_msg() {
 }
 
 # GitHub Release 配置
-GITHUB_REPO="cintia09/openclaw-pro"
+GITHUB_REPO="menriothink/clawnook"
 GHCR_IMAGE="ghcr.io/${GITHUB_REPO}"
-IMAGE_TARBALL="openclaw-pro-image-lite.tar.gz"
+IMAGE_TARBALL="clawnook-image-lite.tar.gz"
 IMAGE_EDITION="lite"  # 强制使用 lite 版本
 
 # 代理镜像列表（对齐 Windows Download-Robust，国内直连 github.com 通常很慢）
@@ -340,7 +340,7 @@ save_image_tag() {
 ensure_image() {
     local asset_name="$IMAGE_TARBALL"
     if [ "$IMAGE_EDITION" = "lite" ]; then
-        asset_name="openclaw-pro-image-lite.tar.gz"
+        asset_name="clawnook-image-lite.tar.gz"
     fi
 
     if docker image inspect "$IMAGE_NAME" &>/dev/null; then
@@ -626,7 +626,7 @@ _load_and_tag_image() {
     log_msg "Loading image from $tarball"
 
     if docker load < "$tarball"; then
-        # 确保 tag 为 openclaw-pro:latest
+        # 确保 tag 为 clawnook:latest
         # docker load 可能只有 ghcr.io/... 的 tag
         if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
             local loaded_ref
@@ -772,7 +772,7 @@ show_install_summary() {
 
     echo ""
     echo -e "${GREEN}╔══════════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║${NC}              ${BOLD}🎉 OpenClaw Pro 安装完成！${NC}                          ${GREEN}║${NC}"
+    echo -e "${GREEN}║${NC}              ${BOLD}🎉 ClawNook 安装完成！${NC}                          ${GREEN}║${NC}"
     echo -e "${GREEN}╠══════════════════════════════════════════════════════════════════╣${NC}"
     echo -e "${GREEN}║${NC}                                                                  ${GREEN}║${NC}"
     echo -e "${GREEN}║${NC}  ${BOLD}端口映射：${NC}                                                    ${GREEN}║${NC}"
@@ -839,7 +839,7 @@ show_install_summary() {
 first_time_setup() {
     echo ""
     echo -e "${CYAN}╔══════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║${NC}       ${BOLD}🐾 OpenClaw Pro — 首次安装${NC}                ${CYAN}║${NC}"
+    echo -e "${CYAN}║${NC}       ${BOLD}🐾 ClawNook — 首次安装${NC}                ${CYAN}║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "  ${BLUE}只需设置一个密码，其他全部使用默认值。${NC}"
@@ -1278,7 +1278,7 @@ cmd_status() {
 }
 
 cmd_config() {
-    echo -e "\n${BOLD}━━━ OpenClaw Pro 配置 ━━━${NC}"
+    echo -e "\n${BOLD}━━━ ClawNook 配置 ━━━${NC}"
     echo -e "  ${CYAN}1.${NC} 修改root密码"
     echo -e "  ${CYAN}2.${NC} 修改Gateway端口"
     echo -e "  ${CYAN}3.${NC} 配置HTTPS域名"
@@ -1509,7 +1509,7 @@ cmd_update() {
 
     # 显示更新菜单
     echo ""
-    echo -e "${BOLD}━━━ OpenClaw Pro 更新 ━━━${NC}"
+    echo -e "${BOLD}━━━ ClawNook 更新 ━━━${NC}"
     if [ -n "$recommend_msg" ]; then
         echo -e "  ${YELLOW}⚠️  $recommend_msg${NC}"
     fi

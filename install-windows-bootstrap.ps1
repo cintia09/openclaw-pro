@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    OpenClaw Pro - Windows Bootstrap Installer
+    ClawNook - Windows Bootstrap Installer
     Downloads the full installer script to a temp file, then executes it.
 .DESCRIPTION
     This small bootstrap avoids the "irm | iex" streaming EOF issue
@@ -12,7 +12,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$repo      = 'cintia09/openclaw-pro'
+$repo      = 'menriothink/clawnook'
 $branch    = 'main'
 $fileName  = 'install-windows.ps1'
 $nonce     = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
@@ -62,7 +62,7 @@ function Download-Script {
 
 Write-Host ""
 Write-Host "  =========================================" -ForegroundColor Cyan
-Write-Host "   OpenClaw Pro - Windows Setup" -ForegroundColor Cyan
+Write-Host "   ClawNook - Windows Setup" -ForegroundColor Cyan
 Write-Host "  =========================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  [INFO] Downloading installer script..." -ForegroundColor Gray

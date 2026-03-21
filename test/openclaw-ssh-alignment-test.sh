@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CONTAINER_NAME="${1:-openclaw-pro}"
+CONTAINER_NAME="${1:-clawnook}"
 SSH_PORT="${SSH_PORT:-2222}"
 SSH_USER="${SSH_USER:-}"
 

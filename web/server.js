@@ -2703,7 +2703,7 @@ async function getLatestOpenClawRelease(repo) {
   const apiUrl = `https://api.github.com/repos/${safeRepo}/releases/latest`;
   try {
     const resp = await fetchWithFallback(apiUrl, {
-      headers: { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'openclaw-pro' },
+      headers: { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'clawnook' },
       timeout: 12000
     });
     if (!resp || !resp.ok) {
@@ -3946,7 +3946,7 @@ app.post('/api/password', (req, res) => {
 // ============================================================
 const VERSION_FILE = '/etc/openclaw-version';
 const DOCKERFILE_HASH_FILE = '/etc/openclaw-dockerfile-hash';
-const GITHUB_REPO = 'cintia09/openclaw-pro';
+const GITHUB_REPO = 'menriothink/clawnook';
 
 function getCurrentVersion() {
   try { return fs.readFileSync(VERSION_FILE, 'utf8').trim(); } catch { return 'unknown'; }
@@ -3961,7 +3961,7 @@ async function getRemoteDockerfileHashesByRef(ref, timeout = 6000) {
   const results = await Promise.all(candidates.map(async (fileName) => {
     try {
       const dfResp = await fetchWithFallback(`${GITHUB_RAW_BASE}/${ref}/${fileName}`, {
-        headers: { 'User-Agent': 'openclaw-pro' },
+        headers: { 'User-Agent': 'clawnook' },
         timeout
       });
       if (!dfResp.ok) return null;
@@ -4000,7 +4000,7 @@ app.get('/api/update/check', async (req, res) => {
     // --- Method 1: GitHub API ---
     try {
       const resp = await fetchWithFallback(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
-        headers: { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'openclaw-pro' },
+        headers: { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'clawnook' },
         timeout: 8000
       });
       if (resp.ok) {
@@ -4016,7 +4016,7 @@ app.get('/api/update/check', async (req, res) => {
     {
       try {
         const rawResp = await fetchWithFallback(`${GITHUB_RAW_BASE}/main/version.txt`, {
-          headers: { 'User-Agent': 'openclaw-pro' },
+          headers: { 'User-Agent': 'clawnook' },
           timeout: 6000
         });
         if (rawResp.ok) {
@@ -4190,7 +4190,7 @@ async function fetchHotpatchManifest(branch) {
   try {
     const url = `${GITHUB_RAW_BASE}/${branch}/hotpatch-manifest.json`;
     const resp = await fetchWithFallback(url, {
-      headers: { 'User-Agent': 'openclaw-pro' },
+      headers: { 'User-Agent': 'clawnook' },
       timeout: 8000
     });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -4298,7 +4298,7 @@ app.post('/api/update/hotpatch', async (req, res) => {
       try {
         const url = `${GITHUB_RAW_BASE}/${branch}/${ghPath}`;
         const resp = await fetchWithFallback(url, {
-          headers: { 'User-Agent': 'openclaw-pro' },
+          headers: { 'User-Agent': 'clawnook' },
           timeout: 8000
         });
 
@@ -4374,7 +4374,7 @@ app.post('/api/update/hotpatch', async (req, res) => {
         let newVersion = '';
         try {
           const versionResp = await fetchWithFallback(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
-            headers: { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'openclaw-pro' },
+            headers: { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'clawnook' },
             timeout: 10000
           });
           if (versionResp.ok) {
@@ -4385,7 +4385,7 @@ app.post('/api/update/hotpatch', async (req, res) => {
         if (!newVersion) {
           try {
             const rawVer = await fetchWithFallback(`${GITHUB_RAW_BASE}/main/version.txt`, {
-              headers: { 'User-Agent': 'openclaw-pro' },
+              headers: { 'User-Agent': 'clawnook' },
               timeout: 8000
             });
             if (rawVer.ok) newVersion = (await rawVer.text()).trim();
@@ -4418,7 +4418,7 @@ app.post('/api/update/hotpatch', async (req, res) => {
     const summary = `Hot update complete: ${hotpatchState.updated.length} file(s) updated, ${hotpatchState.failed.length} failed`;
     log(summary);
     if (needContainerRestart) {
-      log('Detected start-services.sh updated: please run on host machine `docker restart openclaw-pro` to apply entry script changes (hot update alone will not take effect)');
+      log('Detected start-services.sh updated: please run on host machine `docker restart clawnook` to apply entry script changes (hot update alone will not take effect)');
       log('If container name is unknown: first run `docker ps --format "{{.Names}}"` to confirm name, then run `docker restart <container-name>`');
     }
     hotpatchState.status = 'done';
@@ -9390,7 +9390,7 @@ app.get('/api/openclaw/config/export', async (req, res) => {
     fs.writeFileSync(path.join(tmpDir, '_export-meta.json'), JSON.stringify({
       exportTime: new Date().toISOString(),
       files: Object.keys(FILE_MAP).filter(n => fs.existsSync(FILE_MAP[n])),
-      version: 'openclaw-pro-config-v1'
+      version: 'clawnook-config-v1'
     }, null, 2));
 
     const tgzPath = `${tmpDir}.tar.gz`;

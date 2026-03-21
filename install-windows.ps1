@@ -1,12 +1,12 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    OpenClaw Pro - Windows Installer
-    Deploys OpenClaw Pro with Docker Desktop on Windows
+    ClawNook - Windows Installer
+    Deploys ClawNook with Docker Desktop on Windows
 
 .DESCRIPTION
-    This script automates the Windows installation path for OpenClaw Pro by
-    checking Docker Desktop and then deploying the OpenClaw Pro container.
+    This script automates the Windows installation path for ClawNook by
+    checking Docker Desktop and then deploying the ClawNook container.
     The legacy WSL-based installer implementation is intentionally kept in this
     file for later use, but the current main flow no longer enters that path.
 
@@ -14,7 +14,7 @@
     1. Environment detection (admin check, Windows version, Docker Desktop)
     2. Validate Docker Desktop path
     3. Prepare local deployment assets
-    4. Deploy OpenClaw Pro
+    4. Deploy ClawNook
     5. Cleanup + show completion info
 #>
 
@@ -33,13 +33,13 @@ $OPENCLAW_PORT   = "18789"
 $WEB_PANEL_PORT  = "3000"
 $DEFAULT_HTTPS_PORT = "443"
 $DEFAULT_HTTP_PORT  = "80"
-$DEFAULT_DEPLOY_DIR_NAME = ".openclaw-pro"
-$LEGACY_DEPLOY_DIR_NAME = "openclaw-pro"
+$DEFAULT_DEPLOY_DIR_NAME = ".clawnook"
+$LEGACY_DEPLOY_DIR_NAME = "clawnook"
 $DOCKER_PLATFORM = "linux/amd64"
-$GITHUB_REPO     = "cintia09/openclaw-pro"
-$IMAGE_NAME      = "openclaw-pro"
+$GITHUB_REPO     = "menriothink/clawnook"
+$IMAGE_NAME      = "clawnook"
 $script:imageEdition = "lite"  # 发布仅保留 lite
-$SCRIPT_URL      = "https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1"
+$SCRIPT_URL      = "https://raw.githubusercontent.com/menriothink/clawnook/main/install-windows.ps1"
 $SCRIPT_DIR      = if ($MyInvocation.MyCommand.Path) {
     Split-Path -Parent $MyInvocation.MyCommand.Path
 } else {
@@ -138,9 +138,9 @@ function Get-WslDeployConfig {
 
     try {
         if ($WslUser) {
-            $configText = (& wsl -d $DistroName -u $WslUser -- bash -c "sudo service docker start >/dev/null 2>&1 || true; docker exec openclaw-pro sh -c 'cat /root/.openclaw/docker-config.json 2>/dev/null' 2>/dev/null || true" 2>$null | Out-String).Trim()
+            $configText = (& wsl -d $DistroName -u $WslUser -- bash -c "sudo service docker start >/dev/null 2>&1 || true; docker exec clawnook sh -c 'cat /root/.openclaw/docker-config.json 2>/dev/null' 2>/dev/null || true" 2>$null | Out-String).Trim()
         } else {
-            $configText = (& wsl -d $DistroName -- bash -c "service docker start >/dev/null 2>&1 || true; docker exec openclaw-pro sh -c 'cat /root/.openclaw/docker-config.json 2>/dev/null' 2>/dev/null || true" 2>$null | Out-String).Trim()
+            $configText = (& wsl -d $DistroName -- bash -c "service docker start >/dev/null 2>&1 || true; docker exec clawnook sh -c 'cat /root/.openclaw/docker-config.json 2>/dev/null' 2>/dev/null || true" 2>$null | Out-String).Trim()
         }
 
         if (-not $configText) { return $null }
@@ -331,10 +331,10 @@ function Convert-ToContainerUserName {
 function Get-StateVolumeName {
     param([string]$ContainerName)
 
-    if ($ContainerName -match '^openclaw-pro-(\d+)$') {
-        return "openclaw-pro-state-$($Matches[1])"
+    if ($ContainerName -match '^clawnook-(\d+)$') {
+        return "clawnook-state-$($Matches[1])"
     }
-    return "openclaw-pro-state"
+    return "clawnook-state"
 }
 
 function Write-StateVolumeFile {
@@ -659,7 +659,7 @@ function Show-Logo {
     Write-Host "   \___/| .__/ \___|_| |_\____|_|\__,_| \_/\_/  " -ForegroundColor Cyan
     Write-Host "        |_|                                     " -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "                    🐾  OpenClaw Pro  —  Windows Installer" -ForegroundColor White
+    Write-Host "                    🐾  ClawNook  —  Windows Installer" -ForegroundColor White
     Write-Host ""
     Write-Host "  ---------------------------------------------------------------------" -ForegroundColor DarkGray
     Write-Host ""
@@ -711,7 +711,7 @@ function Assert-Administrator {
     Write-Host "     1. 右键点击 '开始' 菜单 → 'Windows PowerShell (管理员)'" -ForegroundColor White
     Write-Host "        或搜索 PowerShell → 右键 → 以管理员身份运行" -ForegroundColor Gray
     Write-Host "     2. 运行以下命令:" -ForegroundColor White
-    Write-Host '        irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows-bootstrap.ps1 | iex' -ForegroundColor Cyan
+    Write-Host '        irm https://raw.githubusercontent.com/menriothink/clawnook/main/install-windows-bootstrap.ps1 | iex' -ForegroundColor Cyan
     Write-Host ""
     Write-Host "     如果已下载 install-windows.bat，可右键 → 以管理员身份运行" -ForegroundColor Gray
     Write-Host ""
@@ -1846,7 +1846,7 @@ TMP_SCRIPT="/tmp/openclaw-install-imageonly.sh"
 
 echo ""
 echo "=========================================="
-echo "  OpenClaw Pro — WSL 安装向导"
+echo "  ClawNook — WSL 安装向导"
 echo "  (与 Linux 安装流程一致)"
 echo "=========================================="
 echo ""
@@ -1935,9 +1935,9 @@ exec bash "`$TMP_SCRIPT"
 }
 
 function Remove-LiteLocalImageTag {
-    try { & docker image inspect openclaw-pro:lite 2>$null | Out-Null } catch { }
+    try { & docker image inspect clawnook:lite 2>$null | Out-Null } catch { }
     if ($LASTEXITCODE -eq 0) {
-        try { & docker rmi openclaw-pro:lite 2>$null | Out-Null } catch { }
+        try { & docker rmi clawnook:lite 2>$null | Out-Null } catch { }
     }
 }
 
@@ -2722,7 +2722,7 @@ function Get-RemoteFileSize {
 function Get-DeployConfig {
     Write-Host ""
     Write-Host "  +==================================================+" -ForegroundColor Cyan
-    Write-Host "  |       OpenClaw Pro -- Deploy Config              |" -ForegroundColor Cyan
+    Write-Host "  |       ClawNook -- Deploy Config              |" -ForegroundColor Cyan
     Write-Host "  +==================================================+" -ForegroundColor Cyan
     Write-Host ""
 
@@ -3053,7 +3053,7 @@ function Write-LaunchAccessSummary {
         Write-Host "  ✅ Ubuntu ($UBUNTU_DISTRO)" -ForegroundColor Green
         Write-Host "  ✅ Docker Engine" -ForegroundColor Green
     }
-    Write-Host "  🚀 OpenClaw Pro 容器已启动" -ForegroundColor Cyan
+    Write-Host "  🚀 ClawNook 容器已启动" -ForegroundColor Cyan
     Write-Host ""
 
     Write-Host "  📝 端口映射:" -ForegroundColor White
@@ -3116,7 +3116,7 @@ function Show-Completion {
     if ($DeployLaunched) {
         Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray
         Write-Host ""
-        $showContainerName = if ($script:deployedContainerName) { $script:deployedContainerName } else { "openclaw-pro" }
+        $showContainerName = if ($script:deployedContainerName) { $script:deployedContainerName } else { "clawnook" }
         $showExecUser = if ($script:hostUserForSSH -and $script:hostUserForSSH -ne "root") { $script:hostUserForSSH } else { "" }
         $sshUser = if ($script:hostUserForSSH) { $script:hostUserForSSH } else { $env:USERNAME }
         $execCmd = if ($showExecUser) { "docker exec -it -u $showExecUser $showContainerName bash" } else { "docker exec -it $showContainerName bash" }
@@ -3139,7 +3139,7 @@ function Show-Completion {
         Write-Warn "远程 SSH 登录需手动注入公钥（宿主机可通过 docker exec 进入容器）"
         Write-Host "" 
         Write-Host "  升级命令" -ForegroundColor White
-        Write-Host '     irm https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows-bootstrap.ps1 | iex' -ForegroundColor Cyan
+        Write-Host '     irm https://raw.githubusercontent.com/menriothink/clawnook/main/install-windows-bootstrap.ps1 | iex' -ForegroundColor Cyan
     } else {
         Write-Host ""
         Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray
@@ -3150,12 +3150,12 @@ function Show-Completion {
         Write-Host ""
         Write-Host "  🔍 排查步骤:" -ForegroundColor Cyan
         Write-Host "     docker ps -a                   # 检查所有容器" -ForegroundColor Gray
-        Write-Host "     docker logs openclaw-pro       # 查看日志" -ForegroundColor Gray
+        Write-Host "     docker logs clawnook       # 查看日志" -ForegroundColor Gray
         Write-Host "     netstat -ano | findstr :18789  # 检查端口占用" -ForegroundColor Gray
         Write-Host ""
 
         # 检查镜像是否已存在
-        $imageCheck = & docker image inspect openclaw-pro 2>$null
+        $imageCheck = & docker image inspect clawnook 2>$null
         if ($LASTEXITCODE -eq 0) {
             Write-Host "  ✅ 镜像已加载，重新运行脚本即可（会跳过下载）" -ForegroundColor Green
         } else {
@@ -3163,7 +3163,7 @@ function Show-Completion {
         Write-Host ""
         Write-Host "     方式1: 浏览器下载（推荐）" -ForegroundColor Yellow
         $manualTag = if ($script:latestReleaseTag) { $script:latestReleaseTag } elseif ($latestReleaseTag) { $latestReleaseTag } else { "v1.0.0" }
-        Write-Host "     Lite版 (~250MB): https://github.com/$GITHUB_REPO/releases/download/${manualTag}/openclaw-pro-image-lite.tar.gz" -ForegroundColor Cyan
+        Write-Host "     Lite版 (~250MB): https://github.com/$GITHUB_REPO/releases/download/${manualTag}/clawnook-image-lite.tar.gz" -ForegroundColor Cyan
         Write-Host ""
         Write-Host "     方式2: aria2c 多线程下载（推荐，需先安装 aria2）" -ForegroundColor Yellow
         Write-Host "     aria2c -x 8 -s 8 -k 2M --continue=true --retry-wait=3 --max-tries=0 <上述URL>" -ForegroundColor White
@@ -3498,7 +3498,7 @@ function Main {
                             Remove-Item $localDeployDir -Recurse -Force
                         }
                         # Clone with tags so we can checkout the latest release
-                        & git clone --depth 1 https://github.com/cintia09/openclaw-pro.git "$localDeployDir" 2>&1
+                        & git clone --depth 1 https://github.com/menriothink/clawnook.git "$localDeployDir" 2>&1
                         if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
                         # Try to switch to latest release tag
                         try {
@@ -3535,12 +3535,12 @@ function Main {
             if (-not $hasGit) {
                 # Try GitHub Release first, fallback to main branch ZIP
                 $zipUrl = $null
-                $zipFile = Join-Path $env:TEMP "openclaw-pro.zip"
+                $zipFile = Join-Path $env:TEMP "clawnook.zip"
 
                 try {
                     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
                     Write-Info "正在查询最新 Release 版本..."
-                    $releaseApi = "https://api.github.com/repos/cintia09/openclaw-pro/releases/latest"
+                    $releaseApi = "https://api.github.com/repos/menriothink/clawnook/releases/latest"
                     try {
                         $releaseJson = Invoke-RestMethod -Uri $releaseApi -TimeoutSec 10 -ErrorAction Stop
                         $zipUrl = $releaseJson.zipball_url
@@ -3548,7 +3548,7 @@ function Main {
                         Write-OK "找到最新 Release: $relTag"
                     } catch {
                         Write-Info "未找到 Release 版本，使用 main 分支"
-                        $zipUrl = "https://github.com/cintia09/openclaw-pro/archive/refs/heads/main.zip"
+                        $zipUrl = "https://github.com/menriothink/clawnook/archive/refs/heads/main.zip"
                     }
 
                     # -- Resume-capable download with Range header --
@@ -3700,13 +3700,13 @@ function Main {
                     Expand-Archive -Path $zipFile -DestinationPath $env:TEMP -Force
 
                     # GitHub ZIP directory names vary by download type:
-                    # - main branch: "openclaw-pro-main/"
-                    # - release zipball: "cintia09-openclaw-pro-{sha}/"
+                    # - main branch: "clawnook-main/"
+                    # - release zipball: "menriothink-clawnook-{sha}/"
                     $extractedDir = $null
                     $candidates = @(
-                        (Join-Path $env:TEMP "openclaw-pro-main"),
-                        (Get-ChildItem $env:TEMP -Directory -Filter "openclaw-pro-*" -ErrorAction SilentlyContinue | Select-Object -First 1),
-                        (Get-ChildItem $env:TEMP -Directory -Filter "*openclaw-pro-*" -ErrorAction SilentlyContinue | Select-Object -First 1)
+                        (Join-Path $env:TEMP "clawnook-main"),
+                        (Get-ChildItem $env:TEMP -Directory -Filter "clawnook-*" -ErrorAction SilentlyContinue | Select-Object -First 1),
+                        (Get-ChildItem $env:TEMP -Directory -Filter "*clawnook-*" -ErrorAction SilentlyContinue | Select-Object -First 1)
                     )
                     foreach ($c in $candidates) {
                         $path = if ($c -is [System.IO.DirectoryInfo]) { $c.FullName } else { $c }
@@ -3733,8 +3733,8 @@ function Main {
                     Write-Err "下载失败: $_"
                     Write-Host ""
                     Write-Host "  💡 请手动下载并解压:" -ForegroundColor Cyan
-                    Write-Host "     1. 浏览器打开: https://github.com/cintia09/openclaw-pro/releases/latest" -ForegroundColor White
-                    Write-Host "     2. 解压到当前目录，重命名为 openclaw-pro" -ForegroundColor White
+                    Write-Host "     1. 浏览器打开: https://github.com/menriothink/clawnook/releases/latest" -ForegroundColor White
+                    Write-Host "     2. 解压到当前目录，重命名为 clawnook" -ForegroundColor White
                     Write-Host "     3. 重新运行此脚本" -ForegroundColor White
                     Write-Host ""
                     Read-Host "按回车退出"
@@ -3749,11 +3749,11 @@ function Main {
         Remove-InstallState
 
         # -- 检测已有容器 --
-        $containerName = "openclaw-pro"   # 默认容器名
+        $containerName = "clawnook"   # 默认容器名
         $script:upgradeMode = $false
 
-        # 查找所有 openclaw-pro* 容器
-        $existingContainers = & docker ps -a --filter "name=openclaw-pro" --format "{{.Names}}|{{.Status}}|{{.Ports}}" 2>&1
+        # 查找所有 clawnook* 容器
+        $existingContainers = & docker ps -a --filter "name=clawnook" --format "{{.Names}}|{{.Status}}|{{.Ports}}" 2>&1
         Write-Log "ContainerScan raw docker ps output:`n$($existingContainers | Out-String)"
         $runningContainers = @()
         $stoppedContainers = @()
@@ -4034,7 +4034,7 @@ function Main {
                 $upgradeStateVolume = Get-StateVolumeName -ContainerName $containerName
                 $upgradeConfigFile = ""
                 $upgradeConfig = $null
-                $upgradeConfigText = Read-StateVolumeText -VolumeName $upgradeStateVolume -ImageName "openclaw-pro:latest" -RelativePath "docker-config.json"
+                $upgradeConfigText = Read-StateVolumeText -VolumeName $upgradeStateVolume -ImageName "clawnook:latest" -RelativePath "docker-config.json"
                 if ($upgradeConfigText) {
                     try {
                         $upgradeConfig = $upgradeConfigText | ConvertFrom-Json
@@ -4211,8 +4211,8 @@ function Main {
                             Write-Info "停止并删除: $rcName"
                             & docker rm -f $rcName 2>&1 | Out-Null
                         }
-                        # 复用默认容器名 openclaw-pro
-                        $containerName = "openclaw-pro"
+                        # 复用默认容器名 clawnook
+                        $containerName = "clawnook"
                     }
                 }
                 Start-Sleep -Seconds 2  # 等待端口释放
@@ -4226,7 +4226,7 @@ function Main {
                 }
 
                 $delHomeDataName = "home-data"
-                if ($containerName -match '^openclaw-pro-(\d+)$') {
+                if ($containerName -match '^clawnook-(\d+)$') {
                     $delHomeDataName = "home-data-$($Matches[1])"
                 }
                 # 兼容清理：旧版本可能残留宿主机 home-data 目录
@@ -4268,19 +4268,19 @@ function Main {
             $forceRefreshImage = $false
 
             # 发布仅保留 lite 版本
-            $assetName = "openclaw-pro-image-lite.tar.gz"
+            $assetName = "clawnook-image-lite.tar.gz"
             Write-Host ""
             $script:imageEdition = "lite"
-            $assetName = "openclaw-pro-image-lite.tar.gz"
+            $assetName = "clawnook-image-lite.tar.gz"
             Write-Info "发布仅保留 Lite 镜像，已自动选择 lite"
             if ($latestReleaseTag) {
                 Write-Info "远端目标版本: $latestReleaseTag ($script:imageEdition)"
             }
 
             # -- 尝试 0: 检查镜像是否已存在 --
-            $existingImage = & docker image inspect openclaw-pro 2>$null
+            $existingImage = & docker image inspect clawnook 2>$null
             if ($LASTEXITCODE -eq 0) {
-                Write-OK "检测到本地镜像 openclaw-pro"
+                Write-OK "检测到本地镜像 clawnook"
                 $localImageReleaseTag = ""
                 $tagStateVolumeName = Get-StateVolumeName -ContainerName $containerName
 
@@ -4288,15 +4288,15 @@ function Main {
                 $localImageEdition = "unknown"
                 try {
                     $localTags = (& docker images --format '{{.Repository}}:{{.Tag}}' 2>$null) -join ';'
-                    if ($localTags -match 'openclaw-pro:lite') { $localImageEdition = 'lite' }
-                    elseif ($localTags -match 'openclaw-pro:latest') { $localImageEdition = 'latest' }
+                    if ($localTags -match 'clawnook:lite') { $localImageEdition = 'lite' }
+                    elseif ($localTags -match 'clawnook:latest') { $localImageEdition = 'latest' }
                     if ($localTags) { Write-Info "本地镜像标签: $localTags (detected edition: $localImageEdition)" }
                 } catch { }
 
                 # 若未记录本地版本标记，尝试从本地镜像 tag 反推出 release 版本
                 if (-not $localImageReleaseTag -and $localTags) {
                     try {
-                        $mainRepoTag = (& docker image inspect openclaw-pro:latest --format '{{index .RepoTags 0}}' 2>$null | Select-Object -First 1)
+                        $mainRepoTag = (& docker image inspect clawnook:latest --format '{{index .RepoTags 0}}' 2>$null | Select-Object -First 1)
                         if ($mainRepoTag -and $mainRepoTag -match ':(v\d+\.\d+\.\d+(?:[-\w\.]*)?)$') {
                             $derived = ($Matches[1] -replace '(-lite)$','')
                             if ($derived) {
@@ -4309,8 +4309,8 @@ function Main {
 
                 # 读取保存的镜像 digest，并与当前实际镜像 ID 对比
                 $localImageDigest = ""
-                $localImageDigest = (Read-StateVolumeText -VolumeName $tagStateVolumeName -ImageName "openclaw-pro:latest" -RelativePath "image-digest.txt" | Select-Object -First 1)
-                $currentImageId = (& docker image inspect openclaw-pro --format '{{.Id}}' 2>$null)
+                $localImageDigest = (Read-StateVolumeText -VolumeName $tagStateVolumeName -ImageName "clawnook:latest" -RelativePath "image-digest.txt" | Select-Object -First 1)
+                $currentImageId = (& docker image inspect clawnook --format '{{.Id}}' 2>$null)
                 if ($currentImageId -and $localImageDigest) {
                     if ($currentImageId -eq $localImageDigest) {
                         Write-Info "镜像 digest 校验通过"
@@ -4349,7 +4349,7 @@ function Main {
                 if ($shouldRefreshImage) {
                     $forceRefreshImage = $true
                     if ($refreshReason) { Write-Info "自动判定需要刷新镜像：$refreshReason" }
-                    & docker rmi -f openclaw-pro 2>&1 | Out-Null
+                    & docker rmi -f clawnook 2>&1 | Out-Null
                     Start-Sleep -Milliseconds 500
                 } else {
                     Write-OK "自动判定使用本地镜像（版本一致），跳过下载/构建"
@@ -4604,57 +4604,57 @@ function Main {
                         $sawLiteLoaded = $false
                         if ($script:imageEdition -eq 'lite') {
                             foreach ($ref in $loadedRefs) {
-                                if (("$ref").ToLower() -match 'openclaw-pro:lite$' -or ("$ref").ToLower() -match ':v\d+\.\d+\.\d+.*-lite$') {
+                                if (("$ref").ToLower() -match 'clawnook:lite$' -or ("$ref").ToLower() -match ':v\d+\.\d+\.\d+.*-lite$') {
                                     $sawLiteLoaded = $true
                                     break
                                 }
                             }
                             if (-not $sawLiteLoaded) {
-                                $liteProbe = & docker image inspect openclaw-pro:lite 2>$null
+                                $liteProbe = & docker image inspect clawnook:lite 2>$null
                                 if ($LASTEXITCODE -eq 0) { $sawLiteLoaded = $true }
                             }
                         }
                         if ($sawLiteLoaded) {
-                            Write-Info "检测到已加载 lite 镜像，执行强化 tag 修复（openclaw-pro:lite -> openclaw-pro:latest）..."
+                            Write-Info "检测到已加载 lite 镜像，执行强化 tag 修复（clawnook:lite -> clawnook:latest）..."
                             for ($ti = 1; $ti -le 3; $ti++) {
-                                try { & docker tag "openclaw-pro:lite" "openclaw-pro:latest" 2>$null } catch { }
+                                try { & docker tag "clawnook:lite" "clawnook:latest" 2>$null } catch { }
                                 Start-Sleep -Milliseconds 300
-                                $tagChk = & docker image inspect openclaw-pro:latest 2>$null
+                                $tagChk = & docker image inspect clawnook:latest 2>$null
                                 if ($LASTEXITCODE -eq 0) { break }
                             }
                             Remove-LiteLocalImageTag
                         }
 
-                        # 有些 tar 里只有 ghcr.io/... 或 openclaw-pro:lite；尝试补一个 openclaw-pro:latest
-                        $preTagCheck = & docker image inspect openclaw-pro:latest 2>$null
+                        # 有些 tar 里只有 ghcr.io/... 或 clawnook:lite；尝试补一个 clawnook:latest
+                        $preTagCheck = & docker image inspect clawnook:latest 2>$null
                         if ($LASTEXITCODE -ne 0) {
                             # 优先用 docker load 输出中收集到的 refs 进行 tag
                             if ($loadedRefs.Count -gt 0) {
                                 foreach ($ref in $loadedRefs) {
-                                    try { & docker tag $ref "openclaw-pro:latest" 2>$null } catch { }
+                                    try { & docker tag $ref "clawnook:latest" 2>$null } catch { }
                                 }
                             }
 
-                            # 选择精简版时，若仅加载出 openclaw-pro:lite，显式补 latest tag
+                            # 选择精简版时，若仅加载出 clawnook:lite，显式补 latest tag
                             if ($script:imageEdition -eq 'lite') {
-                                $liteCheck = & docker image inspect openclaw-pro:lite 2>$null
+                                $liteCheck = & docker image inspect clawnook:lite 2>$null
                                 if ($LASTEXITCODE -eq 0) {
-                                    try { & docker tag "openclaw-pro:lite" "openclaw-pro:latest" 2>$null } catch { }
+                                    try { & docker tag "clawnook:lite" "clawnook:latest" 2>$null } catch { }
                                     Remove-LiteLocalImageTag
                                 }
                             }
 
-                            # 若上一步未能创建 openclaw-pro:latest，则扫描当前已加载的 images，查找包含 openclaw-pro 的 repo:tag，并 tag 到 openclaw-pro:latest
+                            # 若上一步未能创建 clawnook:latest，则扫描当前已加载的 images，查找包含 clawnook 的 repo:tag，并 tag 到 clawnook:latest
                             $allImages = & docker images --format '{{.Repository}}:{{.Tag}}' 2>$null
                             foreach ($im in $allImages) {
-                                if ($im -and $im -match 'openclaw-pro') {
-                                    try { & docker tag $im "openclaw-pro:latest" 2>$null } catch { }
+                                if ($im -and $im -match 'clawnook') {
+                                    try { & docker tag $im "clawnook:latest" 2>$null } catch { }
                                 }
                             }
                         }
 
                         # 检查镜像是否加载成功（尝试过多种 tag 修正后再检查）
-                        $loadCheck = & docker image inspect openclaw-pro:latest 2>$null
+                        $loadCheck = & docker image inspect clawnook:latest 2>$null
                         if ($LASTEXITCODE -eq 0) {
                             Remove-ReplacedImageIdsFromLoadOutput -LoadOutput $loadOutput
                             Remove-NewDanglingImages -BeforeIds $danglingBeforeLoad
@@ -4663,7 +4663,7 @@ function Main {
                             Write-OK "预构建镜像加载完成 (耗时 ${totalSec} 秒)"
                             # 保存镜像 digest 用于完整性校验
                             try {
-                                $newImageId = (& docker image inspect openclaw-pro:latest --format '{{.Id}}' 2>$null)
+                                $newImageId = (& docker image inspect clawnook:latest --format '{{.Id}}' 2>$null)
                                 if ($newImageId) {
                                     $script:loadedImageDigest = $newImageId
                                 }
@@ -4715,13 +4715,13 @@ function Main {
                             if ($pullExitCode -eq 0) {
                                 $ghcrCheck = & docker image inspect $ghcrImage 2>$null
                                 if ($LASTEXITCODE -eq 0) {
-                                    & docker tag $ghcrImage "openclaw-pro:latest" 2>$null
-                                    $tagCheck = & docker image inspect "openclaw-pro:latest" 2>$null
+                                    & docker tag $ghcrImage "clawnook:latest" 2>$null
+                                    $tagCheck = & docker image inspect "clawnook:latest" 2>$null
                                     if ($LASTEXITCODE -eq 0) {
                                         $imageReady = $true
                                         Write-OK "GHCR 镜像拉取成功（tag: $tag）"
                                         try {
-                                            $pulledId = (& docker image inspect openclaw-pro --format '{{.Id}}' 2>$null)
+                                            $pulledId = (& docker image inspect clawnook --format '{{.Id}}' 2>$null)
                                             if ($pulledId) { $script:loadedImageDigest = $pulledId }
                                         } catch { }
                                     }
@@ -4766,7 +4766,7 @@ function Main {
                     }
 
                     # 重要: 不能用 | ForEach-Object，PowerShell 5.1 中 pipeline 会导致 $LASTEXITCODE 不可靠
-                    $buildOutput = & docker build --no-cache -t openclaw-pro . 2>&1
+                    $buildOutput = & docker build --no-cache -t clawnook . 2>&1
                     $buildExitCode = $LASTEXITCODE
                     $buildOutput | ForEach-Object {
                         if ($_ -match "^#\d+ \[" -or $_ -match "^Step " -or $_ -match "Successfully") {
@@ -4790,7 +4790,7 @@ function Main {
                 $imageReady = $true
                 # 保存本地构建的镜像 digest
                 try {
-                    $builtImageId = (& docker image inspect openclaw-pro --format '{{.Id}}' 2>$null)
+                    $builtImageId = (& docker image inspect clawnook --format '{{.Id}}' 2>$null)
                     if ($builtImageId) {
                         $script:loadedImageDigest = $builtImageId
                     }
@@ -4799,24 +4799,24 @@ function Main {
             Write-OK "镜像准备完成"
             Write-Log "Image ready. imageReady=$imageReady. Proceeding to pre-run checks."
 
-            # 启动前强校验：确保 openclaw-pro:latest 标签真实存在
-            $preRunImageCheck = & docker image inspect openclaw-pro 2>$null
+            # 启动前强校验：确保 clawnook:latest 标签真实存在
+            $preRunImageCheck = & docker image inspect clawnook 2>$null
             if ($LASTEXITCODE -ne 0) {
-                Write-Warn "镜像标签 openclaw-pro:latest 缺失，尝试自动修复..."
+                Write-Warn "镜像标签 clawnook:latest 缺失，尝试自动修复..."
                 Write-Log "Pre-run image check FAILED. Attempting repair."
 
-                # 优先把已存在的 GHCR 镜像重新 tag 为 openclaw-pro:latest
+                # 优先把已存在的 GHCR 镜像重新 tag 为 clawnook:latest
                 try {
                     $ghcrLocalCandidates = & docker images --format "{{.Repository}}:{{.Tag}}" 2>$null | Where-Object {
                         $_ -like "ghcr.io/${GITHUB_REPO}:*"
                     }
                     if ($ghcrLocalCandidates -and $ghcrLocalCandidates.Count -gt 0) {
                         $cand = $ghcrLocalCandidates[0]
-                        & docker tag $cand "openclaw-pro:latest" 2>$null
+                        & docker tag $cand "clawnook:latest" 2>$null
                     }
                 } catch { }
 
-                $preRunImageCheck = & docker image inspect openclaw-pro 2>$null
+                $preRunImageCheck = & docker image inspect clawnook 2>$null
                 if ($LASTEXITCODE -ne 0) {
                     # 仍缺失时，直接拉取 GHCR 并 tag
                     $repairTag = if ($latestReleaseTag) { $latestReleaseTag } else { "latest" }
@@ -4833,7 +4833,7 @@ function Main {
                             Write-Log "docker pull(repair): $_"
                         }
                         if ($repairPullCode -eq 0) {
-                            & docker tag $repairImage "openclaw-pro:latest" 2>$null
+                            & docker tag $repairImage "clawnook:latest" 2>$null
                         } else {
                             Write-Log "Repair pull failed with exit code $repairPullCode"
                         }
@@ -4842,9 +4842,9 @@ function Main {
                     }
                 }
 
-                $preRunImageCheck = & docker image inspect openclaw-pro 2>$null
+                $preRunImageCheck = & docker image inspect clawnook 2>$null
                 if ($LASTEXITCODE -ne 0) {
-                    throw "镜像修复失败：未找到 openclaw-pro:latest"
+                    throw "镜像修复失败：未找到 clawnook:latest"
                 }
                 Write-OK "镜像标签修复完成"
             }
@@ -4982,21 +4982,21 @@ function Main {
                 timezone   = "Asia/Shanghai"
                 created    = (Get-Date -Format "o")
             } | ConvertTo-Json -Depth 2
-            if (-not (Write-StateVolumeFile -VolumeName $stateVolumeName -ImageName "openclaw-pro:latest" -RelativePath "docker-config.json" -Content $dockerConfigJson)) {
+            if (-not (Write-StateVolumeFile -VolumeName $stateVolumeName -ImageName "clawnook:latest" -RelativePath "docker-config.json" -Content $dockerConfigJson)) {
                 throw "写入状态卷 docker-config.json 失败"
             }
             if ($latestReleaseTag) {
-                [void](Write-StateVolumeFile -VolumeName $stateVolumeName -ImageName "openclaw-pro:latest" -RelativePath "image-release-tag.txt" -Content $latestReleaseTag)
+                [void](Write-StateVolumeFile -VolumeName $stateVolumeName -ImageName "clawnook:latest" -RelativePath "image-release-tag.txt" -Content $latestReleaseTag)
             }
             # 保存镜像 digest 用于下次完整性校验
             if ($script:loadedImageDigest) {
-                [void](Write-StateVolumeFile -VolumeName $stateVolumeName -ImageName "openclaw-pro:latest" -RelativePath "image-digest.txt" -Content $script:loadedImageDigest)
+                [void](Write-StateVolumeFile -VolumeName $stateVolumeName -ImageName "clawnook:latest" -RelativePath "image-digest.txt" -Content $script:loadedImageDigest)
             } else {
                 # 复用本地镜像时，保存当前镜像 ID
                 try {
-                    $curId = (& docker image inspect openclaw-pro --format '{{.Id}}' 2>$null)
+                    $curId = (& docker image inspect clawnook --format '{{.Id}}' 2>$null)
                     if ($curId) {
-                        [void](Write-StateVolumeFile -VolumeName $stateVolumeName -ImageName "openclaw-pro:latest" -RelativePath "image-digest.txt" -Content $curId)
+                        [void](Write-StateVolumeFile -VolumeName $stateVolumeName -ImageName "clawnook:latest" -RelativePath "image-digest.txt" -Content $curId)
                     }
                 } catch { }
             }
@@ -5005,14 +5005,14 @@ function Main {
             if ($pushedLocal) { Pop-Location }
 
             # -- 最终镜像可用性检查 --
-            $finalImageCheck = & docker image inspect openclaw-pro 2>$null
+            $finalImageCheck = & docker image inspect clawnook 2>$null
             if ($LASTEXITCODE -ne 0) {
                 # 日志记录 docker images 列表以辅助诊断
                 $imgList = & docker images --format "{{.Repository}}:{{.Tag}} {{.ID}}" 2>$null | Out-String
                 Write-Log "FINAL IMAGE CHECK FAILED. Docker images: $imgList"
-                throw "镜像 openclaw-pro:latest 不可用 — 所有获取方式均已失败。请检查网络后重新运行安装脚本。"
+                throw "镜像 clawnook:latest 不可用 — 所有获取方式均已失败。请检查网络后重新运行安装脚本。"
             }
-            $finalImageId = & docker image inspect openclaw-pro --format '{{.Id}}' 2>$null
+            $finalImageId = & docker image inspect clawnook --format '{{.Id}}' 2>$null
             Write-Log "Final image check OK. ID=$finalImageId"
 
             # ── 获取宿主机用户信息（用于容器内创建同名用户）──
@@ -5094,7 +5094,7 @@ function Main {
                 }
             }
             $runArgs += $filteredPortArgs
-            $runArgs += "openclaw-pro"
+            $runArgs += "clawnook"
 
             Write-Log "docker run args: $($runArgs -join ' ')"
             $runResult = & docker @runArgs 2>&1
@@ -5395,7 +5395,7 @@ function Main {
                         & netsh advfirewall firewall delete rule name="OpenClaw" 2>$null | Out-Null
                         & netsh advfirewall firewall delete rule name="OpenClaw-$containerName" 2>$null | Out-Null
                         # 添加新规则（以容器名标识）
-                        $fwRuleName = if ($containerName -eq 'openclaw-pro') { 'OpenClaw' } else { "OpenClaw-$containerName" }
+                        $fwRuleName = if ($containerName -eq 'clawnook') { 'OpenClaw' } else { "OpenClaw-$containerName" }
                         & netsh advfirewall firewall add rule name=$fwRuleName dir=in action=allow protocol=tcp localport=$fwPorts 2>&1 | Out-Null
                         if ($LASTEXITCODE -eq 0) {
                             Write-OK "防火墙端口已自动开放 ($fwPorts)"
@@ -5474,7 +5474,7 @@ function Main {
                 # 恢复方式 1: Download-Robust 多线程分块下载 Release tar.gz
                 $recoverTag = if ($latestReleaseTag) { $latestReleaseTag } else { "latest" }
                 $recoverTagIsAliasLatest = ($recoverTag -eq "latest")
-                $recoverAssetName = "openclaw-pro-image-lite.tar.gz"
+                $recoverAssetName = "clawnook-image-lite.tar.gz"
                 Write-Info "远端目标版本: $recoverTag ($script:imageEdition)"
                 $recoverTar = Join-Path $TMP_DIR $recoverAssetName
                 $releaseBaseUrl = if ($latestReleaseTag) {
@@ -5756,11 +5756,11 @@ function Main {
                                 Write-Host "  $_" -ForegroundColor DarkGray
                                 if ($_ -match '^Loaded image:\s*(.+)\s*$') {
                                     $recoverLoadedRefs += $Matches[1].Trim()
-                                    try { & docker tag $Matches[1].Trim() "openclaw-pro:latest" 2>$null } catch { }
+                                    try { & docker tag $Matches[1].Trim() "clawnook:latest" 2>$null } catch { }
                                 }
                             } elseif ($_ -match '^Loaded image ID:\s*(sha256:[0-9a-f]+)\s*$') {
                                 $recoverLoadedRefs += $Matches[1].Trim()
-                                try { & docker tag $Matches[1].Trim() "openclaw-pro:latest" 2>$null } catch { }
+                                try { & docker tag $Matches[1].Trim() "clawnook:latest" 2>$null } catch { }
                             }
                         }
 
@@ -5768,46 +5768,46 @@ function Main {
                         $recoverSawLite = $false
                         if ($script:imageEdition -eq 'lite') {
                             foreach ($ref in $recoverLoadedRefs) {
-                                if (("$ref").ToLower() -match 'openclaw-pro:lite$' -or ("$ref").ToLower() -match ':v\d+\.\d+\.\d+.*-lite$') {
+                                if (("$ref").ToLower() -match 'clawnook:lite$' -or ("$ref").ToLower() -match ':v\d+\.\d+\.\d+.*-lite$') {
                                     $recoverSawLite = $true
                                     break
                                 }
                             }
                             if (-not $recoverSawLite) {
-                                $recoverLiteProbe = & docker image inspect openclaw-pro:lite 2>$null
+                                $recoverLiteProbe = & docker image inspect clawnook:lite 2>$null
                                 if ($LASTEXITCODE -eq 0) { $recoverSawLite = $true }
                             }
                         }
                         if ($recoverSawLite) {
-                            Write-Info "检测到已加载 lite 镜像，执行强化 tag 修复（openclaw-pro:lite -> openclaw-pro:latest）..."
+                            Write-Info "检测到已加载 lite 镜像，执行强化 tag 修复（clawnook:lite -> clawnook:latest）..."
                             for ($rti = 1; $rti -le 3; $rti++) {
-                                try { & docker tag "openclaw-pro:lite" "openclaw-pro:latest" 2>$null } catch { }
+                                try { & docker tag "clawnook:lite" "clawnook:latest" 2>$null } catch { }
                                 Start-Sleep -Milliseconds 300
-                                $recoverTagChk = & docker image inspect openclaw-pro:latest 2>$null
+                                $recoverTagChk = & docker image inspect clawnook:latest 2>$null
                                 if ($LASTEXITCODE -eq 0) { break }
                             }
                             Remove-LiteLocalImageTag
                         }
 
-                        # 若上面没有成功创建 openclaw-pro:latest，继续扫描镜像列表并尝试 tag
-                        $chk = & docker image inspect openclaw-pro:latest 2>$null
+                        # 若上面没有成功创建 clawnook:latest，继续扫描镜像列表并尝试 tag
+                        $chk = & docker image inspect clawnook:latest 2>$null
                         if ($LASTEXITCODE -ne 0) {
                             if ($script:imageEdition -eq 'lite') {
-                                $liteChk = & docker image inspect openclaw-pro:lite 2>$null
+                                $liteChk = & docker image inspect clawnook:lite 2>$null
                                 if ($LASTEXITCODE -eq 0) {
-                                    try { & docker tag "openclaw-pro:lite" "openclaw-pro:latest" 2>$null } catch { }
+                                    try { & docker tag "clawnook:lite" "clawnook:latest" 2>$null } catch { }
                                     Remove-LiteLocalImageTag
                                 }
                             }
                             $allImages = & docker images --format '{{.Repository}}:{{.Tag}}' 2>$null
                             foreach ($im in $allImages) {
-                                if ($im -and $im -match 'openclaw-pro') {
-                                    try { & docker tag $im "openclaw-pro:latest" 2>$null } catch { }
+                                if ($im -and $im -match 'clawnook') {
+                                    try { & docker tag $im "clawnook:latest" 2>$null } catch { }
                                 }
                             }
                         }
 
-                        $chk = & docker image inspect openclaw-pro:latest 2>$null
+                        $chk = & docker image inspect clawnook:latest 2>$null
                         if ($LASTEXITCODE -eq 0) {
                             Remove-ReplacedImageIdsFromLoadOutput -LoadOutput $loadOutput
                             Remove-NewDanglingImages -BeforeIds $recoverDanglingBeforeLoad
@@ -5893,8 +5893,8 @@ function Main {
                             }
                         }
                         if ($pullCode -eq 0) {
-                            & docker tag $recoverImage "openclaw-pro:latest" 2>$null
-                            $tagOk = & docker image inspect "openclaw-pro:latest" 2>$null
+                            & docker tag $recoverImage "clawnook:latest" 2>$null
+                            $tagOk = & docker image inspect "clawnook:latest" 2>$null
                             if ($LASTEXITCODE -eq 0) {
                                 Write-OK "GHCR 镜像拉取成功"
                                 $recoverOK = $true
@@ -5933,7 +5933,7 @@ function Main {
                             "--restart", "unless-stopped"
                         )
                         $retryArgs += $deployConfig.PortArgs
-                        $retryArgs += "openclaw-pro:latest"
+                        $retryArgs += "clawnook:latest"
                         $retryResult = & docker @retryArgs 2>&1
                         $retryCode = $LASTEXITCODE
                         if ($retryCode -eq 0) {
@@ -5955,7 +5955,7 @@ function Main {
                     Write-Host ""
                     Write-Host "  💡 请手动执行以下命令后重新运行安装脚本:" -ForegroundColor Cyan
                     Write-Host "     docker pull ghcr.io/${GITHUB_REPO}:latest" -ForegroundColor White
-                    Write-Host "     docker tag ghcr.io/${GITHUB_REPO}:latest openclaw-pro:latest" -ForegroundColor White
+                    Write-Host "     docker tag ghcr.io/${GITHUB_REPO}:latest clawnook:latest" -ForegroundColor White
                     Write-Host ""
                 }
             } else {
@@ -5972,11 +5972,11 @@ function Main {
         $containerExists = $false
         try {
             if ($script:wslDefaultUser) {
-                $containerCheck = & wsl -d $distroName -u $script:wslDefaultUser -- bash -c "sudo service docker start >/dev/null 2>&1 || true; docker ps -a --filter 'name=^/openclaw-pro$' --format '{{.Names}}' 2>/dev/null" 2>$null
+                $containerCheck = & wsl -d $distroName -u $script:wslDefaultUser -- bash -c "sudo service docker start >/dev/null 2>&1 || true; docker ps -a --filter 'name=^/clawnook$' --format '{{.Names}}' 2>/dev/null" 2>$null
             } else {
-                $containerCheck = & wsl -d $distroName --exec bash -c "docker ps -a --filter 'name=^/openclaw-pro$' --format '{{.Names}}' 2>/dev/null" 2>$null
+                $containerCheck = & wsl -d $distroName --exec bash -c "docker ps -a --filter 'name=^/clawnook$' --format '{{.Names}}' 2>/dev/null" 2>$null
             }
-            if ($containerCheck -match "openclaw-pro") {
+            if ($containerCheck -match "clawnook") {
                 $containerExists = $true
             }
         } catch { }

@@ -2,12 +2,12 @@
 setlocal
 chcp 65001 >nul 2>&1
 
-REM OpenClaw Pro - Windows Installer
+REM ClawNook - Windows Installer
 REM Right-click this file and select "Run as administrator"
 
 echo.
 echo  =========================================
-echo   OpenClaw Pro - Windows Setup
+echo   ClawNook - Windows Setup
 echo  =========================================
 echo.
 
@@ -25,7 +25,7 @@ cd /d "%~dp0"
 powershell -ExecutionPolicy Bypass -Command ^
     "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;" ^
     "$nonce=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds();" ^
-    "$u='https://raw.githubusercontent.com/cintia09/openclaw-pro/main/install-windows.ps1?ts='+$nonce;" ^
+    "$u='https://raw.githubusercontent.com/menriothink/clawnook/main/install-windows.ps1?ts='+$nonce;" ^
     "$s=$null;" ^
     "Write-Host '  [INFO] Downloading latest installer script...';" ^
     "Write-Host '  [NOTE] Installer uses the Docker Desktop + ImageOnly path only.';" ^

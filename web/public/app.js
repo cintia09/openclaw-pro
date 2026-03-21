@@ -908,9 +908,9 @@ async function doHotPatch(force = false) {
             }
 
             if (hasStartServices && logPre) {
-              logPre.textContent += _t('\n检测到 start-services.sh 更新：请在宿主机执行 `docker restart openclaw-pro` 以使入口脚本变更生效。');
+              logPre.textContent += _t('\n检测到 start-services.sh 更新：请在宿主机执行 `docker restart clawnook` 以使入口脚本变更生效。');
               logPre.textContent += _t('\n若容器名不确定：先执行 `docker ps --format "{{.Names}}"`，再执行 `docker restart <容器名>`。');
-              toast(_t('请重启容器'), _t('执行: docker restart openclaw-pro'));
+              toast(_t('请重启容器'), _t('执行: docker restart clawnook'));
             }
 
             if (hasFrontend || hasWebServer || updated.length === 0) {
