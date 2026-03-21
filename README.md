@@ -30,7 +30,7 @@ Docker deployment ensures environment isolation and reproducibility — no depen
 - 🧠 **Model Integration** — Built-in catalog of 50+ AI providers, online API validation, and encrypted key storage
 - 🧩 **Skill Market** — Scan and install community skills from GitHub / GitLab / Gitee, with built-in security scanning
 - 🔗 **Remote Nodes** — Token-based pairing for remote devices, with a unified view of all connected nodes in the panel
-- 💬 **Messaging Platforms** — Visual configuration for Feishu, Discord, Telegram, Signal, and WhatsApp, each with step-by-step setup guides
+- 💬 **Messaging Platforms** — Visual configuration for Feishu and other popular IM & social platforms, each with step-by-step setup guides
 - 📊 **Dashboard & Logs** — Real-time Gateway / Web / Caddy status and resource monitoring, with multi-source log viewer
 - 💻 **Browser Terminal** — Built-in WebSocket terminal for managing the container without SSH
 - 🛡️ **Self-Healing** — Gateway Watchdog health monitoring, automatic crash recovery, and surgical config repair from snapshots
