@@ -73,7 +73,7 @@
 
   <!-- Title text -->
   <text x="450" y="75" text-anchor="middle" font-family="'SF Pro Display', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="48" font-weight="800" fill="white" filter="url(#shadow)">
-    OpenClaw Pro
+    ClawNook
   </text>
 
   <!-- Tagline -->
@@ -106,7 +106,7 @@
 
   <!-- Subtitle -->
   <text x="400" y="200" text-anchor="middle" font-family="'SF Pro Display', 'Segoe UI', sans-serif" font-size="14" fill="#6b7280">
-    面向 Linux · macOS · Windows 的 OpenClaw 一键部署工具
+    OpenClaw 一键部署与管理面板
   </text>
 
   <!-- Bottom decorative line -->
