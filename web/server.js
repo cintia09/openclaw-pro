@@ -10926,6 +10926,81 @@ app.get('/api/app-center/list', async (req, res) => {
   res.json({ apps });
 });
 
+// Install app: register in app-center
+app.post('/api/app-center/install', async (req, res) => {
+  try {
+    const { id, name, displayName, description, icon, version, features, repo, port, entryPath, category } = req.body;
+    if (!id) return res.status(400).json({ error: 'Missing app id' });
+    const appDir = path.join(APPS_DIR, id);
+    if (!fs.existsSync(APPS_DIR)) fs.mkdirSync(APPS_DIR, { recursive: true });
+    if (!fs.existsSync(appDir)) fs.mkdirSync(appDir, { recursive: true });
+    const meta = { name: id, displayName: displayName || name, description, icon, version, features, repo, port, entryPath, category, installedAt: new Date().toISOString() };
+    fs.writeFileSync(path.join(appDir, 'app.json'), JSON.stringify(meta, null, 2));
+    console.log('[app-center] Installed app:', id);
+    res.json({ ok: true, app: meta });
+  } catch (e) {
+    console.error('[app-center] install error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Uninstall app: remove from app-center
+app.post('/api/app-center/uninstall', async (req, res) => {
+  try {
+    const { id } = req.body;
+    if (!id) return res.status(400).json({ error: 'Missing app id' });
+    const appDir = path.join(APPS_DIR, id);
+    if (fs.existsSync(appDir)) {
+      fs.rmSync(appDir, { recursive: true, force: true });
+      console.log('[app-center] Uninstalled app:', id);
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[app-center] uninstall error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// App profile sync: saves learning profile for OpenClaw analysis
+app.post('/api/app-center/sync-profile', async (req, res) => {
+  try {
+    const profile = req.body;
+    if (!profile || !profile.username) return res.status(400).json({ error: 'profile data required' });
+    
+    const fs = require('fs');
+    const path = require('path');
+    
+    // Find the physics app workspace
+    const workspaceDirs = [
+      '/root/.openclaw/workspace/jiangsu-physics-knowledge/.openclaw/learning-profile',
+      path.join(process.cwd(), '..', 'jiangsu-physics-knowledge', '.openclaw', 'learning-profile')
+    ];
+    
+    let targetDir = null;
+    for (const dir of workspaceDirs) {
+      if (fs.existsSync(path.dirname(dir))) {
+        targetDir = dir;
+        break;
+      }
+    }
+    
+    if (!targetDir) {
+      // Fallback: create in temp
+      targetDir = '/tmp/openclaw-learning-profile';
+    }
+    
+    fs.mkdirSync(targetDir, { recursive: true });
+    const filePath = path.join(targetDir, 'profile.json');
+    fs.writeFileSync(filePath, JSON.stringify(profile, null, 2));
+    
+    console.log(`[sync-profile] Saved profile for ${profile.username} to ${filePath}`);
+    res.json({ ok: true, path: filePath });
+  } catch (e) {
+    console.error('[sync-profile] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // App AI proxy: forwards chat requests through OpenClaw gateway (like Feishu/messaging plugins)
 app.post('/api/app-center/ai/chat', async (req, res) => {
   let client = null;
@@ -10989,44 +11064,12 @@ app.post('/api/app-center/ai/chat', async (req, res) => {
       console.log('[app-center/ai] chat.send error:', sendErr.message);
     }
 
-    // Wait for events or poll history
-    const maxWaitMs = 90000;
+    // Wait for chat events (streaming response)
+    const maxWaitMs = 120000;
     const start = Date.now();
-    let pollCount = 0;
 
     while (!chatDone && Date.now() - start < maxWaitMs) {
-      await new Promise(r => setTimeout(r, 2000));
-      pollCount++;
-
-      // Poll history every 6s
-      if (pollCount % 3 === 0) {
-        try {
-          const hist = await client.request('chat.history', { sessionKey, limit: 10 }, 8000);
-          const msgs = hist?.messages || [];
-          if (pollCount === 3 && msgs.length > 0) {
-            console.log('[app-center/ai] history sample:', JSON.stringify(msgs[msgs.length - 1]).slice(0, 500));
-            console.log('[app-center/ai] history count=' + msgs.length);
-          }
-          for (let i = msgs.length - 1; i >= 0; i--) {
-            const m = msgs[i];
-            const role = m.role || m.from || '';
-            let txt = '';
-            if (typeof m.text === 'string') txt = m.text;
-            else if (typeof m.content === 'string') txt = m.content;
-            else if (typeof m.message === 'string') txt = m.message;
-            else if (Array.isArray(m.blocks)) txt = m.blocks.map(b => b.text || '').join('');
-            else if (Array.isArray(m.content)) txt = m.content.map(c => c.text || (typeof c === 'string' ? c : '')).join('');
-            if ((role === 'assistant' || role === 'ai' || role === 'bot') && txt.length > 50) {
-              finalResponse = txt;
-              chatDone = true;
-              console.log('[app-center/ai] Found response in history, len=' + txt.length);
-              break;
-            }
-          }
-        } catch (e) {
-          console.log('[app-center/ai] history poll err:', e.message);
-        }
-      }
+      await new Promise(r => setTimeout(r, 1000));
     }
 
     client.close();

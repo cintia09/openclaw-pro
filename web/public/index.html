@@ -570,13 +570,23 @@
                 <div style="font-weight:900;font-size:18px">⊞ 应用中心</div>
                 <div class="muted" style="margin-top:4px;font-size:13px">浏览、安装和管理教育应用</div>
               </div>
-              <div class="row">
+              <div class="row" style="gap:8px">
+                <button class="btn" style="font-size:12px" onclick="var l=document.getElementById('app-center-log');l.style.display=l.style.display==='none'?'block':'none'">📋 日志</button>
                 <button class="btn" onclick="refreshAppCenter()">刷新</button>
               </div>
             </div>
           </div>
 
-          <!-- Installed apps section -->
+          <!-- Operation log (hidden by default) -->
+          <div id="app-center-log" class="card" style="grid-column: span 12; display:none;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+              <div style="font-weight:700;font-size:13px">📋 操作日志</div>
+              <button class="btn" style="font-size:10px;padding:2px 8px" onclick="_appCenterLogs=[];document.getElementById('app-center-log-content').textContent=''">清空</button>
+            </div>
+            <pre id="app-center-log-content" style="background:rgba(0,0,0,.3);border-radius:6px;padding:10px;font-size:11px;font-family:'SF Mono',Monaco,monospace;color:#a3e635;max-height:200px;overflow-y:auto;margin:0;white-space:pre-wrap;word-break:break-all"></pre>
+          </div>
+
+          <!-- Installed apps -->
           <div class="card" style="grid-column: span 12;">
             <div style="font-weight:700;font-size:15px;margin-bottom:12px">📦 已安装的应用</div>
             <div class="sep"></div>
@@ -585,7 +595,7 @@
             </div>
           </div>
 
-          <!-- App catalog section -->
+          <!-- App catalog -->
           <div class="card" style="grid-column: span 12;">
             <div style="font-weight:700;font-size:15px;margin-bottom:12px">🏪 应用商店</div>
             <div class="sep"></div>
