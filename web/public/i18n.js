@@ -61,6 +61,17 @@
     '显示侧边栏': 'Show sidebar',
     '退出': 'Logout',
     '打开 OpenClaw Gateway 控制台': 'Open OpenClaw Gateway Console',
+    '应用中心': 'App Center',
+    '还没有安装任何应用': 'No apps installed yet',
+    '在 OpenClaw 对话中说「帮我安装 xxx 应用」即可自动搜索并安装': 'Say "install xxx app" in OpenClaw conversation to auto-search and install',
+    '运行中': 'Running',
+    '已停止': 'Stopped',
+    '未知': 'Unknown',
+    '安装': 'Install',
+    '安装中...': 'Installing...',
+    '已安装': 'Installed',
+    '卸载': 'Uninstall',
+    '打开': 'Open',
 
     // ─── Dashboard ───────────────────────────────────
     '系统概览': 'System Overview',
@@ -1842,6 +1853,10 @@
     } else {
       _stopObserver();
     }
+    // Hide zh-only elements when locale is English
+    document.querySelectorAll('.zh-only').forEach(el => {
+      el.style.display = _locale === 'zh' ? '' : 'none';
+    });
   }
 
   // MutationObserver for dynamic content

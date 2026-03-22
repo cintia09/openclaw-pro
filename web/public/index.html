@@ -28,7 +28,7 @@
         <a href="#openclaw-ai" data-route="openclaw-ai"><span class="ico">◈</span><span>接入模型配置</span></a>
         <a href="#messaging" data-route="messaging"><span class="ico">⌁</span><span>消息平台</span></a>
         <a href="#plugins" data-route="plugins"><span class="ico">◌</span><span>插件市场</span></a>
-        <a href="#app-center" data-route="app-center"><span class="ico">⊞</span><span>应用中心</span></a>
+        <a href="#app-center" data-route="app-center" class="zh-only"><span class="ico">⊞</span><span>应用中心</span></a>
         <a href="#browser" data-route="browser"><span class="ico">�</span><span>远端设备管理</span></a>
 
         <div class="nav-group-label">运维与系统</div>
@@ -568,17 +568,29 @@
             <div class="row" style="justify-content:space-between">
               <div>
                 <div style="font-weight:900;font-size:18px">⊞ 应用中心</div>
-                <div class="muted" style="margin-top:4px;font-size:13px">通过 OpenClaw 安装的应用在此处统一管理和访问</div>
+                <div class="muted" style="margin-top:4px;font-size:13px">浏览、安装和管理教育应用</div>
               </div>
               <div class="row">
                 <button class="btn" onclick="refreshAppCenter()">刷新</button>
               </div>
             </div>
-            <div class="sep"></div>
-            <div class="dim small">💡 提示：在 OpenClaw 对话中说「帮我安装 xxx 应用」即可自动搜索并安装</div>
           </div>
-          <div id="app-center-list" style="grid-column: span 12; display:grid; grid-template-columns: repeat(12, minmax(0,1fr)); gap:12px;">
-            <div class="card dim" style="grid-column: span 12; text-align:center;padding:32px">正在加载已安装的应用...</div>
+
+          <!-- Installed apps section -->
+          <div class="card" style="grid-column: span 12;">
+            <div style="font-weight:700;font-size:15px;margin-bottom:12px">📦 已安装的应用</div>
+            <div class="sep"></div>
+            <div id="app-center-installed" style="display:grid; grid-template-columns: repeat(12, minmax(0,1fr)); gap:12px; margin-top:12px;">
+              <div class="card dim" style="grid-column: span 12; text-align:center;padding:24px">正在加载...</div>
+            </div>
+          </div>
+
+          <!-- App catalog section -->
+          <div class="card" style="grid-column: span 12;">
+            <div style="font-weight:700;font-size:15px;margin-bottom:12px">🏪 应用商店</div>
+            <div class="sep"></div>
+            <div id="app-center-catalog" style="display:grid; grid-template-columns: repeat(12, minmax(0,1fr)); gap:12px; margin-top:12px;">
+            </div>
           </div>
         </div>
       </section>
