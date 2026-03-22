@@ -10962,19 +10962,22 @@ app.post('/api/app-center/install', async (req, res) => {
 
     const workspaceDir = path.join(process.env.HOME || '/root', '.openclaw', 'workspace', id);
 
-    // Step 1: Clone repo if not already present
-    if (repo && !fs.existsSync(path.join(workspaceDir, 'index.html'))) {
-      console.log('[app-center] Cloning', repo, 'to', workspaceDir);
+    // Step 1: Clone or update repo from GitHub
+    if (repo) {
       const { execSync } = require('child_process');
-      if (!fs.existsSync(workspaceDir)) fs.mkdirSync(workspaceDir, { recursive: true });
-      try {
-        execSync(`git clone --depth 1 ${repo} ${workspaceDir}`, { timeout: 120000, stdio: 'pipe' });
-      } catch (cloneErr) {
+      if (fs.existsSync(path.join(workspaceDir, '.git'))) {
+        // Already a git repo — pull latest
+        console.log('[app-center] Pulling latest from', repo);
         try {
-          execSync(`cd ${workspaceDir} && git pull`, { timeout: 60000, stdio: 'pipe' });
+          execSync(`cd ${workspaceDir} && git pull --ff-only`, { timeout: 60000, stdio: 'pipe' });
         } catch (pullErr) {
-          console.log('[app-center] git pull also failed, continuing anyway');
+          console.log('[app-center] git pull failed:', pullErr.message);
         }
+      } else {
+        // Fresh clone (remove stale workspace if exists)
+        if (fs.existsSync(workspaceDir)) fs.rmSync(workspaceDir, { recursive: true, force: true });
+        console.log('[app-center] Cloning', repo, 'to', workspaceDir);
+        execSync(`git clone --depth 1 ${repo} ${workspaceDir}`, { timeout: 120000, stdio: 'pipe' });
       }
     }
 
@@ -11045,6 +11048,12 @@ app.post('/api/app-center/uninstall', async (req, res) => {
     if (fs.existsSync(appDir)) {
       fs.rmSync(appDir, { recursive: true, force: true });
       console.log('[app-center] Uninstalled app:', id);
+    }
+    // Also remove workspace
+    const workspaceDir = path.join(process.env.HOME || '/root', '.openclaw', 'workspace', id);
+    if (fs.existsSync(workspaceDir)) {
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+      console.log('[app-center] Removed workspace:', workspaceDir);
     }
     res.json({ ok: true });
   } catch (e) {
