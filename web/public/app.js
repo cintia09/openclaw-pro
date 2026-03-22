@@ -5294,9 +5294,11 @@ async function refreshAppCenter() {
     var appUrl = '/apps/' + app.id + '/';
     if (isInstalled && isRunning) {
       actions = '<button class="btn btn-primary" style="font-size:11px;padding:3px 12px" onclick="event.stopPropagation();window.open(\''+appUrl+'\',\'_blank\')">'+_t('打开')+'</button>'
+        + '<button class="btn" style="font-size:11px;padding:3px 12px" onclick="event.stopPropagation();updateApp(\''+app.id+'\')">'+_t('更新')+'</button>'
         + '<button class="btn" style="font-size:11px;padding:3px 12px;color:#ef4444;border-color:#ef4444" onclick="event.stopPropagation();uninstallApp(\''+app.id+'\')">'+_t('卸载')+'</button>';
     } else if (isInstalled && isStopped) {
       actions = '<button class="btn btn-primary" style="font-size:11px;padding:3px 12px" onclick="event.stopPropagation();startApp(\''+app.id+'\')">'+_t('启动')+'</button>'
+        + '<button class="btn" style="font-size:11px;padding:3px 12px" onclick="event.stopPropagation();updateApp(\''+app.id+'\')">'+_t('更新')+'</button>'
         + '<button class="btn" style="font-size:11px;padding:3px 12px;color:#ef4444;border-color:#ef4444" onclick="event.stopPropagation();uninstallApp(\''+app.id+'\')">'+_t('卸载')+'</button>';
     } else if (isInstalled) {
       actions = '<button class="btn" style="font-size:11px;padding:3px 12px;color:#ef4444;border-color:#ef4444" onclick="event.stopPropagation();uninstallApp(\''+app.id+'\')">'+_t('卸载')+'</button>';
@@ -5353,6 +5355,21 @@ async function uninstallApp(appId) {
     appLog('✅ 已卸载: ' + appId);
     refreshAppCenter();
   } catch(e) { appLog('❌ 卸载失败: ' + e.message); }
+}
+
+async function updateApp(appId) {
+  var app = APP_CATALOG.find(function(a){ return a.id === appId; });
+  appLog('正在更新: ' + (app ? app.name : appId) + ' (git pull)...');
+  try {
+    var resp = await api('/api/app-center/update', { method: 'POST', body: { id: appId } });
+    if (resp.error) throw new Error(resp.error);
+    if (resp.updated) {
+      appLog('✅ 已更新: ' + resp.oldVersion + ' → ' + resp.newVersion);
+    } else {
+      appLog('ℹ️ 已是最新版本 (' + resp.newVersion + ')');
+    }
+    await refreshAppCenter();
+  } catch(e) { appLog('❌ 更新失败: ' + e.message); }
 }
 
 async function startApp(appId) {

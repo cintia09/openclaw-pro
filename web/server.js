@@ -11021,6 +11021,68 @@ app.post('/api/app-center/install', async (req, res) => {
   }
 });
 
+// Update app: git pull and restart server
+app.post('/api/app-center/update', async (req, res) => {
+  try {
+    const { id } = req.body;
+    if (!id) return res.status(400).json({ error: 'Missing app id' });
+    const appDir = path.join(APPS_DIR, id);
+    const appJsonPath = path.join(appDir, 'app.json');
+    if (!fs.existsSync(appJsonPath)) return res.status(404).json({ error: 'App not installed' });
+
+    const meta = JSON.parse(fs.readFileSync(appJsonPath, 'utf8'));
+    const workspaceDir = meta.workspaceDir || path.join(process.env.HOME || '/root', '.openclaw', 'workspace', id);
+    const { execSync } = require('child_process');
+
+    // Step 1: git pull
+    let updated = false;
+    let oldHead = '', newHead = '';
+    if (fs.existsSync(path.join(workspaceDir, '.git'))) {
+      oldHead = execSync(`cd ${workspaceDir} && git rev-parse --short HEAD`, { encoding: 'utf8', timeout: 10000 }).trim();
+      execSync(`cd ${workspaceDir} && git pull --ff-only`, { timeout: 60000, stdio: 'pipe' });
+      newHead = execSync(`cd ${workspaceDir} && git rev-parse --short HEAD`, { encoding: 'utf8', timeout: 10000 }).trim();
+      updated = oldHead !== newHead;
+      console.log('[app-center] Update', id, ':', oldHead, '->', newHead, updated ? '(updated)' : '(already latest)');
+    } else {
+      return res.status(400).json({ error: 'No git repo in workspace' });
+    }
+
+    // Step 2: restart server if port configured
+    if (meta.port) {
+      const pids = execSync(`lsof -ti:${meta.port} 2>/dev/null || true`, { encoding: 'utf8' }).trim();
+      if (pids) {
+        for (const p of pids.split('\n')) { try { process.kill(parseInt(p)); } catch {} }
+      }
+      await new Promise(r => setTimeout(r, 500));
+      const { spawn } = require('child_process');
+      const srv = spawn('python3', ['-m', 'http.server', String(meta.port)], {
+        cwd: workspaceDir, detached: true, stdio: 'ignore'
+      });
+      srv.unref();
+      meta.pid = srv.pid;
+      console.log('[app-center] Restarted', id, 'on port', meta.port, 'PID', srv.pid);
+    }
+
+    // Step 3: update app.json with new version from repo if available
+    const repoAppJson = path.join(workspaceDir, 'app.json');
+    if (fs.existsSync(repoAppJson)) {
+      try {
+        const repoMeta = JSON.parse(fs.readFileSync(repoAppJson, 'utf8'));
+        if (repoMeta.version) meta.version = repoMeta.version;
+        if (repoMeta.features) meta.features = repoMeta.features;
+        if (repoMeta.description) meta.description = repoMeta.description;
+      } catch {}
+    }
+    meta.updatedAt = new Date().toISOString();
+    fs.writeFileSync(appJsonPath, JSON.stringify(meta, null, 2));
+
+    res.json({ ok: true, updated, oldVersion: oldHead, newVersion: newHead });
+  } catch (e) {
+    console.error('[app-center] update error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Uninstall app: stop server and remove from app-center
 app.post('/api/app-center/uninstall', async (req, res) => {
   try {
