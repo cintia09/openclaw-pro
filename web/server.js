@@ -10891,6 +10891,25 @@ app.post('/api/plugins/skill/upload-install', (req, res) => {
 // ===================== APP CENTER =====================
 const APPS_DIR = path.join(process.env.HOME || '/root', '.openclaw', 'apps');
 
+// Reverse proxy for installed apps — forward /apps/<id>/* to the app's port
+app.use('/apps/:appId', (req, res) => {
+  // Read app.json to find the port
+  const appJsonPath = path.join(APPS_DIR, req.params.appId, 'app.json');
+  let meta;
+  try { meta = JSON.parse(fs.readFileSync(appJsonPath, 'utf8')); } catch { return res.status(404).send('App not found'); }
+  if (!meta.port) return res.status(400).send('App has no port configured');
+  const targetUrl = 'http://127.0.0.1:' + meta.port + (req.url === '/' ? '/index.html' : req.url);
+  const http = require('http');
+  http.get(targetUrl, (upstream) => {
+    const ct = upstream.headers['content-type'];
+    if (ct) res.setHeader('Content-Type', ct);
+    res.status(upstream.statusCode);
+    upstream.pipe(res);
+  }).on('error', (e) => {
+    res.status(502).send('App not reachable: ' + e.message);
+  });
+});
+
 app.get('/api/app-center/list', async (req, res) => {
   const apps = [];
   try {
@@ -10908,11 +10927,14 @@ app.get('/api/app-center/list', async (req, res) => {
             try {
               const http = require('http');
               status = await new Promise((resolve) => {
-                const r = http.get({ hostname: '127.0.0.1', port: meta.port, path: '/', timeout: 2000 }, (resp) => {
+                const timer = setTimeout(() => resolve('stopped'), 2000);
+                const r = http.get({ hostname: '127.0.0.1', port: meta.port, path: '/', timeout: 1500 }, (resp) => {
+                  resp.resume(); // drain response body
+                  clearTimeout(timer);
                   resolve(resp.statusCode ? 'running' : 'stopped');
                 });
-                r.on('error', () => resolve('stopped'));
-                r.on('timeout', () => { r.destroy(); resolve('stopped'); });
+                r.on('error', () => { clearTimeout(timer); resolve('stopped'); });
+                r.on('timeout', () => { r.destroy(); clearTimeout(timer); resolve('stopped'); });
               });
             } catch { status = 'unknown'; }
           }
@@ -10926,7 +10948,7 @@ app.get('/api/app-center/list', async (req, res) => {
   res.json({ apps });
 });
 
-// Install app: register in app-center
+// Install app: clone repo and start HTTP server
 app.post('/api/app-center/install', async (req, res) => {
   try {
     const { id, name, displayName, description, icon, version, features, repo, port, entryPath, category } = req.body;
@@ -10934,7 +10956,56 @@ app.post('/api/app-center/install', async (req, res) => {
     const appDir = path.join(APPS_DIR, id);
     if (!fs.existsSync(APPS_DIR)) fs.mkdirSync(APPS_DIR, { recursive: true });
     if (!fs.existsSync(appDir)) fs.mkdirSync(appDir, { recursive: true });
-    const meta = { name: id, displayName: displayName || name, description, icon, version, features, repo, port, entryPath, category, installedAt: new Date().toISOString() };
+
+    const workspaceDir = path.join(process.env.HOME || '/root', '.openclaw', 'workspace', id);
+
+    // Step 1: Clone repo if not already present
+    if (repo && !fs.existsSync(path.join(workspaceDir, 'index.html'))) {
+      console.log('[app-center] Cloning', repo, 'to', workspaceDir);
+      const { execSync } = require('child_process');
+      if (!fs.existsSync(workspaceDir)) fs.mkdirSync(workspaceDir, { recursive: true });
+      try {
+        execSync(`git clone --depth 1 ${repo} ${workspaceDir}`, { timeout: 120000, stdio: 'pipe' });
+      } catch (cloneErr) {
+        try {
+          execSync(`cd ${workspaceDir} && git pull`, { timeout: 60000, stdio: 'pipe' });
+        } catch (pullErr) {
+          console.log('[app-center] git pull also failed, continuing anyway');
+        }
+      }
+    }
+
+    // Step 2: Start HTTP server if port specified
+    let pid = null;
+    if (port && fs.existsSync(workspaceDir)) {
+      try {
+        const { execSync: es } = require('child_process');
+        const existing = es(`lsof -ti:${port} 2>/dev/null || true`, { encoding: 'utf8' }).trim();
+        if (existing) {
+          pid = parseInt(existing.split('\n')[0]);
+          console.log('[app-center] Port', port, 'already in use by PID', pid);
+        }
+      } catch {}
+
+      if (!pid) {
+        const { spawn } = require('child_process');
+        const srv = spawn('python3', ['-m', 'http.server', String(port)], {
+          cwd: workspaceDir,
+          detached: true,
+          stdio: 'ignore'
+        });
+        srv.unref();
+        pid = srv.pid;
+        console.log('[app-center] Started HTTP server on port', port, 'PID', pid);
+      }
+    }
+
+    const meta = {
+      name: id, displayName: displayName || name, description, icon, version,
+      features, repo, port, entryPath, category, pid,
+      workspaceDir,
+      installedAt: new Date().toISOString()
+    };
     fs.writeFileSync(path.join(appDir, 'app.json'), JSON.stringify(meta, null, 2));
     console.log('[app-center] Installed app:', id);
     res.json({ ok: true, app: meta });
@@ -10944,12 +11015,30 @@ app.post('/api/app-center/install', async (req, res) => {
   }
 });
 
-// Uninstall app: remove from app-center
+// Uninstall app: stop server and remove from app-center
 app.post('/api/app-center/uninstall', async (req, res) => {
   try {
     const { id } = req.body;
     if (!id) return res.status(400).json({ error: 'Missing app id' });
     const appDir = path.join(APPS_DIR, id);
+
+    // Try to stop the app server
+    if (fs.existsSync(path.join(appDir, 'app.json'))) {
+      try {
+        const meta = JSON.parse(fs.readFileSync(path.join(appDir, 'app.json'), 'utf8'));
+        if (meta.port) {
+          const { execSync } = require('child_process');
+          const pids = execSync(`lsof -ti:${meta.port} 2>/dev/null || true`, { encoding: 'utf8' }).trim();
+          if (pids) {
+            for (const p of pids.split('\n')) {
+              try { process.kill(parseInt(p)); } catch {}
+            }
+            console.log('[app-center] Stopped processes on port', meta.port);
+          }
+        }
+      } catch {}
+    }
+
     if (fs.existsSync(appDir)) {
       fs.rmSync(appDir, { recursive: true, force: true });
       console.log('[app-center] Uninstalled app:', id);
@@ -10957,6 +11046,50 @@ app.post('/api/app-center/uninstall', async (req, res) => {
     res.json({ ok: true });
   } catch (e) {
     console.error('[app-center] uninstall error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Start app: launch HTTP server for an installed app
+app.post('/api/app-center/start', async (req, res) => {
+  try {
+    const { id, port } = req.body;
+    if (!id) return res.status(400).json({ error: 'Missing app id' });
+    const appDir = path.join(APPS_DIR, id);
+    const appJsonPath = path.join(appDir, 'app.json');
+    if (!fs.existsSync(appJsonPath)) return res.status(404).json({ error: 'App not found' });
+
+    const meta = JSON.parse(fs.readFileSync(appJsonPath, 'utf8'));
+    const workspaceDir = meta.workspaceDir || path.join(process.env.HOME || '/root', '.openclaw', 'workspace', id);
+    const appPort = port || meta.port;
+
+    if (!appPort || !fs.existsSync(workspaceDir)) {
+      return res.status(400).json({ error: 'Cannot start: no port or workspace' });
+    }
+
+    // Check if already running
+    const { execSync } = require('child_process');
+    const existing = execSync(`lsof -ti:${appPort} 2>/dev/null || true`, { encoding: 'utf8' }).trim();
+    if (existing) {
+      return res.json({ ok: true, pid: parseInt(existing), message: 'Already running' });
+    }
+
+    const { spawn } = require('child_process');
+    const srv = spawn('python3', ['-m', 'http.server', String(appPort)], {
+      cwd: workspaceDir,
+      detached: true,
+      stdio: 'ignore'
+    });
+    srv.unref();
+
+    // Update app.json with new PID
+    meta.pid = srv.pid;
+    fs.writeFileSync(appJsonPath, JSON.stringify(meta, null, 2));
+
+    console.log('[app-center] Started app', id, 'on port', appPort, 'PID', srv.pid);
+    res.json({ ok: true, pid: srv.pid });
+  } catch (e) {
+    console.error('[app-center] start error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
