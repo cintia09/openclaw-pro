@@ -3415,8 +3415,35 @@ async function loadMessagingConfig(){
   if ($('btn-msg-restart')) $('btn-msg-restart').style.display = 'none';
   appendMsgLog(_t('[load] 配置读取完成'));
 
+  // Check plugin availability for messaging platforms
+  try {
+    const pd = await api('/api/plugins/list');
+    const allPlugins = pd.allPlugins || [];
+    const pluginIds = new Set(allPlugins.map(p => p.id));
+    updateMsgPluginStatus('wechat', pluginIds.has('wechat'));
+    updateMsgPluginStatus('whatsapp', pluginIds.has('whatsapp'));
+  } catch {}
+
   // Sync config body visibility for all platforms
   syncAllMsgToggleVisibility();
+}
+
+// Update messaging panel based on whether the channel plugin is installed
+function updateMsgPluginStatus(platform, installed) {
+  const banner = $(`${platform}-coming-soon`);
+  if (!banner) return;
+  banner.style.display = installed ? 'none' : '';
+  // Enable/disable QR button for wechat
+  if (platform === 'wechat') {
+    const qrBtn = $('btn-wechat-qr');
+    if (qrBtn) {
+      qrBtn.disabled = !installed;
+      qrBtn.style.opacity = installed ? '' : '.5';
+      qrBtn.style.cursor = installed ? '' : 'not-allowed';
+      if (installed) qrBtn.classList.add('btn-primary');
+      else qrBtn.classList.remove('btn-primary');
+    }
+  }
 }
 
 // Show/hide config body based on enabled toggle
