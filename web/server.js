@@ -10050,11 +10050,11 @@ app.post('/api/openclaw/wechat/qr', async (req, res) => {
   try {
     const command = [
       'if command -v openclaw >/dev/null 2>&1; then',
-      '  openclaw channels login --channel wechat --qr-only 2>&1',
+      '  openclaw channels login --channel wechat 2>&1',
       'elif [ -x /root/.npm-global/bin/openclaw ]; then',
-      '  /root/.npm-global/bin/openclaw channels login --channel wechat --qr-only 2>&1',
+      '  /root/.npm-global/bin/openclaw channels login --channel wechat 2>&1',
       'elif [ -f /root/.openclaw/openclaw-source/openclaw.mjs ]; then',
-      '  node --experimental-sqlite /root/.openclaw/openclaw-source/openclaw.mjs channels login --channel wechat --qr-only 2>&1',
+      '  node --experimental-sqlite /root/.openclaw/openclaw-source/openclaw.mjs channels login --channel wechat 2>&1',
       'else',
       '  echo "openclaw not found"',
       '  exit 127',
