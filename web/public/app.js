@@ -4661,17 +4661,21 @@ $('btn-ext-install')?.addEventListener('click', async () => {
   btn.textContent = _t('安装中...');
 
   try {
-    const r = await api('/api/plugins/extension/install', { method: 'POST', body: { package: pkg }, timeoutMs: 120000 });
-    pre.textContent += (r.output || r.error || (r.success ? _t('安装成功') : _t('未知错误'))) + '\n';
+    const r = await api('/api/plugins/extension/install', { method: 'POST', body: { package: pkg }, timeoutMs: 200000 });
+    pre.textContent += (r.output || r.error || (r.success ? _t('安装成功') : _t('安装失败'))) + '\n';
+    if (r.warning) {
+      pre.textContent += '⚠️ ' + r.warning + '\n';
+    }
     if (r.success) {
-      toast(_t('安装成功'), _t('Extension 已安装，重启 Gateway 后生效'));
+      toast(r.warning ? _t('安装完成（有警告）') : _t('安装成功'), r.warning || _t('Extension 已安装，重启 Gateway 后生效'));
       input.value = '';
       refreshPlugins();
     } else {
-      toast(_t('安装失败'), r.error || '');
+      toast(_t('安装失败'), (r.error || '').slice(0, 200));
     }
   } catch (e) {
     pre.textContent += _t('错误: {0}\n', e.message);
+    toast(_t('安装失败'), e.message);
   } finally {
     btn.disabled = false;
     btn.textContent = _t('安装 Extension');

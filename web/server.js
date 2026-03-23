@@ -11557,7 +11557,12 @@ app.post('/api/plugins/extension/install', async (req, res) => {
   try {
     // npx commands run directly (e.g. npx -y @tencent-weixin/openclaw-weixin-cli@latest install)
     if (isNpxCmd) {
-      const output = await runCommandTextAsync(`${sanitized} 2>&1`, 180000);
+      const npxResult = await runOpenClawCli(sanitized, 180000);
+      const output = String(npxResult.output || '').trim();
+      const hasError = !npxResult.ok || /\b(failed|error|not found|Cannot find module)\b/i.test(output);
+      if (hasError) {
+        return res.status(500).json({ success: false, error: output || 'npx command failed' });
+      }
       return res.json({ success: true, output });
     }
 
@@ -11574,15 +11579,22 @@ app.post('/api/plugins/extension/install', async (req, res) => {
       'fi'
     ].join('\n');
     const cliResult = await runOpenClawCli(cliCmd, 120000);
+    const cliOutput = String(cliResult.output || '').trim();
     if (cliResult.ok) {
-      return res.json({ success: true, output: String(cliResult.output || '').trim() });
+      // Check if output indicates actual failure despite exit 0
+      const cliHasError = /\b(failed to load|Cannot find module|PluginLoadFailureError)\b/i.test(cliOutput);
+      if (cliHasError) {
+        return res.json({ success: true, output: cliOutput, warning: 'Plugin installed but failed to load — possible version mismatch' });
+      }
+      return res.json({ success: true, output: cliOutput });
     }
     // Fallback to npm install -g if CLI failed
-    const output = await runCommandTextAsync(
-      `npm install -g ${JSON.stringify(sanitized)} 2>&1`,
-      120000
-    );
-    res.json({ success: true, output });
+    const npmResult = await runOpenClawCli(`npm install -g ${JSON.stringify(sanitized)} 2>&1`, 120000);
+    const npmOutput = String(npmResult.output || '').trim();
+    if (!npmResult.ok) {
+      return res.status(500).json({ success: false, error: npmOutput || 'npm install failed' });
+    }
+    res.json({ success: true, output: npmOutput });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

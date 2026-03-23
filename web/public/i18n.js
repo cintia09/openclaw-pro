@@ -1081,6 +1081,8 @@
     '更新失败': 'Update failed',
     '更新全部': 'Update All',
     '更新失败: {0}': 'Update failed: {0}',
+    '安装完成（有警告）': 'Installed (with warnings)',
+    '安装失败': 'Install failed',
     '即将推出': 'Coming Soon',
     '正在确保 {0} 插件已启用...': 'Ensuring {0} plugin is enabled...',
     '{0} 插件已启用': '{0} plugin enabled',
