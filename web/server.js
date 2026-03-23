@@ -10299,19 +10299,19 @@ function resolveOpenclawPkgRoot() {
     path.join(process.env.HOME || '/root', '.openclaw', 'openclaw-source')
   ];
   for (const candidate of candidateRoots) {
-    if (fs.existsSync(path.join(candidate, 'skills')) && fs.existsSync(path.join(candidate, 'extensions'))) {
+    if (fs.existsSync(path.join(candidate, 'skills'))) {
       return candidate;
     }
   }
   try {
     const npmRoot = execSync('npm root -g 2>/dev/null', { encoding: 'utf8', timeout: 5000 }).trim();
     const candidate = path.join(npmRoot, 'openclaw');
-    if (fs.existsSync(path.join(candidate, 'skills')) && fs.existsSync(path.join(candidate, 'extensions'))) return candidate;
+    if (fs.existsSync(path.join(candidate, 'skills'))) return candidate;
   } catch {}
   // Fallback: common paths
   const fallbacks = ['/root/.npm-global/lib/node_modules/openclaw', '/usr/local/lib/node_modules/openclaw'];
   for (const f of fallbacks) {
-    if (fs.existsSync(path.join(f, 'skills')) && fs.existsSync(path.join(f, 'extensions'))) return f;
+    if (fs.existsSync(path.join(f, 'skills'))) return f;
   }
   return candidateRoots[0];
 }
@@ -11545,15 +11545,31 @@ app.post('/api/plugins/extension/install', async (req, res) => {
   if (sanitized.length > 500 || /[;&|`$(){}\\]/.test(sanitized)) {
     return res.status(400).json({ error: 'Invalid package name or URL' });
   }
-  // Must be a recognized format
   const isNpmPkg = /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*(@[^\s]*)?$/.test(sanitized);
   const isGithubShort = /^github:[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+(#.*)?$/.test(sanitized);
   const isGitUrl = /^https?:\/\/(github\.com|gitlab\.com|gitee\.com)\/[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+(\.git)?(\/?#.*)?$/.test(sanitized);
   if (!isNpmPkg && !isGithubShort && !isGitUrl) {
-    return res.status(400).json({ error: 'Please enter npm package name (e.g. @anthropic/extension), github:user/repo or GitHub URL' });
+    return res.status(400).json({ error: 'Please enter npm package name (e.g. @openclaw/my-ext), github:user/repo or GitHub URL' });
   }
 
   try {
+    // Try openclaw plugins install first (proper way)
+    const cliCmd = [
+      'if command -v openclaw >/dev/null 2>&1; then',
+      `  openclaw plugins install ${JSON.stringify(sanitized)} 2>&1`,
+      'elif [ -x /root/.npm-global/bin/openclaw ]; then',
+      `  /root/.npm-global/bin/openclaw plugins install ${JSON.stringify(sanitized)} 2>&1`,
+      'elif [ -f /root/.openclaw/openclaw-source/openclaw.mjs ]; then',
+      `  node --experimental-sqlite /root/.openclaw/openclaw-source/openclaw.mjs plugins install ${JSON.stringify(sanitized)} 2>&1`,
+      'else',
+      '  exit 127',
+      'fi'
+    ].join('\n');
+    const cliResult = await runOpenClawCli(cliCmd, 120000);
+    if (cliResult.ok) {
+      return res.json({ success: true, output: String(cliResult.output || '').trim() });
+    }
+    // Fallback to npm install -g if CLI failed
     const output = await runCommandTextAsync(
       `npm install -g ${JSON.stringify(sanitized)} 2>&1`,
       120000
@@ -11574,6 +11590,23 @@ app.post('/api/plugins/extension/remove', async (req, res) => {
   }
 
   try {
+    // Try openclaw plugins uninstall first
+    const cliCmd = [
+      'if command -v openclaw >/dev/null 2>&1; then',
+      `  openclaw plugins uninstall ${JSON.stringify(sanitized)} 2>&1`,
+      'elif [ -x /root/.npm-global/bin/openclaw ]; then',
+      `  /root/.npm-global/bin/openclaw plugins uninstall ${JSON.stringify(sanitized)} 2>&1`,
+      'elif [ -f /root/.openclaw/openclaw-source/openclaw.mjs ]; then',
+      `  node --experimental-sqlite /root/.openclaw/openclaw-source/openclaw.mjs plugins uninstall ${JSON.stringify(sanitized)} 2>&1`,
+      'else',
+      '  exit 127',
+      'fi'
+    ].join('\n');
+    const cliResult = await runOpenClawCli(cliCmd, 60000);
+    if (cliResult.ok) {
+      return res.json({ success: true, output: String(cliResult.output || '').trim() });
+    }
+    // Fallback to npm uninstall -g
     const output = await runCommandTextAsync(
       `npm uninstall -g ${JSON.stringify(sanitized)} 2>&1`,
       60000
