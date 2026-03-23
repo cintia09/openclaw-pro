@@ -5232,7 +5232,7 @@ const APP_CATALOG = [
     name: '江苏高考物理知识网站',
     icon: '⚛️',
     description: '涵盖高中全部物理知识的交互式学习平台，支持知识图谱、交互动画、AI智能出题和成绩追踪',
-    version: '2.0.0',
+    version: '2.7.0',
     features: ['知识图谱', '交互动画', 'AI高考卷', '成绩追踪', '学习档案'],
     category: 'education',
     repo: 'https://github.com/cintia09/jiangsu-physics-knowledge',
@@ -5268,11 +5268,27 @@ async function refreshAppCenter() {
   var installedMap = {};
   installedApps.forEach(function(a) { installedMap[a.name] = a; });
 
+  // Check latest versions from GitHub Releases API (non-blocking)
+  var latestVersions = {};
+  try {
+    var checks = APP_CATALOG.filter(function(a){ return a.repo; }).map(function(app) {
+      var repoPath = app.repo.replace('https://github.com/','');
+      return fetch('https://api.github.com/repos/'+repoPath+'/releases/latest', {headers:{'Accept':'application/vnd.github.v3+json'}})
+        .then(function(r){ return r.ok ? r.json() : null; })
+        .then(function(d){ if(d && d.tag_name) latestVersions[app.id] = d.tag_name.replace(/^v/,''); })
+        .catch(function(){});
+    });
+    await Promise.all(checks);
+  } catch(e) { console.log('Version check skipped:', e.message); }
+
   container.innerHTML = APP_CATALOG.map(function(app) {
     var installed = installedMap[app.id];
     var isInstalled = !!installed;
     var isRunning = installed && installed.status === 'running';
     var isStopped = installed && installed.status === 'stopped';
+    var latestVer = latestVersions[app.id] || '';
+    var displayVer = latestVer || app.version;
+    var hasNewVersion = latestVer && latestVer !== app.version && latestVer > app.version;
 
     // Status badge
     var statusHtml = '';
@@ -5316,7 +5332,8 @@ async function refreshAppCenter() {
       + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap">'
       + '<strong style="font-size:14px">'+app.name+'</strong>'
       + statusHtml
-      + '<span class="dim" style="font-size:10px">v'+app.version+'</span>'
+      + '<span class="dim" style="font-size:10px">v'+displayVer+'</span>'
+      + (hasNewVersion && isInstalled ? '<span style="display:inline-block;padding:1px 6px;background:rgba(245,158,11,.15);color:#f59e0b;border-radius:4px;font-size:9px;font-weight:600">🆕 可更新</span>' : '')
       + '</div>'
       + '<p class="dim" style="font-size:12px;margin:0 0 6px">'+app.description+'</p>'
       + '<div style="margin-bottom:8px">'+feats+'</div>'
