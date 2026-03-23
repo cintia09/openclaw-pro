@@ -10707,20 +10707,29 @@ async function listAllPlugins() {
   if (jsonStart < 0) return [];
   try {
     const parsed = JSON.parse(raw.slice(jsonStart));
-    return (parsed.plugins || []).map(p => ({
-      id: p.id,
-      name: p.name || p.id,
-      description: p.description || '',
-      version: p.version || '',
-      status: p.status || 'unknown',
-      enabled: !!p.enabled,
-      origin: p.origin || 'bundled',
-      channelIds: p.channelIds || [],
-      providerIds: p.providerIds || [],
-      toolNames: p.toolNames || [],
-      hookCount: p.hookCount || 0,
-      httpRoutes: p.httpRoutes || 0,
-    }));
+    const channelDescRe = /\bchannel\s+plugin\b/i;
+    const providerDescRe = /\bprovider\b/i;
+    return (parsed.plugins || []).map(p => {
+      const desc = p.description || '';
+      const hasChannel = (p.channelIds && p.channelIds.length) || channelDescRe.test(desc);
+      const hasProvider = (p.providerIds && p.providerIds.length) || (!hasChannel && providerDescRe.test(desc));
+      const category = hasChannel ? 'channel' : hasProvider ? 'provider' : 'tool';
+      return {
+        id: p.id,
+        name: p.name || p.id,
+        description: desc,
+        version: p.version || '',
+        status: p.status || 'unknown',
+        enabled: !!p.enabled,
+        origin: p.origin || 'bundled',
+        category,
+        channelIds: p.channelIds || [],
+        providerIds: p.providerIds || [],
+        toolNames: p.toolNames || [],
+        hookCount: p.hookCount || 0,
+        httpRoutes: p.httpRoutes || 0,
+      };
+    });
   } catch {
     return [];
   }
@@ -10769,11 +10778,11 @@ app.post('/api/plugins/extension/toggle', async (req, res) => {
 app.post('/api/plugins/extension/update-all', async (req, res) => {
   const cmd = [
     'if command -v openclaw >/dev/null 2>&1; then',
-    '  openclaw plugins update 2>&1',
+    '  openclaw plugins update --all 2>&1',
     'elif [ -x /root/.npm-global/bin/openclaw ]; then',
-    '  /root/.npm-global/bin/openclaw plugins update 2>&1',
+    '  /root/.npm-global/bin/openclaw plugins update --all 2>&1',
     'elif [ -f /root/.openclaw/openclaw-source/openclaw.mjs ]; then',
-    '  node --experimental-sqlite /root/.openclaw/openclaw-source/openclaw.mjs plugins update 2>&1',
+    '  node --experimental-sqlite /root/.openclaw/openclaw-source/openclaw.mjs plugins update --all 2>&1',
     'else',
     '  echo "openclaw not found"; exit 127',
     'fi'

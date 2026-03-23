@@ -3598,6 +3598,16 @@ qa('[data-save-msg]').forEach(btn => {
 
     const r = await api('/api/config', { method:'POST', body:update });
     if (r.success) {
+      // Auto-enable the corresponding channel plugin if the user enabled this platform
+      if (enabled) {
+        appendMsgLog(_t('[save] 正在确保 {0} 插件已启用...', platform));
+        const tr = await api('/api/plugins/extension/toggle', { method: 'POST', body: { id: platform, enable: true } });
+        if (tr.success) {
+          appendMsgLog(_t('[save] {0} 插件已启用', platform));
+        } else if (tr.error && !/already enabled|not found/i.test(tr.error)) {
+          appendMsgLog(_t('[save] 插件启用失败: {0}', tr.error));
+        }
+      }
       await loadMessagingConfig();
       const saved = Array.isArray(r.savedChannels) && r.savedChannels.length
         ? r.savedChannels.join(', ')
@@ -4065,9 +4075,9 @@ function extensionCard(ext, isUserInstalled) {
     ? `<span style="background:#1a3a5c;color:#58a6ff;padding:1px 6px;border-radius:4px;font-size:11px">${_t('内置')}</span>`
     : `<span style="background:#3a1a5c;color:#d2a8ff;padding:1px 6px;border-radius:4px;font-size:11px">${_t('用户')}</span>`;
   const typeBadges = [];
-  if (ext.channelIds && ext.channelIds.length) typeBadges.push(`<span style="background:#1a2e1a;color:#3fb950;padding:1px 5px;border-radius:3px;font-size:10px">📡 ${_t('通道')}</span>`);
-  if (ext.providerIds && ext.providerIds.length) typeBadges.push(`<span style="background:#2e2a1a;color:#d29922;padding:1px 5px;border-radius:3px;font-size:10px">🤖 Provider</span>`);
-  if (ext.toolNames && ext.toolNames.length) typeBadges.push(`<span style="background:#1a1a2e;color:#79c0ff;padding:1px 5px;border-radius:3px;font-size:10px">🔧 ${_t('工具')}</span>`);
+  if (ext.category === 'channel') typeBadges.push(`<span style="background:#1a2e1a;color:#3fb950;padding:1px 5px;border-radius:3px;font-size:10px">📡 ${_t('通道')}</span>`);
+  if (ext.category === 'provider') typeBadges.push(`<span style="background:#2e2a1a;color:#d29922;padding:1px 5px;border-radius:3px;font-size:10px">🤖 Provider</span>`);
+  if (ext.category === 'tool') typeBadges.push(`<span style="background:#1a1a2e;color:#79c0ff;padding:1px 5px;border-radius:3px;font-size:10px">🧩 ${_t('扩展')}</span>`);
 
   const toggleBtn = `<button class="btn" style="font-size:11px;padding:2px 10px" data-ext-toggle="${escapeHtml(ext.id)}" data-ext-enable="${ext.enabled ? 'false' : 'true'}">${ext.enabled ? _t('禁用') : _t('启用')}</button>`;
   const removeBtn = isUserInstalled
@@ -4135,9 +4145,9 @@ async function refreshPlugins() {
   // --- Extensions tab: show ALL plugins grouped ---
   const userExtNames = new Set(extsList.map(e => e.name));
   if (allPlugins.length) {
-    const channels = allPlugins.filter(p => p.channelIds && p.channelIds.length);
-    const providers = allPlugins.filter(p => p.providerIds && p.providerIds.length && !(p.channelIds && p.channelIds.length));
-    const others = allPlugins.filter(p => !(p.channelIds && p.channelIds.length) && !(p.providerIds && p.providerIds.length));
+    const channels = allPlugins.filter(p => p.category === 'channel');
+    const providers = allPlugins.filter(p => p.category === 'provider');
+    const others = allPlugins.filter(p => p.category === 'tool');
     const loaded = allPlugins.filter(p => p.enabled).length;
 
     function extGroupHtml(label, plugins, collapsed) {

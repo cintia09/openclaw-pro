@@ -1082,6 +1082,9 @@
     '更新全部': 'Update All',
     '更新失败: {0}': 'Update failed: {0}',
     '即将推出': 'Coming Soon',
+    '正在确保 {0} 插件已启用...': 'Ensuring {0} plugin is enabled...',
+    '{0} 插件已启用': '{0} plugin enabled',
+    '插件启用失败: {0}': 'Plugin enable failed: {0}',
 
     // ─── index.html static text — v1.1.314 batch ─────
 
