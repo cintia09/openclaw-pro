@@ -360,6 +360,8 @@ function getRouteFromHash(){
   const h = (location.hash || '').replace('#','').trim();
   if (h === 'ai') return 'openclaw-ai';
   if (h === 'openclaw') return 'openclaw-engine';
+  // Hidden routes: accessible via direct URL but not shown in nav
+  if (h === 'app-center') return 'app-center';
   const found = ROUTES.find(r => r.id === h);
   return found ? found.id : 'dashboard';
 }
