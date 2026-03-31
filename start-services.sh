@@ -658,6 +658,7 @@ ensure_openclaw_source_from_global_package() {
 ensure_openclaw_cli_wrapper() {
     local wrapper_path="/usr/local/bin/openclaw"
     local runtime_js=""
+    local config_fixer="/root/.openclaw/config-fixer.mjs"
 
     if command -v openclaw >/dev/null 2>&1 && [ "$(command -v openclaw)" != "$wrapper_path" ]; then
         return 0
@@ -675,10 +676,30 @@ ensure_openclaw_cli_wrapper() {
         return 0
     fi
 
+    # Install config fixer if not present
+    if [ ! -f "$config_fixer" ]; then
+        install_config_fixer
+    fi
+
     mkdir -p /usr/local/bin
     cat > "$wrapper_path" <<EOF
 #!/bin/sh
 set -eu
+
+# Config fixer integration - auto-fix known config issues before running
+CONFIG_FIXER="$config_fixer"
+if [ -f "\$CONFIG_FIXER" ]; then
+    for arg in "\$@"; do
+        case "\$arg" in
+            gateway|update|doctor)
+                # Run config fixer silently before gateway/update/doctor commands
+                node "\$CONFIG_FIXER" > /dev/null 2>&1 || true
+                break
+                ;;
+        esac
+    done
+fi
+
 if [ -f "$runtime_js" ]; then
     exec node "$runtime_js" "\$@"
 fi
@@ -689,6 +710,44 @@ echo "openclaw runtime not found" >&2
 exit 127
 EOF
     chmod +x "$wrapper_path"
+}
+
+install_config_fixer() {
+    local target="/root/.openclaw/config-fixer.mjs"
+    local source="/opt/clawnook/scripts/config-fixer.mjs"
+
+    # If source exists in container image, copy it
+    if [ -f "$source" ]; then
+        mkdir -p /root/.openclaw
+        cp "$source" "$target"
+        chmod +x "$target"
+        echo "[start-services] Installed config-fixer from image"
+        return 0
+    fi
+
+    # Fallback: create inline (minimal version for deprecated property removal)
+    mkdir -p /root/.openclaw
+    cat > "$target" <<'FALLBACK_EOF'
+#!/usr/bin/env node
+import { readFileSync, writeFileSync, copyFileSync, mkdirSync, existsSync } from 'node:fs';
+const CONFIG_FILE = '/root/.openclaw/openclaw.json';
+const BACKUP_DIR = '/root/.openclaw/config-backups';
+const DEPRECATED_PROPS = ['channels.feishu.accounts.default.botName'];
+function log(msg) { console.log(`[config-fixer] ${msg}`); }
+function ensureBackupDir() { if (!existsSync(BACKUP_DIR)) mkdirSync(BACKUP_DIR, { recursive: true }); }
+function createBackup() { ensureBackupDir(); const ts = new Date().toISOString().replace(/[:.]/g, '-'); const bp = `${BACKUP_DIR}/openclaw.json.backup-${ts}`; copyFileSync(CONFIG_FILE, bp); return bp; }
+function getNested(obj, path) { const parts = path.split('.'); let cur = obj; for (const part of parts.slice(0, -1)) { if (cur[part] === undefined) return; cur = cur[part]; } return { parent: cur, key: parts[parts.length - 1], value: cur?.[parts[parts.length - 1]] }; }
+function hasProp(obj, path) { const r = getNested(obj, path); return r && r.value !== undefined; }
+function removeProp(obj, path) { const r = getNested(obj, path); if (r && r.parent && r.key in r.parent) { delete r.parent[r.key]; return true; } return false; }
+if (!existsSync(CONFIG_FILE)) process.exit(0);
+let config; try { config = JSON.parse(readFileSync(CONFIG_FILE, 'utf8')); } catch (e) { process.exit(1); }
+const fixes = []; for (const prop of DEPRECATED_PROPS) { if (hasProp(config, prop) && removeProp(config, prop)) fixes.push(prop); }
+if (fixes.length === 0) process.exit(0);
+log(`Fixing ${fixes.length} deprecated prop(s)`); createBackup();
+try { writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + '\n', 'utf8'); log('Config fixed'); } catch (e) { process.exit(1); }
+FALLBACK_EOF
+    chmod +x "$target"
+    echo "[start-services] Created fallback config-fixer"
 }
 
 has_openclaw_cli() {

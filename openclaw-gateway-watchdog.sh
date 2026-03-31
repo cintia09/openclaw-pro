@@ -715,6 +715,17 @@ wait_for_ready() {
 start_once() {
   prepare_runtime_source_root
   detect_runtime_version >/dev/null 2>&1 || true
+
+  # Run config fixer before starting gateway to auto-fix known issues
+  local config_fixer="/root/.openclaw/config-fixer.mjs"
+  if [ -f "$config_fixer" ]; then
+    log "Running config fixer before gateway start..."
+    node "$config_fixer" > /dev/null 2>&1 || true
+  elif [ -f "/usr/local/bin/openclaw" ]; then
+    # If using wrapper, it will run config fixer automatically
+    : # Config fixer will be run by the wrapper
+  fi
+
   local launch_cmd=""
   local openclaw_bin=""
   if [ -f "$SOURCE_ROOT/openclaw.mjs" ]; then

@@ -47,6 +47,9 @@ RUN for bin in node npm pnpm git curl jq tar gzip unzip python3 make g++; do com
 # OpenClaw 持久化运行目录骨架（不预装 openclaw，本地按需安装）
 RUN mkdir -p /root/.openclaw/openclaw-source /root/.openclaw/openclaw /root/.openclaw/logs /root/.openclaw/cache/openclaw /root/.openclaw/locks /root/.openclaw/home
 
+# ClawNook 辅助脚本目录
+RUN mkdir -p /opt/clawnook/scripts
+
 # Caddy（网关）
 RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
     'https://github.com/caddyserver/caddy/releases/download/v2.11.1/caddy_2.11.1_linux_amd64.tar.gz' \
@@ -64,6 +67,7 @@ RUN cd /opt/openclaw-web && npm install --omit=dev
 
 COPY start-services.sh /usr/local/bin/
 COPY scripts/openclaw-gateway-watchdog.sh /usr/local/bin/
+COPY scripts/config-fixer.mjs /opt/clawnook/scripts/
 COPY post-install-restore.sh /opt/
 COPY Caddyfile.template /etc/caddy/
 RUN chmod +x /usr/local/bin/start-services.sh /usr/local/bin/openclaw-gateway-watchdog.sh /opt/post-install-restore.sh
