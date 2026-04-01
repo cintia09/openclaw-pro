@@ -5112,6 +5112,10 @@ function logNodeGatewaySocketIssue(prefix, errorLike, gatewayPort) {
 }
 
 function createGatewayControlUiClient(timeoutMs = 5000) {
+  // Skip if in backoff period to prevent triggering gateway rate limiter
+  if (_gwAuthBackoff.backoffUntil > Date.now()) {
+    return Promise.reject(new Error(`gateway auth backoff (${Math.ceil((_gwAuthBackoff.backoffUntil - Date.now()) / 1000)}s remaining)`));
+  }
   return new Promise((resolve, reject) => {
     const WsClient = require('ws');
     const cfg = readDockerConfig();
