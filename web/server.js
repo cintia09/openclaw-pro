@@ -5214,6 +5214,21 @@ function createGatewayControlUiClient(timeoutMs = 5000) {
               }
             } catch {}
           });
+          // Forward ws lifecycle events to client event listeners
+          ws.on('close', () => {
+            const cbs = eventListeners.get('close');
+            if (cbs) cbs.forEach(cb => { try { cb(); } catch {} });
+            // Reject any pending requests
+            for (const [id, pending] of handlers) {
+              clearTimeout(pending.reqTimer);
+              pending.rejectReq(new Error('connection closed'));
+            }
+            handlers.clear();
+          });
+          ws.on('error', (e) => {
+            const cbs = eventListeners.get('error');
+            if (cbs) cbs.forEach(cb => { try { cb(e); } catch {} });
+          });
           resolve({ request, close, on });
         }
       } catch {}
@@ -5601,97 +5616,60 @@ function reconcileGatewayNodeListWithPresence(nodes, presenceNodes) {
 let _gwAuthBackoff = { failCount: 0, backoffUntil: 0 };
 let _gwProxyWsRateMap = new Map();
 
-function queryGatewayNodeList(timeoutMs = 5000) {
-  // Skip WS auth if in backoff period (fall back to CLI directly)
-  if (_gwAuthBackoff.backoffUntil > Date.now()) {
-    const cfg = readDockerConfig();
-    const gatewayPort = Number(cfg.port || 18789) || 18789;
-    const token = getGatewayAuthToken();
-    return queryGatewayNodeListFallback(gatewayPort, token, timeoutMs);
+// Persistent gateway control-ui client for status polling
+// Avoids opening a new WebSocket every 5 seconds which triggers the gateway rate limiter
+let _persistentGwClient = null;
+let _persistentGwConnecting = false;
+let _persistentGwLastAttempt = 0;
+
+async function getPersistentGatewayClient() {
+  if (_persistentGwClient) return _persistentGwClient;
+  if (_persistentGwConnecting) return null;
+  if (_gwAuthBackoff.backoffUntil > Date.now()) return null;
+  // Don't reconnect more than once per 10 seconds
+  if (Date.now() - _persistentGwLastAttempt < 10000) return null;
+  _persistentGwConnecting = true;
+  _persistentGwLastAttempt = Date.now();
+  try {
+    const client = await createGatewayControlUiClient(8000);
+    _gwAuthBackoff = { failCount: 0, backoffUntil: 0 };
+    _persistentGwClient = client;
+    // Handle unexpected close
+    client.on('close', () => { _persistentGwClient = null; });
+    return client;
+  } catch {
+    return null;
+  } finally {
+    _persistentGwConnecting = false;
   }
+}
 
-  return new Promise((resolve) => {
-    const WsClient = require('ws');
-    const cfg = readDockerConfig();
-    const gatewayPort = Number(cfg.port || 18789) || 18789;
-    const token = getGatewayAuthToken();
-    let settled = false;
-    const finish = (val) => { if (!settled) { settled = true; resolve(val); } };
+function queryGatewayNodeList(timeoutMs = 5000) {
+  const cfg = readDockerConfig();
+  const gatewayPort = Number(cfg.port || 18789) || 18789;
+  const token = getGatewayAuthToken();
 
-    let ws;
+  // Try persistent client first (avoids opening new connections)
+  return (async () => {
     try {
-      ws = new WsClient(`ws://127.0.0.1:${gatewayPort}`, {
-        headers: { Origin: 'http://127.0.0.1' }
-      });
-    } catch (e) { logNodeGatewaySocketIssue('[node] WS connect failed:', e, gatewayPort); finish(null); return; }
-
-    const timer = setTimeout(() => { console.log('[node] queryGatewayNodeList timeout'); finish(null); try { ws.close(); } catch {} }, timeoutMs);
-    let usedFallback = false;
-    ws.on('close', () => { if (!usedFallback) { clearTimeout(timer); finish(null); } });
-    ws.on('error', (e) => { logNodeGatewaySocketIssue('[node] WS error:', e, gatewayPort); if (!usedFallback) { clearTimeout(timer); finish(null); } try { ws.close(); } catch {} });
-
-    let connectId, listId;
-    ws.on('message', (data) => {
-      try {
-        const msg = JSON.parse(String(data));
-        // 1) connect.challenge → Attempt control-ui connection with device identity
-        if (msg.event === 'connect.challenge') {
-          const nonce = typeof msg.payload?.nonce === 'string' ? msg.payload.nonce.trim() : '';
-          const connectParams = buildControlUiConnectParams(nonce);
-          if (!connectParams) {
-            logRateLimited('node-control-ui-identity-unavailable-fallback', 300000, '[node] control-ui identity unavailable → cli fallback');
-            usedFallback = true;
-            try { ws.close(); } catch {}
-            queryGatewayNodeListFallback(gatewayPort, token, timeoutMs - 1000).then(v => { clearTimeout(timer); finish(v); });
-            return;
-          }
-          connectId = crypto.randomUUID();
-          ws.send(JSON.stringify({
-            type: 'req', id: connectId, method: 'connect',
-            params: connectParams
-          }));
-          return;
+      const client = await getPersistentGatewayClient();
+      if (client) {
+        try {
+          const result = await client.request('node.list', {}, Math.max(2000, timeoutMs - 1000));
+          const nodes = Array.isArray(result?.nodes) ? result.nodes : null;
+          const presenceNodes = await queryGatewayNodeListFallback(gatewayPort, token, timeoutMs - 1000);
+          return reconcileGatewayNodeListWithPresence(nodes, presenceNodes);
+        } catch (reqErr) {
+          // Request failed — close persistent client so it reconnects (with 10s cooldown)
+          logNodeProbeDebug('[node] persistent client request failed:', reqErr?.message || 'unknown');
+          try { client.close(); } catch {}
+          _persistentGwClient = null;
         }
-        // 2) connect response
-        if (msg.id === connectId) {
-          if (msg.ok) {
-            // control-ui connection succeeded → call node.list
-            _gwAuthBackoff = { failCount: 0, backoffUntil: 0 };
-            listId = crypto.randomUUID();
-            ws.send(JSON.stringify({ type: 'req', id: listId, method: 'node.list', params: {} }));
-          } else {
-            // control-ui rejected → backoff to prevent triggering gateway rate limiter
-            const errCode = msg.error?.code || msg.error?.message || 'unknown';
-            _gwAuthBackoff.failCount++;
-            const backoffSec = Math.min(300, 10 * Math.pow(2, _gwAuthBackoff.failCount - 1));
-            _gwAuthBackoff.backoffUntil = Date.now() + backoffSec * 1000;
-            logNodeProbeDebug(`[node] control-ui rejected: ${errCode} → cli fallback (backoff ${backoffSec}s)`);
-            usedFallback = true;
-            try { ws.close(); } catch {}
-            queryGatewayNodeListFallback(gatewayPort, token, timeoutMs - 1000).then(v => { clearTimeout(timer); finish(v); });
-          }
-          return;
-        }
-        // 3) node.list response
-        if (msg.id === listId) {
-          if (msg.ok) {
-            const nodes = Array.isArray(msg.payload?.nodes) ? msg.payload.nodes : null;
-            usedFallback = true;
-            try { ws.close(); } catch {}
-            queryGatewayNodeListFallback(gatewayPort, token, timeoutMs - 1000).then((presenceNodes) => {
-              clearTimeout(timer);
-              finish(reconcileGatewayNodeListWithPresence(nodes, presenceNodes));
-            });
-          } else {
-            logNodeProbeDebug('[node] node.list failed:', msg.error?.code || 'unknown', '→ cli fallback');
-            usedFallback = true;
-            try { ws.close(); } catch {}
-            queryGatewayNodeListFallback(gatewayPort, token, timeoutMs - 1000).then(v => { clearTimeout(timer); finish(v); });
-          }
-        }
-      } catch {}
-    });
-  });
+      }
+    } catch {}
+    // Fallback to CLI-based query
+    return queryGatewayNodeListFallback(gatewayPort, token, timeoutMs);
+  })();
 }
 
 // Fallback: cli identity connection, infer node online from presence snapshot (no scopes needed)
