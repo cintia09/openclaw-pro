@@ -1520,13 +1520,17 @@ function syncConfiguredModelsToModelsJson() {
       }
     }
     // Final consistency check: ensure all models api matches catalog
+    // Skip correction for providers that intentionally use a different API than the catalog
+    // (e.g., minimax uses OpenAI-compat endpoint but catalog says anthropic-messages)
+    const PROVIDER_API_OVERRIDE = { 'minimax': 'openai-completions', 'xiaomi': 'openai-completions' };
     for (const [provName, prov] of Object.entries(config.models.providers)) {
       if (!prov.models || !Array.isArray(prov.models)) continue;
       for (const m of prov.models) {
         const mCap = getCachedModelCapabilities(provName, m.id);
-        const correctApi = sanitizeApiValue(mCap?.api, provName);
+        const provOverride = PROVIDER_API_OVERRIDE[provName];
+        const correctApi = provOverride || sanitizeApiValue(mCap?.api, provName);
         if (correctApi && m.api !== correctApi) {
-          console.log(`[sync] Corrected ${provName}/${m.id}.api: ${m.api} → ${correctApi}`);
+          console.log(`[sync] ${provOverride ? 'Override' : 'Corrected'} ${provName}/${m.id}.api: ${m.api} → ${correctApi}`);
           m.api = correctApi;
           configChanged = true;
         }
@@ -1574,7 +1578,8 @@ function syncConfiguredModelsToModelsJson() {
           if (!prov2.models || !Array.isArray(prov2.models)) continue;
           for (const m of prov2.models) {
             const mCap = getCachedModelCapabilities(provName2, m.id);
-            const correctApi = sanitizeApiValue(mCap?.api, provName2);
+            const provOverride2 = PROVIDER_API_OVERRIDE[provName2];
+            const correctApi = provOverride2 || sanitizeApiValue(mCap?.api, provName2);
             if (correctApi && m.api !== correctApi) {
               m.api = correctApi;
               modelsChanged = true;
