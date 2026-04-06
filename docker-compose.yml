@@ -1,12 +1,12 @@
 # ============================================================
-# 备用配置文件 — 主启动脚本 openclaw-docker.sh 使用 docker create 启动
-# 本文件供 docker compose up 方式使用（可选）
+# ClawNook Docker Compose 配置
+# 可选方式：docker compose up -d
+# 推荐方式：使用 install.sh 一键安装
 # ============================================================
-# version field removed (deprecated in modern Docker Compose)
 
 services:
-  openclaw:
-    build: .
+  clawnook:
+    image: ghcr.io/cintia09/clawnook:latest
     container_name: clawnook
     hostname: openclaw
     cap_drop:
@@ -31,17 +31,6 @@ services:
       - HTTPS_PROXY=${HTTPS_PROXY:-${https_proxy:-}}
       - no_proxy=${no_proxy:-${NO_PROXY:-}}
       - NO_PROXY=${NO_PROXY:-${no_proxy:-}}
-    # 端口按需配置：
-    # 内网模式（无HTTPS）：
-    #   ports:
-    #     - "18789:18789"   # Gateway
-    #     - "3000:3000"     # Web管理面板
-    #     - "6080:6080"     # noVNC 浏览器远程访问（可选）
-    # HTTPS模式：
-    #   ports:
-    #     - "80:80"
-    #     - "8443:443"
-    #     - "127.0.0.1:18789:18789"
     ports:
       - "${PORT_MAPPING:-18789:18789}"
       - "${WEB_PORT_MAPPING:-3000:3000}"
