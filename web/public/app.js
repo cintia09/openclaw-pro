@@ -2567,7 +2567,7 @@ const AI_PROVIDERS = {
   minimax: {
     name: 'MiniMax', group: 'China',
     apiKeyLabel: 'MiniMax API Key', apiKeyPlaceholder: 'sk-...',
-    authType: 'apikey', baseUrl: 'https://api.minimax.io/anthropic',
+    authType: 'apikey', baseUrl: 'https://api.minimax.chat/v1',
     models: ['MiniMax-M2.7', 'MiniMax-M2.7-highspeed', 'MiniMax-M2.5', 'MiniMax-M2.5-highspeed', 'MiniMax-M1']
   },
   xiaomi: {

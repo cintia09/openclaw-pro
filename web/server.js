@@ -679,6 +679,8 @@ function sanitizeApiValue(api, providerName) {
     'anthropic': 'anthropic-messages',
     'ollama': 'ollama',
     'bedrock': 'bedrock-converse-stream',
+    'minimax': 'openai-completions',
+    'xiaomi': 'openai-completions',
   };
   return PROVIDER_DEFAULT_API[providerName] || 'openai-completions';
 }
@@ -7366,7 +7368,7 @@ function getDefaultBaseUrl(provider) {
     'zai': 'https://open.bigmodel.cn/api/paas/v4',
     'moonshot': 'https://api.moonshot.ai/v1',
     'kimi-coding': 'https://api.kimi.com/coding/',
-    'minimax': 'https://api.minimax.io/anthropic',
+    'minimax': 'https://api.minimax.chat/v1',
     'xiaomi': 'https://api.xiaomimimo.com/anthropic',
     'qianfan': 'https://qianfan.baidubce.com/v2',
     'volcengine': 'https://ark.cn-beijing.volces.com/api/v3',
