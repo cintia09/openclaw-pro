@@ -2544,7 +2544,7 @@ const AI_PROVIDERS = {
     name: _t('阿里云百炼 (Bailian)'), group: 'China',
     apiKeyLabel: 'DashScope API Key', apiKeyPlaceholder: 'sk-...',
     authType: 'apikey', baseUrl: 'https://coding.dashscope.aliyuncs.com/v1',
-    models: ['qwen3.5-plus', 'qwen3-max-2026-01-23', 'qwen3-coder-next', 'qwen3-coder-plus', 'MiniMax-M2.5', 'glm-5', 'glm-4.7', 'kimi-k2.5']
+    models: ['qwen3.5-plus', 'qwen3-max-2026-01-23', 'qwen3-coder-next', 'qwen3-coder-plus', 'MiniMax-M2.7', 'MiniMax-M2.5', 'glm-5', 'glm-4.7', 'kimi-k2.5']
   },
   zai: {
     name: _t('智谱 Z.AI (GLM)'), group: 'China',
@@ -2568,7 +2568,7 @@ const AI_PROVIDERS = {
     name: 'MiniMax', group: 'China',
     apiKeyLabel: 'MiniMax API Key', apiKeyPlaceholder: 'sk-...',
     authType: 'apikey', baseUrl: 'https://api.minimax.io/anthropic',
-    models: ['MiniMax-M2.5', 'MiniMax-M1']
+    models: ['MiniMax-M2.7', 'MiniMax-M2.7-highspeed', 'MiniMax-M2.5', 'MiniMax-M2.5-highspeed', 'MiniMax-M1']
   },
   xiaomi: {
     name: _t('小米 MiMo'), group: 'China',

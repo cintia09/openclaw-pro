@@ -1077,7 +1077,9 @@ function shouldRetryInferredModelValidation(errorText) {
 async function fetchRemoteProviderModels(provider, apiKey, baseUrl) {
   const endpoint = baseUrl || getDefaultBaseUrl(provider);
   if (!endpoint) return { ok: false, error: 'API endpoint not found', models: [] };
-  if (provider === 'anthropic') return { ok: false, error: 'Anthropic does not support /models endpoint', models: [] };
+  // Anthropic-compatible APIs (anthropic, minimax, xiaomi) do not support /models endpoint
+  const noModelsEndpoint = new Set(['anthropic', 'minimax', 'xiaomi']);
+  if (noModelsEndpoint.has(provider)) return { ok: false, error: `${provider} does not support /models endpoint`, models: [] };
 
   const modelsUrl = provider === 'ollama' ? `${endpoint}/api/tags` : `${endpoint}/models`;
   const headers = {};
@@ -7132,7 +7134,10 @@ app.post('/api/ai/models', async (req, res) => {
         { id: 'kimi-coding/k2p5', name: 'Kimi K2.5 Coding' }
       ],
       'minimax': [
+        { id: 'minimax/MiniMax-M2.7', name: 'MiniMax M2.7' },
+        { id: 'minimax/MiniMax-M2.7-highspeed', name: 'MiniMax M2.7 Highspeed' },
         { id: 'minimax/MiniMax-M2.5', name: 'MiniMax M2.5' },
+        { id: 'minimax/MiniMax-M2.5-highspeed', name: 'MiniMax M2.5 Highspeed' },
         { id: 'minimax/MiniMax-M1', name: 'MiniMax M1' }
       ],
       'xiaomi': [
@@ -7264,11 +7269,11 @@ app.post('/api/ai/models', async (req, res) => {
       const endpoint = baseUrl || getDefaultBaseUrl(provider);
       if (endpoint) {
         try {
-          // ollama uses a different API path
+          const noModelsProviders = new Set(['anthropic', 'minimax', 'xiaomi']);
           const modelsUrl = provider === 'ollama'
             ? `${endpoint}/api/tags`
-            : provider === 'anthropic'
-              ? null  // Anthropic does not support /models endpoint
+            : noModelsProviders.has(provider)
+              ? null  // Anthropic-compatible APIs do not support /models endpoint
               : `${endpoint}/models`;
 
           if (modelsUrl) {
